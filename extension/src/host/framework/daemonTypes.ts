@@ -4,7 +4,7 @@
 
 import type { ErrorData } from '../../base/frameworkProtocol';
 
-/** Framework's `facade` program in this extension's package, relative to its folder (ARCHITECTURE-1.4). */
+/** Facade Code Framework's `facade` program in this extension's package, relative to its folder (ARCHITECTURE-1.4). */
 export const FACADE_PROGRAM = process.platform === 'win32' ? 'bin/facade.exe' : 'bin/facade';
 
 /** A call framework refused: `reason` decides what the person reads, and the message, framework's own words, follows it as the detail. */
@@ -27,6 +27,6 @@ export interface WatchListener<S, C> {
 	change(change: C): void;
 	/** This watch is installed again on the next local connection. */
 	disconnected?(): void;
-	/** Framework refused or ended the watch. Its next snapshot needs a new watch. */
+	/** Facade Code Framework refused or ended the watch. Its next snapshot needs a new watch. */
 	ended?(error: DaemonError): void;
 }

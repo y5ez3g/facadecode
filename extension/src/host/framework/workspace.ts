@@ -110,7 +110,7 @@ export function openFrameworkWorkspace(context: vscode.ExtensionContext, options
 		const saved = readRoster(rosterFile);
 		if (saved) {
 			if (saved.legacyWorkspaceKey || !verified || saved.importedPins) { return saved.legacyWorkspaceKey; }
-			// An earlier Framework opening may have registered this saved empty URI before it imported Pins.
+			// An earlier Facade Code Framework opening may have registered this saved empty URI before it imported Pins.
 			if (savedEmpty && !folderlessPinsForUri(home, uri, verified)) { return undefined; }
 			replaceFile(rosterFile, `${JSON.stringify({ ...saved, legacyWorkspaceKey: verified })}\n`);
 			return verified;
@@ -248,7 +248,7 @@ function readRoster(file: string): SavedRoster | undefined {
 		|| !Array.isArray(value.hidden) || !value.hidden.every(isRef)
 		|| !Array.isArray(value.pins) || !value.pins.every(isFrameworkPin)
 		|| (value.legacyWorkspaceKey !== undefined && typeof value.legacyWorkspaceKey !== 'string')) {
-		throw new Error(vscode.l10n.t('Invalid Facade workspace roster: {0}', file));
+		throw new Error(vscode.l10n.t('Invalid Facade Code Framework workspace roster: {0}', file));
 	}
 	return {
 		version: 1, members: value.members, pins: value.pins, hidden: value.hidden, imported: value.imported, importedPins: value.importedPins,
@@ -257,7 +257,7 @@ function readRoster(file: string): SavedRoster | undefined {
 }
 
 function readLegacyPinRecovery(file: string): LegacyPinRecovery | undefined {
-	const invalid = (cause?: unknown) => new Error(vscode.l10n.t('Invalid Facade legacy Pin recovery record: {0}', file), { cause });
+	const invalid = (cause?: unknown) => new Error(vscode.l10n.t('Invalid Facade Code Framework legacy Pin recovery record: {0}', file), { cause });
 	let value: unknown;
 	try {
 		value = readJson(file);
@@ -297,7 +297,7 @@ function readRound(file: string): RestoreRound | undefined {
 			&& Number.isSafeInteger(activation.pid) && Number.isFinite(activation.start))
 		|| (value.failures !== undefined && (!Array.isArray(value.failures) || !value.failures.every(failure =>
 			isJsonObject(failure) && isIdentity(failure.id) && isRef(failure.reference) && typeof failure.reason === 'string')))) {
-		throw new Error(vscode.l10n.t('Invalid Facade Pin recovery record: {0}', file));
+		throw new Error(vscode.l10n.t('Invalid Facade Code Framework Pin recovery record: {0}', file));
 	}
 	return value as unknown as RestoreRound;
 }
@@ -366,7 +366,7 @@ class PinRestoreRound implements Disposable {
 				}
 			}, { keepLive: true });
 		} catch (error) {
-			this.log.event(`Could not close this Facade workspace's Pin recovery round: ${messageOf(error)}`);
+			this.log.event(`Could not close this Facade Code Framework workspace's Pin recovery round: ${messageOf(error)}`);
 		}
 	}
 }
@@ -444,7 +444,7 @@ export class FrameworkWorkspace implements Disposable {
 		return committed.size === 1 ? { attempted, reference: committed.values().next().value } : { attempted };
 	}
 
-	/** A lost reply can have started a process. Save the v1 attempt marker before calling Framework. */
+	/** A lost reply can have started a process. Save the v1 attempt marker before calling Facade Code Framework. */
 	beginLegacyPinResume(pin: LegacySessionPin): boolean {
 		return withFileLock(this.file, () => {
 			const roster = readRoster(this.file) ?? EMPTY;
@@ -590,7 +590,7 @@ export class FrameworkWorkspace implements Disposable {
 		return final.imported;
 	}
 
-	/** Consume only after the same Pin ID and converted Framework identity are durable. */
+	/** Consume only after the same Pin ID and converted Facade Code Framework identity are durable. */
 	importLegacyPin(previous: LegacySessionPin, pin: FrameworkPin): boolean {
 		let committed = false;
 		this.edit(latest => {
@@ -835,7 +835,7 @@ export class FrameworkWorkspace implements Disposable {
 				this.refresh();
 				failedRead = false;
 			} catch (error) {
-				if (!failedRead) { this.log.event(`Could not read the Facade workspace: ${messageOf(error)}`); }
+				if (!failedRead) { this.log.event(`Could not read the Facade Code Framework workspace: ${messageOf(error)}`); }
 				failedRead = true;
 			}
 		};
@@ -843,7 +843,7 @@ export class FrameworkWorkspace implements Disposable {
 		const poll = (error: unknown) => {
 			close();
 			if (this.disposed) { return; }
-			this.log.event(`Could not watch the Facade workspace: ${messageOf(error)}`);
+			this.log.event(`Could not watch the Facade Code Framework workspace: ${messageOf(error)}`);
 			const timer = setInterval(refresh, ROSTER_POLL_MS);
 			timer.unref();
 			close = () => clearInterval(timer);

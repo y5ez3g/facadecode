@@ -86,7 +86,7 @@ export class TerminalReplies {
 		this.cursors += data.match(CURSOR_QUESTION)?.length ?? 0;
 	}
 
-	/** What of `data` answers a question, the person's keys left out: as while Facade holds a tab in front for its mark (LIFECYCLE-3.4). */
+	/** What of `data` answers a question, the person's keys left out: as while Facade Code Extension holds a tab in front for its mark (LIFECYCLE-3.4). */
 	answersOnly(data: string): string {
 		return data.match(ANSWER)?.join('') ?? '';
 	}

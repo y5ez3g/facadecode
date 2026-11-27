@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The environment of the Framework: what a start's `env` carries to framework (CLIS-1.2's layers, less the entry's own `env`, which framework
+// The environment of the Facade Code Framework: what a start's `env` carries to framework (CLIS-1.2's layers, less the entry's own `env`, which framework
 // applies), and what the window's own terminals are given so that `facade` typed there reaches framework.
 
 import * as path from 'path';
@@ -31,7 +31,7 @@ export function startEnvironment(location: Pick<Location, 'uri'> | undefined, ho
 }
 
 /**
- * Gives the window's terminals `facade` and the switch against Claude Code's extension install. With a `home` (a Framework window) `PATH`
+ * Gives the window's terminals `facade` and the switch against Claude Code's extension install. With a `home` (a Facade Code Framework window) `PATH`
  * has `<home>/framework/bin` and the path delimiter put before it; without one (a legacy implementation window) both are removed. No other variable
  * is touched: `FACADE_HOME` stays `useFacadeHome`'s.
  */

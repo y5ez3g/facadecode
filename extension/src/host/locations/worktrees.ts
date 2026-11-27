@@ -85,7 +85,7 @@ interface Source {
  * New worktrees (WORKTREES-2) through the editor's native Git API, in the execution environment that owns the repository
  * (WORKTREES-4.1). `plan` validates and proposes without effects; `create` makes what was planned, one creation at a time per
  * destination folder, confirms it with Git and reports actual partial effects without rolling anything back (WORKTREES-2.2, 4.2).
- * Facade never initializes a repository or makes a first commit (WORKTREES-2.3). `remove` deletes a linked worktree the person
+ * Facade Code Extension never initializes a repository or makes a first commit (WORKTREES-2.3). `remove` deletes a linked worktree the person
  * chose, never one with changes Git has not committed (WORKTREES-3.2).
  */
 export class WorktreeService implements WorktreePort {
@@ -184,7 +184,7 @@ export class WorktreeService implements WorktreePort {
 	 * Refused with nothing touched where it is locked, holds another worktree, has a change Git lists - not committed, or untracked - or
 	 * holds a link to a folder this Git would delete through; else out of the catalog while `closeAgents` closes its agents - true once
 	 * every process is known to have ended - then checked again, and removed by `git worktree remove` without `--force`: Git's own
-	 * refusal is reported as Git said it, and so is a folder it left behind, which Facade never deletes itself. The branch is kept. The
+	 * refusal is reported as Git said it, and so is a folder it left behind, which Facade Code Extension never deletes itself. The branch is kept. The
 	 * catalog is read again, which confirms the deletion (WORKTREES-1.3).
 	 */
 	async remove(id: LocationId, closeAgents: () => Promise<boolean>): Promise<void> {
@@ -242,7 +242,7 @@ export class WorktreeService implements WorktreePort {
 			} catch (err) {
 				this.deps.log.event(`Could not read every working location after deleting ${worktree.path}: ${messageOf(err)}`);
 			}
-			// Git can succeed and leave the folder - a link it does not go through keeps it - which Facade does not delete itself
+			// Git can succeed and leave the folder - a link it does not go through keeps it - which Facade Code Extension does not delete itself
 			if (isOccupied(worktree.path)) {
 				this.deps.log.event(`Git removed the worktree at ${worktree.path} from its repository but left its folder behind`);
 				throw problemError({ kind: 'worktree_left', name: location.label, folder: worktree.path });

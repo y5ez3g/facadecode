@@ -53,7 +53,7 @@ function folderlessOwner(home: string, token: string, uri: string): string | und
 
 function status(state: CutoverState): string {
 	if (state.unavailable.length) {
-		return vscode.l10n.t('Could not verify legacy agent processes. Facade Code will check again. {0}', state.unavailable.join('; '));
+		return vscode.l10n.t('Could not verify legacy agent processes. Facade Code Extension will check again. {0}', state.unavailable.join('; '));
 	}
 	// Ask for consent before suggesting a stop in another window. That stop can remove the source Pin.
 	if (state.plan) {
@@ -167,7 +167,7 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 			render();
 			offer();
 		} catch (error) {
-			description = vscode.l10n.t('Could not verify legacy agent processes. Facade Code will check again. {0}', messageOf(error));
+			description = vscode.l10n.t('Could not verify legacy agent processes. Facade Code Extension will check again. {0}', messageOf(error));
 			render();
 		} finally {
 			checking = false;

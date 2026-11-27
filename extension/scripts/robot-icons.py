@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild Facade's robot icons (CONFIGURATION-2.4, LIFECYCLE-2.2).
+"""Rebuild Facade Code Extension's robot icons (CONFIGURATION-2.4, LIFECYCLE-2.2).
 
 A robot is a round face in a gradient with two black eyes; `"icon": "facade-<id>"`
 picks one, and a custom entry without an icon shows facade-pearl. Each of ROBOTS is
@@ -14,7 +14,7 @@ drawn twice from the one drawing below:
 
 ROBOTS is src/base/robot.ts's ROBOTS, in its order. Asset maintenance only; neither
 packaging nor runtime needs Python. In a temporary venv install fonttools==4.60.1,
-then run this file. The robot is Facade Code's own drawing; no other font is used.
+then run this file. The robot is Facade Code Extension's own drawing; no other font is used.
 """
 
 import math
@@ -45,7 +45,7 @@ EYES = [(14.2, 15.0), (20.6, 13.4)]
 EYE_WIDTH, EYE_LENGTH, TILT = 3.8, 8.4, 24
 SHINE = (0.32, 0.26, 0.75)
 SHINE_ALPHA = 0.38
-# The glyph box of Facade's other icon fonts: 1024 units wide, 896 above the baseline and 128 below, shown in a 16px slot
+# The glyph box of Facade Code Extension's other icon fonts: 1024 units wide, 896 above the baseline and 128 below, shown in a 16px slot
 CENTER = (512, 384)
 RADIUS = 480
 SCALE = RADIUS / 16
@@ -170,8 +170,8 @@ def main():
     font.setupHorizontalMetrics({name: (1024, getattr(glyph, "xMin", 0)) for name, glyph in built.items()})
     font.setupHorizontalHeader(ascent=896, descent=-128)
     font.setupNameTable({
-        "familyName": "Facade Robots", "styleName": "Regular", "uniqueFontIdentifier": "FacadeRobots-2",
-        "fullName": "Facade Robots", "psName": "FacadeRobots", "copyright": "Robot icons by Facade Code"
+        "familyName": "Facade Code Extension Robots", "styleName": "Regular", "uniqueFontIdentifier": "FacadeRobots-2",
+        "fullName": "Facade Code Extension Robots", "psName": "FacadeRobots", "copyright": "Robot icons by Facade Code Extension"
     })
     font.setupOS2(sTypoAscender=896, sTypoDescender=-128, usWinAscent=896, usWinDescent=128)
     font.setupPost()

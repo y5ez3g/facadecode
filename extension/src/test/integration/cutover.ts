@@ -4,14 +4,14 @@
 
 // The legacy cutover journeys (ARCHITECTURE-1.4, VERIFICATION-5.2): the released legacy pair installed in an isolated profile, two
 // agents with distinct sessions started there and the first pinned, then the candidate pair installed over it. The runner observes
-// the fake CLI PIDs, the Framework agent records and workspace Pins. A driver beside the installed packages runs the editor actions.
+// the fake CLI PIDs, the Facade Code Framework agent records and workspace Pins. A driver beside the installed packages runs the editor actions.
 //
 //   exited       the legacy agents' processes ended before the update: the saved Pin is recovered once, by its exact session,
 //                without an action, and the unpinned session is not resumed
 //   live         the cutover's one action freezes the Pin, and recovery follows the released supervisor's grace period
-//   uncertain    the legacy supervisor cannot confirm exit: Framework serves the window while its Pin stays pending
+//   uncertain    the legacy supervisor cannot confirm exit: Facade Code Framework serves the window while its Pin stays pending
 //   two-windows  as `exited`, with a second window of the same workspace in its own profile: still exactly one recovery
-//   prior-owner  a second profile enters Framework after consent while the released window still owns its runs. The Pin recovers
+//   prior-owner  a second profile enters Facade Code Framework after consent while the released window still owns its runs. The Pin recovers
 //                once after the old window ends its own runs
 //   separate-workspaces   two released windows in different workspaces on one Facade home each upgrade and recover their own Pin.
 //                         The second window still sends terminal input to its original process after the first has switched
@@ -46,7 +46,7 @@ export interface CutoverContext {
 	readonly settings: { readonly [setting: string]: unknown };
 	/** The earlier editor settings a released legacy build reads its CLIs from (CONFIGURATION-6.1). */
 	readonly legacyCliSettings: { readonly [setting: string]: unknown };
-	/** Writes Facade's settings file in `facade` with only Claude Code on, each built-in a fake CLI. */
+	/** Writes Facade Code Extension's settings file in `facade` with only Claude Code on, each built-in a fake CLI. */
 	readonly facadeSettings: (facade: string) => void;
 	readonly endMatching: (text: string) => void;
 	readonly cleanUpFramework: (facade: string) => Promise<void>;
@@ -90,13 +90,13 @@ function pair(dir: string, label: string): { files: string[]; version: string } 
 	return { files: [path.join(dir, component.name), path.join(dir, main.name)], version };
 }
 
-/** The legacy execution owner's processes for the Facade root `facade`: its ptyd, by the path its command line names. */
+/** The legacy execution owner's processes for the Facade Code Extension root `facade`: its ptyd, by the path its command line names. */
 function legacyOwners(facade: string): number[] {
 	const found = spawnSync('pgrep', ['-f', path.join(facade, 'extension', 'ptyd')], { encoding: 'utf8' });
 	return found.stdout.split('\n').filter(Boolean).map(Number).filter(pid => Number.isSafeInteger(pid) && pid !== process.pid);
 }
 
-/** This Facade root's managed Framework agents, each with its session and process as `agent.inspect` reports them. */
+/** This Facade Code Extension root's managed Facade Code Framework agents, each with its session and process as `agent.inspect` reports them. */
 async function frameworkAgents(facade: string): Promise<AgentInfo[]> {
 	if (!frameworkListens(facade)) { return []; }
 	const hello = await helloInFramework(facade);
@@ -141,7 +141,7 @@ async function clickOffer(window: TestWindow): Promise<boolean> {
 	}
 }
 
-/** The cutover journal (ARCHITECTURE-1.4) in the Facade root's extension folder: the legacy runs the offer covers and the saved Pins. */
+/** The cutover journal (ARCHITECTURE-1.4) in the Facade Code Extension root's extension folder: the legacy runs the offer covers and the saved Pins. */
 type Journal = {
 	readonly version: number;
 	readonly runs: readonly {
@@ -172,7 +172,7 @@ function legacyPinProgress(facade: string): { [key: string]: unknown } {
 /**
  * The recovered Pin as the workspace roster saved it (ARCHITECTURE-6.2): the roster for this owner, holding exactly the original
  * Pin, of the legacy session and with the confirmed identity of `agent` on this machine, and its import settled. A released legacy Pin
- * has no machine or agent until its exact native session is resumed on Framework, so a session-only or guessed identity fails here.
+ * has no machine or agent until its exact native session is resumed on Facade Code Framework, so a session-only or guessed identity fails here.
  */
 async function savedRecoveredPin(facade: string, owner: string, agent: AgentInfo,
 	original: { readonly id: string; readonly session: string; readonly name: string }) {
@@ -191,7 +191,7 @@ async function savedRecoveredPin(facade: string, owner: string, agent: AgentInfo
 	assert.deepStrictEqual(pins.map(pin => pin.id), [original.id], `exactly the original Pin, once: ${JSON.stringify(pins)}`);
 	const [pin] = pins;
 	assert.deepStrictEqual([pin.machine_id, pin.agent, pin.conversation?.sessionId], [machine, agent.reference.agent_id, original.session],
-		'the saved Pin has the confirmed Framework identity of the agent resumed from its exact session');
+		'the saved Pin has the confirmed Facade Code Framework identity of the agent resumed from its exact session');
 	assert.deepStrictEqual([progress.pending, progress.attempts, progress.unrecognized], [[], [], []], `the legacy Pin import settled: ${JSON.stringify(progress)}`);
 	return { pin, progress };
 }
@@ -226,7 +226,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 		fs.rmSync(path.join(root, file));
 	}
-	// The released build reads its CLIs from the editor settings. The candidate reads them from Facade's settings file.
+	// The released build reads its CLIs from the editor settings. The candidate reads them from Facade Code Extension's settings file.
 	const userSettings = Object.fromEntries(Object.entries({ ...context.settings, ...context.legacyCliSettings }).filter(([name]) => name !== 'facade.framework'));
 	const envFor = ({ profile, role }: TestWindow) => ({
 		...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CUTOVER: out, FACADE_IT_CUTOVER_ROLE: role,
@@ -317,7 +317,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		const result = await phase('settings', win);
 		evidence[`settings-${win.role}`] = result;
 		assert.strictEqual(normalizeDriveLetter(String(result.opened)), normalizeDriveLetter(path.join(facade, 'facade.json')),
-			'this window opened the live Framework settings file');
+			'this window opened the live Facade Code Framework settings file');
 		return result;
 	};
 	const scoped = (workspace: LegacyWorkspace, snapshot = journal(facade)) =>
@@ -335,7 +335,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	const recoveredExactly = async (win: TestWindow, workspace: LegacyWorkspace, since: number, stillAlive: readonly number[] = []) => {
 		const [pinned, unpinned] = workspace.agents;
 		const original = workspace.saved.pins[0];
-		const agent = await until(`Framework to hold ${pinned.session} as ${original.name}`, async () => {
+		const agent = await until(`Facade Code Framework to hold ${pinned.session} as ${original.name}`, async () => {
 			const current = await holding(pinned.session);
 			assert.ok(current.length <= 1, `one recovered agent for ${pinned.session}: ${JSON.stringify(current)}`);
 			return current.find(agent => agent.process === 'running' && agent.name === original.name);
@@ -348,7 +348,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		assert.deepStrictEqual([agent.name, saved.pin.name], [original.name, original.name], 'the resumed agent and roster preserve the saved name');
 		// Give another host or recovery round time to contend for the same Pin before reading the append-only log.
 		await pause(4_000);
-		assert.strictEqual((await holding(pinned.session)).length, 1, 'one Framework agent still holds the exact session');
+		assert.strictEqual((await holding(pinned.session)).length, 1, 'one Facade Code Framework agent still holds the exact session');
 		const newLaunches = launches().slice(since);
 		const snapshot = journal(facade);
 		evidence[`recovery-${win.role}`] = { agent, saved, launches: newLaunches, journal: snapshot };
@@ -359,9 +359,9 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		assert.ok(!livePids.includes(workspace.pids[0]), 'the legacy holder of this Pin exited before CLI recovery');
 		assert.deepStrictEqual(livePids.filter(pid => !workspace.pids.includes(pid)), stillAlive,
 			'the other workspace kept its original PIDs during CLI recovery');
-		assert.deepStrictEqual(await holding(unpinned.session), [], 'the unpinned session stayed out of Framework');
+		assert.deepStrictEqual(await holding(unpinned.session), [], 'the unpinned session stayed out of Facade Code Framework');
 		const conversions = Object.values(snapshot?.recoveries ?? {}).filter(recovery => recovery.reference?.agent_id === agent.reference.agent_id);
-		assert.deepStrictEqual(conversions.map(recovery => recovery.reference), [agent.reference], 'the journal confirms one shared Framework reference');
+		assert.deepStrictEqual(conversions.map(recovery => recovery.reference), [agent.reference], 'the journal confirms one shared Facade Code Framework reference');
 		return agent;
 	};
 	const shownOffer = async (win: TestWindow) => {
@@ -382,7 +382,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		assert.ok(workspace.pids.every(alive), 'both original processes are live before consent');
 		assert.deepStrictEqual(launches().slice(since), [], 'no CLI launched before consent');
 		if (since === pids.length) {
-			assert.strictEqual(frameworkListens(facade), false, 'Framework waited for the first workspace’s consent');
+			assert.strictEqual(frameworkListens(facade), false, 'Facade Code Framework waited for the first workspace’s consent');
 		}
 		const before = journal(facade);
 		evidence[`journal-before-${win.role}`] = before;
@@ -425,13 +425,13 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		await consent(win, workspace, since);
 		const approved = journal(facade);
 		let servingHost = await candidateLoaded(win, beforeApproval);
-		assert.notStrictEqual(servingHost.hostPid, beforeConsent.hostPid, 'the editor entered Framework after consent');
+		assert.notStrictEqual(servingHost.hostPid, beforeConsent.hostPid, 'the editor entered Facade Code Framework after consent');
 		if (variant === 'live') {
 			servingHost = await reloadCandidate(win, servingHost);
 			evidence.reloads = { initial, beforeConsent, servingHost };
 		}
 		assert.deepStrictEqual(journal(facade)?.snapshots, approved?.snapshots, 'the frozen Pins survive reload');
-		assert.ok(workspace.pids.every(alive), 'original processes survive while Framework starts');
+		assert.ok(workspace.pids.every(alive), 'original processes survive while Facade Code Framework starts');
 		assert.ok(scoped(workspace).every(row => row.approved && !row.nativeStop && !row.stop), 'approval did not take supervisor custody');
 		assert.deepStrictEqual(launches().slice(since), [], 'the live session kept the Pin queued');
 		await verifySettings(win);
@@ -479,7 +479,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			await migrateLive(primary, original, since);
 		} else if (separated && second && other) {
 			const a = await migrateLive(primary, original, since, other.pids);
-			assert.ok(other.pids.every(alive), 'workspace B keeps both original PIDs after workspace A is serving Framework');
+			assert.ok(other.pids.every(alive), 'workspace B keeps both original PIDs after workspace A is serving Facade Code Framework');
 			const afterA = journal(facade);
 			assert.ok(scoped(other, afterA).every(row => !row.approved && !row.nativeStop && !row.stop),
 				'workspace A left workspace B outside its approval and stop scope');
@@ -496,7 +496,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			const b = await migrateLive(second, other, since + 1);
 			const [retained] = await holding(original.agents[0].session);
 			assert.deepStrictEqual([retained?.reference, retained?.pid, retained?.name], [a.reference, a.pid, a.name], 'workspace A kept its original recovery through workspace B switching');
-			assert.notDeepStrictEqual(b.reference, a.reference, 'the distinct sessions have separate Framework references');
+			assert.notDeepStrictEqual(b.reference, a.reference, 'the distinct sessions have separate Facade Code Framework references');
 			await savedRecoveredPin(facade, original.saved.key, a, { ...original.saved.pins[0], session: original.agents[0].session });
 			assert.deepStrictEqual(launches().slice(since).map(launch => launch.pid), [a.pid, b.pid], 'one new CLI per restored Pin across both upgrades');
 		} else if (variant === 'exited' || variant === 'two-windows') {
@@ -523,11 +523,11 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			open(second);
 			await candidateLoaded(second);
 			await consent(second, original, since);
-			await until('Framework to serve the candidate of the same workspace', () => frameworkListens(facade) || undefined, 60_000);
+			await until('Facade Code Framework to serve the candidate of the same workspace', () => frameworkListens(facade) || undefined, 60_000);
 			await verifySettings(second);
 			const held = scoped(original);
 			assert.ok(held.every(row => !row.stop && !row.nativeStop), 'no native stop was dispatched while the released window held custody');
-			assert.ok(original.pids.every(alive), 'the released window still owns both original processes while Framework serves the candidate');
+			assert.ok(original.pids.every(alive), 'the released window still owns both original processes while Facade Code Framework serves the candidate');
 			assert.deepStrictEqual([await managed(), launches().slice(since)], [[], []], 'Pin recovery waited for the old window to release the exact session');
 			evidence.ownerHeld = { rows: held, livePids: original.pids, frameworkAgents: [], launches: [] };
 			request(primary, 'stop');
@@ -550,7 +550,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			evidence.suspended = { journal: journal(facade), suspendedOwners: owners };
 			const servingHost = await candidateLoaded(primary, beforeApproval);
 			const settings = await verifySettings(primary);
-			assert.strictEqual(settings.hostPid, servingHost.hostPid, 'the candidate serves Framework after the consent reload');
+			assert.strictEqual(settings.hostPid, servingHost.hostPid, 'the candidate serves Facade Code Framework after the consent reload');
 			await until('the saved Pin to remain in the workspace import sidecar', () => {
 				const progress = legacyPinProgress(facade)[original.saved.key] as { pending: readonly unknown[] } | undefined;
 				return progress?.pending.length === 1 ? true : undefined;
@@ -567,14 +567,14 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			assertExactRows(original, waiting, true);
 			assertSnapshot(original, after);
 			assert.ok(waiting.every(row => !row.stop && !row.nativeStop), 'no stop or exit was assumed');
-			assert.ok(frameworkListens(facade), 'Framework serves this window while the legacy Pin waits');
-			assert.deepStrictEqual(await managed(), [], 'Framework holds no replacement agent');
+			assert.ok(frameworkListens(facade), 'Facade Code Framework serves this window while the legacy Pin waits');
+			assert.deepStrictEqual(await managed(), [], 'Facade Code Framework holds no replacement agent');
 			assert.deepStrictEqual(launches().slice(since), [], 'the candidate launched no replacement while exit was uncertain');
 		}
 		const workspaces = path.join(extensionHome, 'workspaces');
 		const rosterOwners = fs.readdirSync(workspaces).filter(owner => fs.existsSync(path.join(workspaces, owner, 'orchestrator-workspace.json')));
 		const expectedOwners = [original.saved.key, ...(other ? [other.saved.key] : [])];
-		assert.deepStrictEqual(rosterOwners.sort(), expectedOwners.sort(), 'each workspace that entered Framework has one canonical roster');
+		assert.deepStrictEqual(rosterOwners.sort(), expectedOwners.sort(), 'each workspace that entered Facade Code Framework has one canonical roster');
 		evidence.rosterOwners = rosterOwners;
 		evidence.windowLoads = lines().filter(line => line.phase === 'candidate-loaded');
 		console.log(`  ✔ legacy cutover (${variant}) from ${prior.version} to ${candidate.version}: ${JSON.stringify(evidence)}`);

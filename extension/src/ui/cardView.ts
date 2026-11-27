@@ -10,12 +10,12 @@ import type { Card, CardMenu, DetailField, DetailId, PlaceKind } from '../webvie
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
-	readonly orchestrator?: OrchestratorCardWords;
+	readonly framework?: FrameworkCardWords;
 	/** `Title: {0}`, `Location: {0}` and `Path: {0}`: what a screen reader says of a card's details (PANEL-1.5). */
 	readonly title: (value: string) => string;
 	/**
 	 * `No title yet` and `Title unavailable`: the details' first row where a run has no title - its CLI has not saved one yet, or
-	 * Facade has no history reader for its CLI, so none can come (PANEL-1.5, CLIS-2.4).
+	 * Facade Code Extension has no history reader for its CLI, so none can come (PANEL-1.5, CLIS-2.4).
 	 */
 	readonly untitledPending: string;
 	readonly untitledUnreadable: string;
@@ -46,7 +46,7 @@ export interface CardWords {
 	readonly needsPermission: string;
 	readonly needsSignIn: string;
 	readonly hasQuestion: string;
-	/** `Process exited · code {0}` and `Process terminated · {0}`: an abnormal exit, as Facade says it (RULES-3.3). */
+	/** `Process exited · code {0}` and `Process terminated · {0}`: an abnormal exit, as Facade Code Extension says it (RULES-3.3). */
 	readonly exitedWithCode: (code: string) => string;
 	readonly endedBySignal: (signal: string) => string;
 	/** `Process lost · reason unknown`: a run its supervisor no longer had, how it ended not known (LIFECYCLE-3.5). */
@@ -54,7 +54,7 @@ export interface CardWords {
 	/** `Start failed · {0}` and `Worktree failed · {0}`, {0} the failure's reason without its closing period (PANEL-1.4). */
 	readonly startFailed: (reason: string) => string;
 	readonly worktreeFailed: (reason: string) => string;
-	/** Why an agent cannot work with other agents - its Facade tools are not there - in plain words; it runs on without them (PANEL-1.4). */
+	/** Why an agent cannot work with other agents - its Facade Code Framework tools are not there - in plain words; it runs on without them (PANEL-1.4). */
 	readonly toolsUnavailable: (problem: ToolsProblem | undefined, file: string | undefined) => string;
 	/** What a screen reader hears of the second line, its source in words, not its mark (PANEL-1.5). */
 	readonly saidByAgent: (sender: string, line: string) => string;
@@ -62,7 +62,7 @@ export interface CardWords {
 	readonly saidByFacade: (line: string) => string;
 }
 
-interface OrchestratorCardWords {
+interface FrameworkCardWords {
 	readonly justDone: string;
 	readonly waitingForYou: string;
 	readonly ended: string;
@@ -85,7 +85,7 @@ export interface CardPlace {
 	/** The qualified location with its non-local environment, kept separate from its path. */
 	readonly context: string;
 	readonly path: string;
-	/** What it is, as Facade's location pickers show it: a main checkout, a worktree, or a folder. */
+	/** What it is, as Facade Code Extension's location pickers show it: a main checkout, a worktree, or a folder. */
 	readonly kind: PlaceKind;
 }
 
@@ -124,7 +124,7 @@ export interface CardStatus {
 	readonly reason?: string;
 	/** What the second line says where that is what was last sent, and who sent it. */
 	readonly said?: CardSaid;
-	/** What it says where that is Facade's own - a notable state, or how the run began - which carries no mark. */
+	/** What it says where that is Facade Code Extension's own - a notable state, or how the run began - which carries no mark. */
 	readonly notice?: string;
 }
 
@@ -139,14 +139,14 @@ export interface CardSaid {
 
 /**
  * What a card says of its run (RULES-3.2, PANEL-1.4): its dot by {@link dotOf}; its second line one of three kinds - the person's input
- * `🧑‍💻`, another agent's message `📨`, or Facade's own, unmarked: a Facade result, or a notable state while it lasts - its start, over
+ * `🧑‍💻`, another agent's message `📨`, or Facade Code Framework's own, unmarked: a Facade Code Framework result, or a notable state while it lasts - its start, over
  * any message; what its CLI waits for; why its dot is red - then the last message again; before any, its known opening,
  * `New session started`, `Agent resumed` or `Session continued`. Its state in words is the accessible label's, never the second line's, nor is a
- * title. Framework cards use the daemon's state and latest submission (PANEL-4.1).
+ * title. Facade Code Framework cards use the daemon's state and latest submission (PANEL-4.1).
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
-	if (facts.orchestrator && words.orchestrator) {
-		return orchestratorStatusOf(facts.orchestrator.state, facts, words);
+	if (facts.framework && words.framework) {
+		return frameworkStatusOf(facts.framework.state, facts, words);
 	}
 	if (facts.remoteMachine !== undefined && facts.disconnected) {
 		return { dot: 'none', stateText: words.connectionLost, ...noticeOf(words.connectionLost) };
@@ -163,7 +163,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		const said = detail && detail !== kind ? `${kind} · ${detail}` : kind;
 		return { dot, stateText: kind, ...noticeOf(said), ...detail && detail !== kind ? { reason: detail } : {} };
 	}
-	// Facade tools it cannot use, or a start that did not become ready: red, the second line saying why (RULES-3.2)
+	// Facade Code Framework tools it cannot use, or a start that did not become ready: red, the second line saying why (RULES-3.2)
 	if (dot === 'error') {
 		const why = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile)
 			: facts.tools === 'connecting' ? words.toolsConnecting : activityReasonOf(facts, words) || words.activityUnavailable;
@@ -190,7 +190,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	return { dot, stateText, ...noticeOf(opening), ...unsaid };
 }
 
-type FrameworkState = NonNullable<RunFacts['orchestrator']>['state'];
+type FrameworkState = NonNullable<RunFacts['framework']>['state'];
 
 export function frameworkStateOf(state: FrameworkState, facts: RunFacts): FrameworkState {
 	if (facts.error || state === 'error') { return 'error'; }
@@ -198,7 +198,7 @@ export function frameworkStateOf(state: FrameworkState, facts: RunFacts): Framew
 }
 
 export function frameworkStateText(state: FrameworkState, words: CardWords): string {
-	const terms = words.orchestrator;
+	const terms = words.framework;
 	const states = {
 		starting: words.starting,
 		working: words.working,
@@ -216,8 +216,8 @@ function blockerText(kind: NonNullable<RunFacts['blocker']>['kind'], words: Card
 	return kind === 'permission' ? words.needsPermission : kind === 'auth' ? words.needsSignIn : kind === 'question' ? words.hasQuestion : unknown;
 }
 
-/** Framework supplies the last submission, with active error and wait reasons taking precedence (PANEL-4.1). */
-function orchestratorStatusOf(reported: FrameworkState, facts: RunFacts, words: CardWords): CardStatus {
+/** Facade Code Framework supplies the last submission, with active error and wait reasons taking precedence (PANEL-4.1). */
+function frameworkStatusOf(reported: FrameworkState, facts: RunFacts, words: CardWords): CardStatus {
 	const state = frameworkStateOf(reported, facts);
 	const stateText = state === 'unknown' && facts.disconnected ? words.connectionLost : frameworkStateText(state, words);
 	let line = facts.said ?? '';
@@ -225,7 +225,7 @@ function orchestratorStatusOf(reported: FrameworkState, facts: RunFacts, words: 
 		line = errorReasonOf(facts, words);
 	} else if (state === 'error' && facts.tools === 'unavailable') {
 		line = facts.toolsProblem === 'disconnected' ? words.toolsUnavailable(facts.toolsProblem, undefined)
-			: words.orchestrator?.toolsError ?? words.activityUnavailable;
+			: words.framework?.toolsError ?? words.activityUnavailable;
 	} else if (state === 'error' && facts.notReady) {
 		line = words.activityUnknown('waiting');
 	} else if (state === 'waiting_for_you') {
@@ -243,7 +243,7 @@ function orchestratorStatusOf(reported: FrameworkState, facts: RunFacts, words: 
 /** The mark of the person's own input on its card: someone at a computer, as `📨` marks another agent's message (PANEL-1.4). */
 export const PERSON_MARK = '\u{1F9D1}‍\u{1F4BB}';
 
-/** The mark a Facade result begins with as it is typed to an agent; the card says the result without it (PANEL-1.4). */
+/** The mark a Facade Code Framework result begins with as it is typed to an agent; the card says the result without it (PANEL-1.4). */
 const RESULT_MARK = /^\u{1F514}\s*/u;
 
 /** Why its activity is unknown, in the person's words where its report says which reason it is (PANEL-1.4). */
@@ -251,14 +251,14 @@ function activityReasonOf(facts: RunFacts, words: CardWords): string | undefined
 	return facts.activityUnknown ? words.activityUnknown(facts.activityUnknown) : facts.activityReason?.trim();
 }
 
-/** `text`, Facade's own, as the second line says it: without any mark (PANEL-1.4). */
+/** `text`, Facade Code Extension's own, as the second line says it: without any mark (PANEL-1.4). */
 function noticeOf(text: string): Pick<CardStatus, 'line' | 'notice'> {
 	return { line: text, notice: text };
 }
 
 /**
  * What was last sent to the run and by whom (PANEL-1.4): another agent's message - the task an agent-started run was started with
- * among them - marked `📨`, from who its record says sent it, never from its text; the person's input marked `🧑‍💻`; a Facade
+ * among them - marked `📨`, from who its record says sent it, never from its text; the person's input marked `🧑‍💻`; a Facade Code Extension
  * result unmarked, without the `🔔` it is typed to its agent with.
  */
 function saidOf(facts: RunFacts): CardSaid | undefined {
@@ -349,22 +349,22 @@ export function labelOf(format: (value: string) => string): string {
  */
 export function cardOf(facts: RunFacts, input: CardInput): Card {
 	const { place, words } = input;
-	if (facts.orchestrator && words.orchestrator) {
-		return orchestratorCardOf(facts, facts.orchestrator, input, words.orchestrator);
+	if (facts.framework && words.framework) {
+		return frameworkCardOf(facts, facts.framework, input, words.framework);
 	}
 	const status = statusOf(facts, words);
 	const runningOn = facts.remoteMachine === undefined ? undefined : words.runningOn(facts.remoteMachine);
 	const pinned = facts.remoteMachine === undefined && !!facts.pin;
 	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
 	// Its conversation's complete title as its CLI stores it, where its CLI saved one; else why there is none - not yet, or never, for
-	// a CLI Facade has no history reader for - after the same `Title: ` label (PANEL-1.5)
+	// a CLI Facade Code Extension has no history reader for - after the same `Title: ` label (PANEL-1.5)
 	const title = facts.title?.trim();
 	const summary = title ? field('title', words.title, title) : undefined;
 	const untitled = summary ? undefined : input.readsTitles === false ? words.untitledUnreadable : words.untitledPending;
 	const creator = facts.origin === 'agent' ? facts.creatorLabel ?? facts.creator : undefined;
 	// Where it works, always: its main checkout, worktree or folder, its icon saying which, then its path (PANEL-1.5)
 	const location = { ...field('location', words.location, place.context), kind: place.kind };
-	// The second line's source in words, not its mark: Facade's own words carry none
+	// The second line's source in words, not its mark: Facade Code Extension's own words carry none
 	const heard = status.said?.kind === 'agent' ? words.saidByAgent([status.said.sender, status.said.window].filter(Boolean).join(', '), status.said.text)
 		: status.said?.kind === 'facade' ? words.saidByFacade(status.said.text)
 			: status.said ? words.saidByPerson(status.said.text) : status.notice ?? status.line;
@@ -411,10 +411,10 @@ interface CardInput {
 	readonly icon?: string;
 }
 
-/** Workspace card content comes from the Orchestrator (PANEL-4.1). */
-function orchestratorCardOf(facts: RunFacts, record: NonNullable<RunFacts['orchestrator']>, input: CardInput, terms: OrchestratorCardWords): Card {
+/** Workspace card content comes from Facade Code Framework (PANEL-4.1). */
+function frameworkCardOf(facts: RunFacts, record: NonNullable<RunFacts['framework']>, input: CardInput, terms: FrameworkCardWords): Card {
 	const { place, words } = input;
-	const { dot, stateText, line } = orchestratorStatusOf(record.state, facts, words);
+	const { dot, stateText, line } = frameworkStatusOf(record.state, facts, words);
 	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
 	const alias = record.reference.agent_id;
 	const address = facts.address;

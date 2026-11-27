@@ -53,7 +53,7 @@
     },
     {
       "id": "extension/configuration-framework/adapter/custom",
-      "assertion": "Add a uniquely named custom CLI with a configured program. Verify its literal argv and cwd and the absence of Facade tools or resumable Pin capabilities.",
+      "assertion": "Add a uniquely named custom CLI with a configured program. Verify its literal argv and cwd and the absence of Facade Code Framework tools or resumable Pin capabilities.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/configuration.rs:108",
@@ -345,11 +345,11 @@
     },
     {
       "id": "extension/configuration-framework/environment/FACADE_HOME",
-      "assertion": "Launch the window with FACADE_HOME set to the isolated absolute root and verify the daemon and its state and editor terminal launcher resolve there. Verify the default home and refused relative root. When Facade: Home is set, legacy discovery and Framework use that resolved home.",
+      "assertion": "Launch the window with FACADE_HOME set to the isolated absolute root and verify the daemon and its state and editor terminal launcher resolve there. Verify the default home and refused relative root. When Facade Code Extension: Home is set, legacy discovery and Facade Code Framework use that resolved home.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/framework.it.ts:54",
-        "extension/src/test/host.orchestratorWorkspace.test.ts",
+        "extension/src/test/host.frameworkWorkspace.test.ts",
         "extension/src/test/host.activation.test.ts:220"
       ]
     },
@@ -388,7 +388,7 @@
     },
     {
       "id": "extension/configuration-framework/vscode/facade.home",
-      "assertion": "Resolve Facade Home before querying legacy inventory and opening a Framework connection.",
+      "assertion": "Resolve Facade Home before querying legacy inventory and opening a Facade Code Framework connection.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.activation.test.ts"
@@ -396,7 +396,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "host.activation.test",
-        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) Facade: Home that the person set is this window's Facade home before anything reads it: FACADE_HOME for what the window starts, and for its terminals; never set, FACADE_HOME is left as it is (ARCHITECTURE-3.1)"
+        "name": "A window whose Facade Code Extension cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) Facade Code Extension: Home that the person set is this window's Facade home before anything reads it: FACADE_HOME for what the window starts, and for its terminals; never set, FACADE_HOME is left as it is (ARCHITECTURE-3.1)"
       }
     },
     {
@@ -450,7 +450,7 @@
         "runner": "extension-editor",
         "journey": "journeys",
         "built_in": "claude",
-        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) cancels the original pending Framework MCP send on its relay without a paste or inbox entry",
+        "name": "Journey: claude uses its Facade Code Framework tools in this window (J10, M02, M03, M07, M15, M17) cancels the original pending Facade Code Framework MCP send on its relay without a paste or inbox entry",
         "implementation": "framework"
       }
     },
@@ -496,7 +496,7 @@
     },
     {
       "id": "extension/mcp-framework/request/tools.list",
-      "assertion": "Compare all advertised tools and argument schemas returned by the editor-launched managed relay with the registered Framework catalog. Verify the expected catalog and allowed operations for a Guest.",
+      "assertion": "Compare all advertised tools and argument schemas returned by the editor-launched managed relay with the registered Facade Code Framework catalog. Verify the expected catalog and allowed operations for a Guest.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/mcp.rs:2035",
@@ -545,7 +545,7 @@
         "implementation": "framework",
         "journey": "journeys",
         "built_in": "claude",
-        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+        "name": "Journey: claude uses its Facade Code Framework tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
       }
     },
     {
@@ -562,7 +562,7 @@
         "implementation": "framework",
         "journey": "journeys",
         "built_in": "claude",
-        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+        "name": "Journey: claude uses its Facade Code Framework tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
       }
     },
     {
@@ -579,7 +579,7 @@
         "implementation": "framework",
         "journey": "journeys",
         "built_in": "claude",
-        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+        "name": "Journey: claude uses its Facade Code Framework tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
       }
     },
     {
@@ -605,7 +605,7 @@
         "implementation": "framework",
         "journey": "journeys",
         "built_in": "claude",
-        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+        "name": "Journey: claude uses its Facade Code Framework tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
       }
     },
     {
@@ -627,7 +627,7 @@
     },
     {
       "id": "extension/p0/activation-shell/framework-handoff",
-      "assertion": "With Framework serving the panel, Shell and the editor observe the same process and worktree and can operate on that run.",
+      "assertion": "With Facade Code Framework serving the panel, Shell and the editor observe the same process and worktree and can operate on that run.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/frameworkMultiWindow.ts"
@@ -657,7 +657,7 @@
     },
     {
       "id": "extension/p0/message-delivery/draft-protection-framework",
-      "assertion": "In the editor running Framework, wait explicitly for delivery while a draft is present. Verify no input or submission reaches the recipient, clearing the draft cannot deliver the withdrawn message, and unrecognized input is refused.",
+      "assertion": "In the editor running Facade Code Framework, wait explicitly for delivery while a draft is present. Verify no input or submission reaches the recipient, clearing the draft cannot deliver the withdrawn message, and unrecognized input is refused.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts:648"
@@ -667,7 +667,7 @@
         "implementation": "framework",
         "journey": "journeys",
         "built_in": "claude",
-        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once"
+        "name": "Journey: claude uses its Facade Code Framework tools in this window (J10, M02, M03, M07, M15, M17) messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once"
       }
     },
     {
@@ -719,7 +719,7 @@
     },
     {
       "id": "extension/p0/pin-reload/resume-framework",
-      "assertion": "Resume Agent opens the saved cwd and exact session ID via the Framework implementation. Native tab Pin leaves the workspace Pin independent.",
+      "assertion": "Resume Agent opens the saved cwd and exact session ID via the Facade Code Framework implementation. Native tab Pin leaves the workspace Pin independent.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts"
@@ -790,7 +790,7 @@
     },
     {
       "id": "extension/p0/vsix-upgrade/cutover-live",
-      "assertion": "Upgrade the pinned prior pair with two live legacy processes. Confirm consent and both reloads preserve the frozen Pin, then verify the old supervisor retires both processes and Framework restores the Pin once.",
+      "assertion": "Upgrade the pinned prior pair with two live legacy processes. Confirm consent and both reloads preserve the frozen Pin, then verify the old supervisor retires both processes and Facade Code Framework restores the Pin once.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/cutover.ts",
@@ -806,7 +806,7 @@
     },
     {
       "id": "extension/p0/vsix-upgrade/cutover-uncertain",
-      "assertion": "Suspend the released supervisor after consent. Verify Framework serves the window and the saved Pin stays deferred while exit remains unconfirmed.",
+      "assertion": "Suspend the released supervisor after consent. Verify Facade Code Framework serves the window and the saved Pin stays deferred while exit remains unconfirmed.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/cutover.ts",
@@ -839,7 +839,7 @@
     },
     {
       "id": "extension/p0/vsix-upgrade/upgrade-pair",
-      "assertion": "Install the pinned prior pair, save a Pin, confirm both prior agents are gone and update to the candidate. Verify Framework restores exactly the saved session once and records its new reference.",
+      "assertion": "Install the pinned prior pair, save a Pin, confirm both prior agents are gone and update to the candidate. Verify Facade Code Framework restores exactly the saved session once and records its new reference.",
       "stage": "release",
       "existing_tests": [
         "extension/src/test/integration/cutover.ts",
@@ -855,7 +855,7 @@
     },
     {
       "id": "extension/p0/window-replacement/window-activation-framework",
-      "assertion": "The Window Component activates with Framework and can reach the matching Framework run.",
+      "assertion": "The Window Component activates with Facade Code Framework and can reach the matching Facade Code Framework run.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/frameworkMultiWindow.ts"
@@ -880,7 +880,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "commands.test",
-        "name": "Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+        "name": "Facade Code Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
@@ -938,7 +938,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "commands.test",
-        "name": "Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+        "name": "Facade Code Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
@@ -952,7 +952,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "commands.test",
-        "name": "Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+        "name": "Facade Code Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
@@ -988,7 +988,7 @@
     },
     {
       "id": "extension/vscode-framework/command/facade.openSettings",
-      "assertion": "Open the native Settings UI in a local Framework window whose editor settings preference is JSON. The separate Edit in facade.json command opens the file returned by daemon status.",
+      "assertion": "Open the native Settings UI in a local Facade Code Framework window whose editor settings preference is JSON. The separate Edit in facade.json command opens the file returned by daemon status.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.activation.test.ts",
@@ -1014,7 +1014,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "frameworkConnection.test",
-        "name": "Framework connection (ARCHITECTURE-1.4) Open Settings File uses the live absolute status path and preserves an exclusive creator"
+        "name": "Facade Code Framework connection (ARCHITECTURE-1.4) Open Settings File uses the live absolute status path and preserves an exclusive creator"
       }
     },
     {
@@ -1153,7 +1153,7 @@
     },
     {
       "id": "extension/webview-framework/action/continueSession",
-      "assertion": "Open Resume Agent from the Framework panel and verify the chosen native session resumes once with its stable Orchestrator identity where retained.",
+      "assertion": "Open Resume Agent from the Facade Code Framework panel and verify the chosen native session resumes once with its stable Facade Code Framework identity where retained.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/panel.view.test.ts:301"
@@ -1233,7 +1233,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "webview.test",
-        "name": "The agent panel in Chromium the Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)"
+        "name": "The agent panel in Chromium the Facade Code Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)"
       }
     },
     {
@@ -1257,7 +1257,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "webview.test",
-        "name": "The agent panel in Chromium the Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)"
+        "name": "The agent panel in Chromium the Facade Code Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)"
       }
     },
     {
@@ -1272,7 +1272,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "panel.view.test",
-        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
+        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Facade Code Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
       }
     },
     {
@@ -1286,7 +1286,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "panel.view.test",
-        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
+        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Facade Code Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
       }
     },
     {
@@ -1308,7 +1308,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "panel.view.test",
-        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
+        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Facade Code Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
       }
     },
     {
@@ -1321,16 +1321,16 @@
       "test": {
         "runner": "extension-unit",
         "target": "host.activation.test",
-        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the identity command answers the current session with the persisted window token and component version, refuses stale sessions and leaves damaged records intact (ARCHITECTURE-2.2)"
+        "name": "A window whose Facade Code Extension cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the identity command answers the current session with the persisted window token and component version, refuses stale sessions and leaves damaged records intact (ARCHITECTURE-2.2)"
       }
     },
     {
       "id": "extension/window-component-framework/command/facade.window.legacyInstance",
-      "assertion": "After a legacy handover record exists, read the derived predecessor instance for this editor session and verify Framework uses it to retain the workspace. A fresh window must not invent a predecessor.",
+      "assertion": "After a legacy handover record exists, read the derived predecessor instance for this editor session and verify Facade Code Framework uses it to retain the workspace. A fresh window must not invent a predecessor.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.activation.test.ts:10",
-        "extension/src/test/host.orchestratorWorkspace.test.ts:11"
+        "extension/src/test/host.frameworkWorkspace.test.ts:11"
       ]
     },
     {
@@ -1367,7 +1367,7 @@
         "extension/src/test/windowTerminals.test.ts:174",
         "extension/src/test/windowTerminals.test.ts:57",
         "extension/src/test/windowTerminals.test.ts",
-        "extension/src/test/orchestratorTerminals.test.ts",
+        "extension/src/test/frameworkTerminals.test.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts:827"
       ],
       "test": {
@@ -1384,7 +1384,7 @@
         "extension/src/test/windowTerminals.test.ts:143",
         "extension/src/test/windowTerminals.test.ts:44",
         "extension/src/test/windowTerminals.test.ts",
-        "extension/src/test/orchestratorTerminals.test.ts",
+        "extension/src/test/frameworkTerminals.test.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts:827"
       ],
       "test": {
@@ -1401,7 +1401,7 @@
         "extension/src/test/windowTerminals.test.ts:195",
         "extension/src/test/windowTerminals.test.ts:162",
         "extension/src/test/windowTerminals.test.ts",
-        "extension/src/test/orchestratorTerminals.test.ts",
+        "extension/src/test/frameworkTerminals.test.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts:827"
       ],
       "test": {
@@ -1418,7 +1418,7 @@
         "extension/src/test/windowTerminals.test.ts:131",
         "extension/src/test/windowTerminals.test.ts:48",
         "extension/src/test/windowTerminals.test.ts",
-        "extension/src/test/orchestratorTerminals.test.ts",
+        "extension/src/test/frameworkTerminals.test.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts:827"
       ],
       "test": {
@@ -1435,7 +1435,7 @@
         "extension/src/test/windowTerminals.test.ts:317",
         "extension/src/test/windowTerminals.test.ts:190",
         "extension/src/test/windowTerminals.test.ts",
-        "extension/src/test/orchestratorTerminals.test.ts",
+        "extension/src/test/frameworkTerminals.test.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts:827"
       ],
       "test": {
@@ -1619,7 +1619,7 @@
     },
     {
       "id": "framework/configuration/setting/names",
-      "assertion": "Start an unnamed fake CLI with a controlled name pool, verify trimming, unused and exhausted pool selection, and verify an empty pool uses the Framework built-in names.",
+      "assertion": "Start an unnamed fake CLI with a controlled name pool, verify trimming, unused and exhausted pool selection, and verify an empty pool uses the Facade Code Framework built-in names.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/configuration.rs:421",
@@ -1679,8 +1679,8 @@
       "assertion": "Observe an id-less closing announcement naming the replacement build during a live takeover, and reconnect with the same running agent still reachable.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/upgrade.rs:802",
-        "framework/tests/tests/upgrade.rs:1914"
+        "framework/tests/tests/upgrade.rs:809",
+        "framework/tests/tests/upgrade.rs:1921"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -1732,7 +1732,7 @@
       "assertion": "Send raw input and resize as id-less calls with exact permissions and target. Observe the expected input bytes and resized view, and verify no JSON-RPC response is written for either notification.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/input.rs:476",
+        "framework/tests/tests/input.rs:477",
         "framework/tests/tests/attach.rs",
         "framework/tests/tests/watches.rs"
       ],
@@ -1761,7 +1761,7 @@
       "stage": "pr",
       "existing_tests": [
         "framework/crates/daemon/src/server/tests.rs:185",
-        "framework/tests/tests/upgrade.rs:1914"
+        "framework/tests/tests/upgrade.rs:1921"
       ]
     },
     {
@@ -2002,7 +2002,7 @@
       "existing_tests": [
         "framework/tests/tests/configuration.rs:806",
         "framework/tests/tests/messages.rs:479",
-        "framework/tests/tests/upgrade.rs:1116",
+        "framework/tests/tests/upgrade.rs:1123",
         "framework/tests/tests/messages.rs:429"
       ],
       "test": {
@@ -2045,7 +2045,7 @@
       "assertion": "Read known logical lines and verify the requested bound.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/input.rs:269",
+        "framework/tests/tests/input.rs:270",
         "framework/tests/tests/keeper.rs:377",
         "framework/tests/tests/machines.rs",
         "framework/tests/tests/mcp.rs:297",
@@ -2062,7 +2062,7 @@
       "assertion": "Correlate the delivery receipt and verify a single delivery at the intended target after reconnect and replay with the original request ID.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:2330",
+        "framework/tests/tests/machines.rs:2333",
         "framework/tests/tests/reliability.rs"
       ],
       "test": {
@@ -2091,7 +2091,7 @@
       "existing_tests": [
         "framework/tests/tests/agents.rs:99",
         "framework/tests/tests/agents.rs:26",
-        "framework/tests/tests/input.rs:588",
+        "framework/tests/tests/input.rs:589",
         "framework/tests/tests/keeper.rs:232"
       ],
       "test": {
@@ -2105,7 +2105,7 @@
       "assertion": "Observe exact text or key bytes on the intended terminal. Check partial input is distinguishable from full input.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/input.rs:554",
+        "framework/tests/tests/input.rs:555",
         "framework/tests/tests/input.rs:40",
         "framework/tests/tests/keeper.rs:487",
         "framework/tests/tests/messages.rs:571",
@@ -2158,7 +2158,7 @@
       "assertion": "Read the expected daemon and Keeper identity, build and state.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/cli.rs:617",
+        "framework/tests/tests/cli.rs:620",
         "framework/tests/tests/machines.rs"
       ],
       "test": {
@@ -2172,9 +2172,9 @@
       "assertion": "Complete a compatible takeover while retaining the same Keeper and CLI; verify disjoint Daemon or Keeper offers are refused without replacing the installed build.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/upgrade.rs:1757",
-        "framework/tests/tests/upgrade.rs:1826",
-        "framework/tests/tests/upgrade.rs:1914"
+        "framework/tests/tests/upgrade.rs:1764",
+        "framework/tests/tests/upgrade.rs:1833",
+        "framework/tests/tests/upgrade.rs:1921"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -2214,7 +2214,7 @@
       "assertion": "Observe the authenticated peer call returning the exact original Shell request ID, replying AgentRef, distinct message references and full reply text. Reconcile the peer acknowledgement.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:3563"
+        "framework/tests/tests/machines.rs:3566"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -2347,7 +2347,7 @@
       "assertion": "Rename a remote peer through the allowed session and read its new name under the same machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:3026"
+        "framework/tests/tests/machines.rs:3029"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -2517,7 +2517,7 @@
       "existing_tests": [
         "framework/tests/tests/keeper.rs:40",
         "framework/tests/tests/keeper.rs:232",
-        "framework/tests/tests/keeper.rs:567"
+        "framework/tests/tests/keeper.rs:565"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -2546,7 +2546,7 @@
       "stage": "native",
       "existing_tests": [
         "framework/tests/tests/keeper.rs:40",
-        "framework/tests/tests/keeper.rs:669"
+        "framework/tests/tests/keeper.rs:667"
       ]
     },
     {
@@ -2599,7 +2599,6 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/lines.rs:142",
-        "framework/tests/tests/lines.rs:142",
         "framework/crates/daemon/src/mcp/lines.rs:468"
       ],
       "test": {
@@ -2640,7 +2639,7 @@
     },
     {
       "id": "framework/mcp/request/tools.call",
-      "assertion": "Make a real stdio call and verify JSON-RPC ID, the MCP structured content and the targeted Framework effect, including a reasoned tool refusal.",
+      "assertion": "Make a real stdio call and verify JSON-RPC ID, the MCP structured content and the targeted Facade Code Framework effect, including a reasoned tool refusal.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/mcp.rs:2029",
@@ -2656,7 +2655,7 @@
     },
     {
       "id": "framework/mcp/request/tools.list",
-      "assertion": "Read the real relay's tool list and compare tool names and input schemas with the active Framework registry for the managed or Guest connection.",
+      "assertion": "Read the real relay's tool list and compare tool names and input schemas with the active Facade Code Framework registry for the managed or Guest connection.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/mcp.rs:2029",
@@ -2985,7 +2984,7 @@
       "assertion": "Send mixed text and keys through Shell and the wire. Observe all steps in order on the terminal before later raw input, and reject invalid Shell spellings before input.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/input.rs:554"
+        "framework/tests/tests/input.rs:555"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3075,7 +3074,7 @@
       "assertion": "Drop the reply after delivery and retry the original request ID. The result settles once with one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:2330",
+        "framework/tests/tests/machines.rs:2333",
         "framework/tests/tests/reliability.rs"
       ],
       "test": {
@@ -3102,7 +3101,7 @@
       "assertion": "Disconnect during raw input and verify the returned partial or unknown outcome matches the effect observed at the target.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:2410",
+        "framework/tests/tests/machines.rs:2413",
         "framework/tests/tests/messages.rs"
       ],
       "test": {
@@ -3116,7 +3115,7 @@
       "assertion": "Shell waits for the original remote recipient’s linked reply and writes the exact multiline reply to stdout. The remote fake CLI sees one request and the origin sees no terminal input.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:3563"
+        "framework/tests/tests/machines.rs:3566"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3187,7 +3186,7 @@
       "assertion": "Lose the cross-machine reply after delivery. A retry with the original ID observes the same settlement and one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:2330",
+        "framework/tests/tests/machines.rs:2333",
         "framework/tests/tests/reliability.rs"
       ],
       "test": {
@@ -3201,7 +3200,7 @@
       "assertion": "Route loss is visible and the route can recover to the original agent identity.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:2700"
+        "framework/tests/tests/machines.rs:2703"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3214,8 +3213,8 @@
       "assertion": "Resolve an unqualified agent selector across a disconnected saved route, check literal names containing @ and ambiguity, and verify automatic name allocation does not probe that route.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:2057",
-        "framework/tests/tests/machines.rs:2063"
+        "framework/tests/tests/machines.rs:2058",
+        "framework/tests/tests/machines.rs:2064"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3286,11 +3285,11 @@
     },
     {
       "id": "framework/p0/start-stop/managed-tools",
-      "assertion": "Launch each managed built-in beside the person's existing Facade MCP entry and verify the run gets Facade's tools without the retired skill.",
+      "assertion": "Launch each managed built-in beside the person's existing Facade Code Framework MCP entry and verify the run gets Facade Code Framework's tools without the retired skill.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/integrations.rs:52",
-        "framework/crates/rules/src/compose/tools_tests.rs:409"
+        "framework/crates/rules/src/compose/tools_tests.rs:412"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3409,7 +3408,7 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/mcp.rs:1404",
-        "framework/tests/tests/upgrade.rs:2365"
+        "framework/tests/tests/upgrade.rs:2372"
       ]
     },
     {
@@ -3506,7 +3505,7 @@
         "framework/tests/tests/cli.rs",
         "framework/tests/tests/help.rs:25",
         "framework/tests/tests/machines.rs",
-        "framework/tests/tests/upgrade.rs:1693"
+        "framework/tests/tests/upgrade.rs:1700"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3532,7 +3531,7 @@
       "assertion": "Read the changed peer name from the roster under the original machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/machines.rs:3026"
+        "framework/tests/tests/machines.rs:3029"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3653,11 +3652,11 @@
       "assertion": "Observe the exact input bytes and the requested Enter behavior at the target.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/input.rs:296",
+        "framework/tests/tests/input.rs:297",
         "framework/tests/tests/configuration.rs:415",
         "framework/tests/tests/guests.rs",
         "framework/tests/tests/help.rs:20",
-        "framework/tests/tests/input.rs:303"
+        "framework/tests/tests/input.rs:304"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3670,8 +3669,8 @@
       "assertion": "Select an explicit version through the controlled installer fixture and check that Shell uses and reports the matching asset receipt.",
       "stage": "release",
       "existing_tests": [
-        "framework/tests/tests/upgrade.rs:360",
-        "framework/tests/tests/upgrade.rs:466"
+        "framework/tests/tests/upgrade.rs:363",
+        "framework/tests/tests/upgrade.rs:469"
       ]
     },
     {
@@ -3729,7 +3728,7 @@
     },
     {
       "id": "framework/shell/option/help",
-      "assertion": "Compare root and scoped help output with the expected help pages for both help spellings and check that no Facade services start.",
+      "assertion": "Compare root and scoped help output with the expected help pages for both help spellings and check that no Facade Code Framework services start.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/help.rs:135"
@@ -3742,10 +3741,10 @@
     },
     {
       "id": "framework/shell/option/version",
-      "assertion": "Compare the supported version flag outputs with the build version and verify that no Facade services start.",
+      "assertion": "Compare the supported version flag outputs with the build version and verify that no Facade Code Framework services start.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/cli.rs:690"
+        "framework/tests/tests/cli.rs:693"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -3784,7 +3783,7 @@
     },
     {
       "id": "framework/shell/process/hook.approve",
-      "assertion": "Check the approval hook emits approval for Facade's own recognized tools and leaves unrelated tool requests undecided.",
+      "assertion": "Check the approval hook emits approval for Facade Code Framework's own recognized tools and leaves unrelated tool requests undecided.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/mcp.rs:1360"
@@ -3816,7 +3815,7 @@
       "existing_tests": [
         "framework/tests/tests/hooks.rs:57",
         "framework/tests/tests/resume.rs:330",
-        "framework/crates/rules/src/compose/tools_tests.rs:433"
+        "framework/crates/rules/src/compose/tools_tests.rs:436"
       ],
       "test": {
         "runner": "framework-scenario",

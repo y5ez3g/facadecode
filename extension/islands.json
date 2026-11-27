@@ -3,7 +3,7 @@
 	"migration": ["base/ptydRegistry.ts", "host/implementation.ts", "host/legacyCutover.ts", "host/legacyPins.ts", "host/migration/supervisor.ts", "host/pins.ts"],
 	"shared": ["base/async.ts", "base/connect.ts", "base/errors.ts", "base/files.ts", "base/json.ts", "base/jsonc.ts", "base/lifecycle.ts", "base/lines.ts", "base/lock.ts", "base/names.ts", "base/ownership.ts", "base/robot.ts", "base/system.ts", "base/tabSpinner.ts", "core/errors.ts", "core/names.ts", "core/ports.ts", "record/paths.ts", "ui/catalog.ts", "ui/pickers/search.ts", "ui/pickers/stepping.ts", "ui/presentation.ts"],
 	"islands": {
-		"Framework connection": {
+		"Facade Code Framework connection": {
 			"Connection and reconnect": ["host/framework/connection.ts", "host/framework/daemonTypes.ts", "host/framework/rpc.ts"],
 			"Typed queries and subscriptions": ["base/frameworkProtocol.ts", "host/framework/types.ts"]
 		},
@@ -24,7 +24,7 @@
 		"Panel and pickers": {
 			"Card model and filtering": ["core/status.ts", "ui/cardView.ts", "ui/model.ts", "ui/order.ts", "ui/pickers/filter.ts"],
 			"Webview": ["ui/panel.ts", "webview/cardLayout.ts", "webview/dom.ts", "webview/panel.ts", "webview/protocol.ts", "webview/scrollbar.ts", "webview/viewport.ts", "webview/wheel.ts"],
-			"Agent pickers": ["host/framework/settings.ts", "host/human.ts", "host/notify.ts", "ui/commands/agent.ts", "ui/pickers/orchestrator.ts"]
+			"Agent pickers": ["host/framework/settings.ts", "host/human.ts", "host/notify.ts", "ui/commands/agent.ts", "ui/pickers/framework.ts"]
 		},
 		"Local Window Component": {
 			"Window identity": ["base/windowIdentity.ts", "host/home.ts", "host/window.ts", "host/windowComponent.ts", "record/ownership.ts", "record/windowIdentity.ts"],
@@ -167,13 +167,13 @@
 			"Root": ["agentKey"]
 		},
 		"host/framework/agents.ts": {
-			"Root": ["OrchestratorAgents"]
+			"Root": ["FrameworkAgents"]
 		},
 		"host/framework/catalog.ts": {
-			"Root": ["LaunchLocationHistory", "OrchestratorLocations"]
+			"Root": ["LaunchLocationHistory", "FrameworkLocations"]
 		},
 		"host/framework/connection.ts": {
-			"Root": ["connectOrchestrator"]
+			"Root": ["connectFramework"]
 		},
 		"host/framework/daemonTypes.ts": {
 			"Legacy migration": ["FACADE_PROGRAM"],
@@ -197,15 +197,15 @@
 			"Root": ["frameworkSettings", "openFacadeSettings", "openSettingsOf"]
 		},
 		"host/framework/terminals.ts": {
-			"Agent operations": ["OrchestratorTerminals"],
-			"Root": ["OrchestratorTerminals"]
+			"Agent operations": ["FrameworkTerminals"],
+			"Root": ["FrameworkTerminals"]
 		},
 		"host/framework/types.ts": {
-			"Agent operations": ["DaemonError", "OrchestratorLink"],
-			"Connection and reconnect": ["AttachListener", "AttachWatchArgs", "DaemonError", "EditorCalls", "EditorTopic", "OrchestratorLink", "RawInputArgs", "ResizeAttach", "WatchListener"],
-			"Editor tabs": ["OrchestratorLink", "ResizeAttach", "encodeTerminalInput"],
-			"Pin recovery": ["DaemonError", "OrchestratorLink"],
-			"Root": ["DaemonError", "OrchestratorLink"]
+			"Agent operations": ["DaemonError", "FrameworkLink"],
+			"Connection and reconnect": ["AttachListener", "AttachWatchArgs", "DaemonError", "EditorCalls", "EditorTopic", "FrameworkLink", "RawInputArgs", "ResizeAttach", "WatchListener"],
+			"Editor tabs": ["FrameworkLink", "ResizeAttach", "encodeTerminalInput"],
+			"Pin recovery": ["DaemonError", "FrameworkLink"],
+			"Root": ["DaemonError", "FrameworkLink"]
 		},
 		"host/framework/workspace.ts": {
 			"Agent operations": ["FrameworkWorkspace", "WorkspacePinFailure"],
@@ -313,7 +313,7 @@
 		"ui/pickers/newAgent.ts": {
 			"Agent pickers": ["LaunchPickerDeps", "LaunchStart", "newAgent"]
 		},
-		"ui/pickers/orchestrator.ts": {
+		"ui/pickers/framework.ts": {
 			"Root": ["FrameworkPickerDeps", "createFrameworkPickers"]
 		},
 		"ui/pickers/search.ts": {

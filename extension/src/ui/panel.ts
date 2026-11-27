@@ -239,7 +239,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const what = message.what as Act;
 		const target = message.target as string | undefined;
 		try {
-			if (what === 'open' && this.model.usesOrchestrator()) {
+			if (what === 'open' && this.model.usesFramework()) {
 				const facts = target === undefined ? undefined : this.model.select(target);
 				reason = !facts ? 'gone' : isAgentRunning(facts) ? await this.actions(what, target) : undefined;
 			} else {
@@ -328,8 +328,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const strings: Strings = {
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
-			continueSession: this.model.usesOrchestrator() ? vscode.l10n.t("Resume Agent") : vscode.l10n.t("Continue Session"),
-			clearFilter: this.model.usesOrchestrator() ? vscode.l10n.t("Clear Filters") : vscode.l10n.t("Clear Filter"),
+			continueSession: this.model.usesFramework() ? vscode.l10n.t("Resume Agent") : vscode.l10n.t("Continue Session"),
+			clearFilter: this.model.usesFramework() ? vscode.l10n.t("Clear Filters") : vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Start an agent in this workspace."),
 			// {0} is the location or folder the filter shows

@@ -27,7 +27,7 @@ export interface DetailField {
 	readonly value: string;
 }
 
-/** What a location is, which its icon says as Facade's location pickers have it: a main checkout, a worktree, or a folder (PANEL-1.5). */
+/** What a location is, which its icon says as Facade Code Extension's location pickers have it: a main checkout, a worktree, or a folder (PANEL-1.5). */
 export type PlaceKind = 'repo' | 'worktree' | 'folder';
 
 /**
@@ -40,13 +40,13 @@ export interface CardDetails {
 	/** The first row's localized `Title: ` label, which a screen reader hears before it, title or not (PANEL-1.5). */
 	readonly titleLabel: string;
 	/**
-	 * What the first row says where there is no title: `No title yet` while its CLI has not saved one, `Title unavailable` where Facade
+	 * What the first row says where there is no title: `No title yet` while its CLI has not saved one, `Title unavailable` where Facade Code Extension
 	 * has no history reader for its CLI - a custom CLI - so none can come (PANEL-1.5, CLIS-2.4).
 	 */
 	readonly untitled?: string;
 	/** The agent that started it, where an agent did: `name #aN`. */
 	readonly startedBy?: string;
-	/** The Framework name row's accessible label. */
+	/** The Facade Code Framework name row's accessible label. */
 	readonly nameLabel?: string;
 	readonly machine?: DetailField;
 	readonly address?: DetailField;
@@ -83,7 +83,7 @@ export interface Card {
 	readonly stateText: string;
 	/** The second line (PANEL-1.4). */
 	readonly line: string;
-	/** The CLI in words and the terminal action's availability for an Orchestrator card (PANEL-4). */
+	/** The CLI in words and the terminal action's availability for a Facade Code Framework card (PANEL-4). */
 	readonly orchestrator?: { readonly cli: string; readonly running: boolean };
 	/** Its details, its location among them: no card shows its location (PANEL-1.3, 1.5). */
 	readonly details: CardDetails;
@@ -103,7 +103,7 @@ export interface PanelFilter {
 	readonly label: string;
 }
 
-/** Exact working directory for a Framework card outside the window's location catalog. */
+/** Exact working directory for a Facade Code Framework card outside the window's location catalog. */
 export interface DirectoryFilter {
 	readonly kind: 'directory';
 	readonly machineId: string;

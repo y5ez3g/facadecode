@@ -292,7 +292,7 @@ suite('Base: files', () => {
 		});
 	});
 
-	/** Makes another program write `file` as Facade writes its new one, `times` times, each time to a size it did not have. */
+	/** Makes another program write `file` as Facade Code Extension writes its new one, `times` times, each time to a size it did not have. */
 	function writtenMeanwhile(file: string, times: number): () => void {
 		let count = 0;
 		return replaceFsFunction('writeFileSync', original => (target, data, options) => {
@@ -304,7 +304,7 @@ suite('Base: files', () => {
 		});
 	}
 
-	test('a JSON file another program writes too is read again when it wrote the file meanwhile, so that what it wrote is kept; one that goes on changing throws, and Facade writes nothing', () => {
+	test('a JSON file another program writes too is read again when it wrote the file meanwhile, so that what it wrote is kept; one that goes on changing throws, and Facade Code Extension writes nothing', () => {
 		const file = path.join(temp.dir, 'settings.json');
 		fs.writeFileSync(file, '{"theirs": 1}\n');
 		const ours = (read: JsonFile) => read.kind === 'object' ? { outcome: 'written', write: { ...read.value, ours: true } } : { outcome: read.kind };

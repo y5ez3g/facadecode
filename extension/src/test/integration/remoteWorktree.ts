@@ -15,7 +15,7 @@ const SCENARIO = 'a_remote_worktree_is_shared_by_the_shell_and_editor';
 const EDITOR_EVIDENCE = 'remote editor evidence ';
 const EDITOR_STAGE = path.resolve(__dirname, '../../..', 'extension-it');
 
-/** Run the Framework fixture, which keeps its SSH route and Shell Attach clients alive while the editor opens. */
+/** Run the Facade Code Framework fixture, which keeps its SSH route and Shell Attach clients alive while the editor opens. */
 export function runRemoteWorktree(home: string, executable: string): 'framework' {
 	assert.deepStrictEqual([process.platform, process.arch], ['linux', 'x64']);
 	const framework = path.resolve(__dirname, '../../../../..', 'framework');
@@ -49,14 +49,14 @@ export function runRemoteWorktree(home: string, executable: string): 'framework'
 	assert.strictEqual(summaries.length, 1);
 	assert.match(summaries[0], /^test result: ok\. 1 passed; 0 failed; 0 ignored;/u);
 	const observations = lines.filter(line => line.startsWith(EDITOR_EVIDENCE));
-	assert.strictEqual(observations.length, 1, 'one real editor observed the Framework fixture');
+	assert.strictEqual(observations.length, 1, 'one real editor observed the Facade Code Framework fixture');
 	const observed = JSON.parse(observations[0].slice(EDITOR_EVIDENCE.length)) as { implementation: 'framework'; viewers: number[] };
 	assert.strictEqual(observed.implementation, 'framework');
 	assert.deepStrictEqual(observed.viewers, [2, 3, 2]);
 	return observed.implementation;
 }
 
-/** Called inside the Framework fixture's own home and display. The remote agent remains owned by that fixture. */
+/** Called inside the Facade Code Framework fixture's own home and display. The remote agent remains owned by that fixture. */
 async function observeWorktree(args: readonly string[]): Promise<void> {
 	assert.strictEqual(args.length, 6);
 	const [folder, home, origin, address, expectedJson, marker] = args;

@@ -24,7 +24,7 @@ export interface AgentTerminal {
 	/** Its turn over: where its tab `opened`, its mark goes on now, in front as it is, nothing given back (LIFECYCLE-3.4, 3.5). */
 	markOpened(opened: boolean): Promise<void>;
 	reveal(preserveFocus: boolean): boolean;
-	/** Whether its tab is open now: a terminal, not one Facade is hiding. A pinned agent's before its turn, or a hidden card's, has none. */
+	/** Whether its tab is open now: a terminal, not one Facade Code Extension is hiding. A pinned agent's before its turn, or a hidden card's, has none. */
 	isOpen(): boolean;
 	/** Closes its tab, the run and its pseudoterminal going on: opened again, it draws the run's screen (LIFECYCLE-2.2). */
 	hide(): boolean;
@@ -50,13 +50,13 @@ interface TerminalEntry {
 	applyingPin?: boolean;
 	/** A restored terminal opens behind the editor it covered - a terminal no agent's with its terminal; this is not a human activation. */
 	background?: { readonly since: number; readonly covered?: vscode.Tab; readonly coveredTerminal?: vscode.Terminal };
-	/** Its tab is closing as Facade hid it: no close of the person's (LIFECYCLE-2.2). */
+	/** Its tab is closing as Facade Code Extension hid it: no close of the person's (LIFECYCLE-2.2). */
 	hiding?: boolean;
-	/** Facade's Pin of its agent, which a group's one unpinned agent tab counts - its mark following (LIFECYCLE-2.2, 3.4). */
+	/** Facade Code Extension's Pin of its agent, which a group's one unpinned agent tab counts - its mark following (LIFECYCLE-2.2, 3.4). */
 	pinned?: boolean;
 	/** The group its tab is to open in; none, the active one. */
 	openIn?: number;
-	/** When Facade's Pin of its agent last changed, by this host's clock: a mark changed on its unknown tab after it wins (LIFECYCLE-3.4). */
+	/** When Facade Code Extension's Pin of its agent last changed, by this host's clock: a mark changed on its unknown tab after it wins (LIFECYCLE-3.4). */
 	pinnedAt?: number;
 	/** The group its tab was last told to be in (LIFECYCLE-3.5). */
 	placedColumn?: number;
@@ -85,14 +85,14 @@ interface TerminalOptions {
 	readonly placed?: (run: RunId, column: number | undefined) => void;
 }
 
-/** A group's front as Facade brings it back: its tab, and the terminal it shows where that is a terminal no agent's (LIFECYCLE-3.4). */
+/** A group's front as Facade Code Extension brings it back: its tab, and the terminal it shows where that is a terminal no agent's (LIFECYCLE-3.4). */
 interface Front {
 	readonly tab: vscode.Tab;
 	readonly terminal?: vscode.Terminal;
 }
 
 /**
- * What Facade expects in front of the active group from an action of its own, until when: a change to it is Facade's, whenever the
+ * What Facade Code Extension expects in front of the active group from an action of its own, until when: a change to it is Facade Code Extension's, whenever the
  * editor tells it within that; any other change is the person's (LIFECYCLE-3.4, 3.5).
  */
 interface Expected {
@@ -103,16 +103,16 @@ interface Expected {
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
 const TOGETHER_MS = 250;
-/** A terminal created by Facade may be correlated with an opening tab for this long. */
+/** A terminal created by Facade Code Extension may be correlated with an opening tab for this long. */
 const OPENING_MS = 2_000;
 /** The editor's commands that focus its first to eighth group, by view column: a group made the active one (LIFECYCLE-2.2, 3.4). */
 const GROUP_FOCUS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth'].map(nth => `workbench.action.focus${nth}EditorGroup`);
 /** The editor's commands that focus the group after and before the active one: a group past the eighth is reached step by step. */
 const FOCUS_NEXT_GROUP = 'workbench.action.focusNextGroup';
 const FOCUS_PREVIOUS_GROUP = 'workbench.action.focusPreviousGroup';
-/** How long what Facade expects in front from an action of its own is waited for: a change to it within this is Facade's (LIFECYCLE-3.4, 3.5). */
+/** How long what Facade Code Extension expects in front from an action of its own is waited for: a change to it within this is Facade Code Extension's (LIFECYCLE-3.4, 3.5). */
 const EXPECT_MS = 3_000;
-/** How long after an opening tab is known its front still counts as Facade's: the editor tells of it in more than one event. */
+/** How long after an opening tab is known its front still counts as Facade Code Extension's: the editor tells of it in more than one event. */
 const OPENED_MS = 500;
 /** How long after the person showed an agent's tab a mark goes on where that tab comes to the front, never by borrowing the focus. */
 const SHOWN_MARK_MS = 3_000;
@@ -134,7 +134,7 @@ export class AgentTerminals implements vscode.Disposable {
 	/** Until this window's runs are reattached, the marks of the queue wait: each would take the front tab a mark goes on (finishRestore). */
 	private restoring = true;
 	private restoringTimer: ReturnType<typeof setTimeout> | undefined;
-	/** A mark's command is under way: a mark changing meanwhile is Facade's, never taken for the person's. */
+	/** A mark's command is under way: a mark changing meanwhile is Facade Code Extension's, never taken for the person's. */
 	private markingCommand = false;
 	/** Tabs not known yet whose mark a mark's command changed: undone once known, never taken for the person's. */
 	private readonly wrongMarks = new WeakSet<vscode.Tab>();
@@ -142,7 +142,7 @@ export class AgentTerminals implements vscode.Disposable {
 	private readonly markFailures = new Map<TerminalEntry, number>();
 	/** The last pinned tab a reload or a restart opened in its turn: the panel's selection goes to it once their tabs are open (turnsOver). */
 	private lastTurn: TerminalEntry | undefined;
-	/** What Facade's own actions are to bring to the front, and how many marks hold a tab in front now (LIFECYCLE-3.4). */
+	/** What Facade Code Extension's own actions are to bring to the front, and how many marks hold a tab in front now (LIFECYCLE-3.4). */
 	private expected: Expected[] = [];
 	private borrowing = 0;
 	/** This window's terminals are gone: no mark goes on, and one under way does nothing more. */
@@ -159,7 +159,7 @@ export class AgentTerminals implements vscode.Disposable {
 	private readonly copyTabs = new Map<vscode.Terminal, vscode.Tab>();
 	/** Terminal tabs no agent's that opened lately: where a copy's tab became active with no terminal, the one that opened with it. */
 	private strayOpened: { readonly tab: vscode.Tab; readonly at: number }[] = [];
-	/** Terminal tabs Facade cannot tell: the mark each showed last, and when it changed - a person's pin or unpin there (LIFECYCLE-3.4). */
+	/** Terminal tabs Facade Code Extension cannot tell: the mark each showed last, and when it changed - a person's pin or unpin there (LIFECYCLE-3.4). */
 	private readonly strayMarks = new WeakMap<vscode.Tab, { readonly pinned: boolean; readonly changedAt?: number }>();
 	private activationOrder = 0;
 	private terminalActivation?: { readonly at: number; readonly order: number };
@@ -245,7 +245,7 @@ export class AgentTerminals implements vscode.Disposable {
 		return [...this.entries.values()].some(pair => pair.turn);
 	}
 
-	/** Facade's Pin of `run` changed: its tab's mark follows at once, in front or not (LIFECYCLE-3.4). */
+	/** Facade Code Extension's Pin of `run` changed: its tab's mark follows at once, in front or not (LIFECYCLE-3.4). */
 	pin(run: RunId, pinned: boolean): void {
 		const pair = this.entries.get(run);
 		if (pair) {
@@ -261,7 +261,7 @@ export class AgentTerminals implements vscode.Disposable {
 	/**
 	 * Puts `pair`'s tab's mark where its Pin wants it though the tab is behind the person's work, by making it its group's front tab,
 	 * pinning or unpinning it there and bringing back what was in front, one tab at a time: the editor's pin acts on the active group's
-	 * front tab alone. No tab of Facade's opens meanwhile, as one would take the front.
+	 * front tab alone. No tab of Facade Code Extension's opens meanwhile, as one would take the front.
 	 */
 	private markNow(pair: TerminalEntry): void {
 		if (!this.marks.includes(pair)) {
@@ -281,7 +281,7 @@ export class AgentTerminals implements vscode.Disposable {
 		});
 	}
 
-	/** Once no tab of Facade's is opening, for ten seconds at most: one opening would take the front tab a mark goes on. */
+	/** Once no tab of Facade Code Extension's is opening, for ten seconds at most: one opening would take the front tab a mark goes on. */
 	private async quiet(): Promise<void> {
 		const end = Date.now() + 10_000;
 		for (;;) {
@@ -344,7 +344,7 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/**
 	 * Puts `pair`'s tab's mark where its Pin wants it (LIFECYCLE-3.4). In front of the active group the editor marks it as it is,
-	 * nothing of the person's taken. Else Facade brings it to the front - its group made the active one, step by step past the
+	 * nothing of the person's taken. Else Facade Code Extension brings it to the front - its group made the active one, step by step past the
 	 * eighth - the person's keys reaching its terminal meanwhile not its CLI's, marks it, and gives back its group's front, the person's
 	 * group with the focus and its front, and the focus to the panel where its card asked. The person bringing something else to the
 	 * front meanwhile keeps theirs: nothing is given back over it. A reload's or a restart's pinned tab just `opened` in its turn, in front
@@ -386,7 +386,7 @@ export class AgentTerminals implements vscode.Disposable {
 		const elsewhere = column !== groups.activeTabGroup.viewColumn;
 		const ownFront = elsewhere && !opened && pair.tab.group ? this.frontOf(pair.tab.group) : undefined;
 		const moves = this.personMoves;
-		// The person's keys reaching any agent's terminal while Facade holds the focus are not its CLI's (LIFECYCLE-2.2, 3.4)
+		// The person's keys reaching any agent's terminal while Facade Code Extension holds the focus are not its CLI's (LIFECYCLE-2.2, 3.4)
 		this.borrow(true);
 		// Shown in its group, which the editor may make the active one
 		const shown = this.expect(column, tab => this.isPairTab(tab, pair));
@@ -488,7 +488,7 @@ export class AgentTerminals implements vscode.Disposable {
 		this.options.log(`${pair.run}'s tab ${why}; its mark waits for its next showing`);
 	}
 
-	/** Facade holds the focus for a mark, or no longer: while it does, the person's keys reach no agent's CLI (LIFECYCLE-2.2, 3.4). */
+	/** Facade Code Extension holds the focus for a mark, or no longer: while it does, the person's keys reach no agent's CLI (LIFECYCLE-2.2, 3.4). */
 	private borrow(on: boolean): void {
 		this.borrowing = Math.max(0, this.borrowing + (on ? 1 : -1));
 		for (const pair of this.entries.values()) {
@@ -502,7 +502,7 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * Whether `pair`'s tab is the active group's front, as the editor has it now. A terminal tab Facade does not know is its tab only
+	 * Whether `pair`'s tab is the active group's front, as the editor has it now. A terminal tab Facade Code Extension does not know is its tab only
 	 * where its own is gone - the editor rebuilt its tabs as new objects - and its terminal is the active one; never while its own is
 	 * there, as the editor sets the active terminal before it shows that terminal's tab (LIFECYCLE-2.2).
 	 */
@@ -524,7 +524,7 @@ export class AgentTerminals implements vscode.Disposable {
 		return true;
 	}
 
-	/** `group`'s front as Facade can bring it back: a terminal no agent's with its terminal, which the active group's is. */
+	/** `group`'s front as Facade Code Extension can bring it back: a terminal no agent's with its terminal, which the active group's is. */
 	private frontOf(group: vscode.TabGroup): Front | undefined {
 		const tab = group.activeTab;
 		if (!tab) {
@@ -578,7 +578,7 @@ export class AgentTerminals implements vscode.Disposable {
 	/**
 	 * Makes `column`'s group the active one with the focus, as the editor's focus commands do: the first to eighth by their own, one
 	 * past them from the eighth by the next group's, each step checked - no command where no such group is, as one would make it
-	 * (LIFECYCLE-2.2, 3.4). Facade's own unless the person's `own` says otherwise; whether that group is the active one after.
+	 * (LIFECYCLE-2.2, 3.4). Facade Code Extension's own unless the person's `own` says otherwise; whether that group is the active one after.
 	 */
 	private async focusColumn(column: number, own = true, stepping = true): Promise<boolean> {
 		if (this.disposed) {
@@ -592,12 +592,12 @@ export class AgentTerminals implements vscode.Disposable {
 		if (!columns.includes(column)) {
 			return false;
 		}
-		/** One command, Facade's wherever it lands; whether it landed on `landing`, the group it was meant to reach. */
+		/** One command, Facade Code Extension's wherever it lands; whether it landed on `landing`, the group it was meant to reach. */
 		const step = async (command: string, landing: number) => {
 			if (this.disposed) {
 				return false;
 			}
-			// What the group it is to land on shows in front is Facade's while the step goes on; a change to any other group is the person's,
+			// What the group it is to land on shows in front is Facade Code Extension's while the step goes on; a change to any other group is the person's,
 			// in doubt theirs, and nothing is given back over it
 			const withdraw = own ? [this.expect(landing, () => true)] : [];
 			const from = at();
@@ -718,7 +718,7 @@ export class AgentTerminals implements vscode.Disposable {
 				shown = false;
 			}
 			let back = shown && await this.settle(inFront, 500);
-			// One the command opened instead of it, of the same resource but another kind, is Facade's mistake: closed again - only a tab that
+			// One the command opened instead of it, of the same resource but another kind, is Facade Code Extension's mistake: closed again - only a tab that
 			// was not there before, where the editor gave no others new objects meanwhile, and never one with unsaved changes
 			const group = groupOf();
 			const wanted = resourcesOf(input);
@@ -747,8 +747,8 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * What Facade's own next step is to bring to the front of `column`'s group - any group's where none is said - should that be or become
-	 * the active one: a change to it is Facade's while that step goes on. Expectations add up, each withdrawn as its action ends, three
+	 * What Facade Code Extension's own next step is to bring to the front of `column`'s group - any group's where none is said - should that be or become
+	 * the active one: a change to it is Facade Code Extension's while that step goes on. Expectations add up, each withdrawn as its action ends, three
 	 * seconds at most.
 	 */
 	private expect(column: number | undefined, matches: (tab: vscode.Tab | undefined) => boolean): () => void {
@@ -760,7 +760,7 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * Whether `tab` in front of `column`'s group, the active one, is what one of Facade's own actions under way brings there. Each
+	 * Whether `tab` in front of `column`'s group, the active one, is what one of Facade Code Extension's own actions under way brings there. Each
 	 * expectation stands until its action ends, as the editor tells one change of the front in more than one event - the group first,
 	 * its front tab after - and the person's bringing the same tab to the front after it is theirs.
 	 */
@@ -771,8 +771,8 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * What is in front changed: the person's doing where Facade did nothing a moment before - a newer choice of theirs, which no front
-	 * Facade would bring back overrides (LIFECYCLE-3.4).
+	 * What is in front changed: the person's doing where Facade Code Extension did nothing a moment before - a newer choice of theirs, which no front
+	 * Facade Code Extension would bring back overrides (LIFECYCLE-3.4).
 	 */
 	private noteFront(): void {
 		const group = vscode.window.tabGroups.activeTabGroup;
@@ -798,7 +798,7 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 	}
 
-	/** Closes `pair`'s tab as Facade hides it: no close of the person's, its agent going on (LIFECYCLE-2.2). */
+	/** Closes `pair`'s tab as Facade Code Extension hides it: no close of the person's, its agent going on (LIFECYCLE-2.2). */
 	private hidePair(pair: TerminalEntry): boolean {
 		const terminal = pair.terminal;
 		if (this.entries.get(pair.run) !== pair || !terminal) {
@@ -818,7 +818,7 @@ export class AgentTerminals implements vscode.Disposable {
 		if (pair.tab.isPinned === pair.wantedPin) {
 			pair.observedPin = pair.tab.isPinned; pair.wantedPin = undefined; return;
 		}
-		// Through the marks' queue, front tab or not, as no tab of Facade's opens: one opening would take the front tab the
+		// Through the marks' queue, front tab or not, as no tab of Facade Code Extension's opens: one opening would take the front tab the
 		// editor pins, as a reload's do one after another
 		this.markNow(pair);
 	}
@@ -956,7 +956,7 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * A terminal the editor opened that Facade did not: a copy of an agent's tab where it has neither a shell nor a pseudoterminal of
+	 * A terminal the editor opened that Facade Code Extension did not: a copy of an agent's tab where it has neither a shell nor a pseudoterminal of
 	 * its own and the name an agent's tab was opened under - a person's own shell never is (LIFECYCLE-2.2).
 	 */
 	private maybeCopy(terminal: vscode.Terminal): void {
@@ -1060,7 +1060,7 @@ export class AgentTerminals implements vscode.Disposable {
 	/**
 	 * A pinned sequence's tabs are open: a recreated local registry may retire its predecessor's UI resources for the runs registered by now,
 	 * once, and releases each hidden run's old tab - at the activation's end and after each later restoration (ARCHITECTURE-2.2).
-	 * The Orchestrator can also supply confirmed run keys whose tabs this host has not recreated.
+	 * Facade Code Framework can also supply confirmed run keys whose tabs this host has not recreated.
 	 */
 	async retirePredecessor(knownRuns: readonly RunId[] = []): Promise<void> {
 		const owner = this.options.terminalOwner;
@@ -1082,7 +1082,7 @@ export class AgentTerminals implements vscode.Disposable {
 		const coveredTerminal = covered && this.frontOf(vscode.window.tabGroups.activeTabGroup)?.terminal;
 		pair.background = reveal ? undefined : { since: Date.now(), ...covered ? { covered } : {}, ...coveredTerminal ? { coveredTerminal } : {} };
 		if (!reveal) {
-			// Its tab, opening in front of its group, is Facade's doing there, the active group or not, until it is known
+			// Its tab, opening in front of its group, is Facade Code Extension's doing there, the active group or not, until it is known
 			const column = this.columnFor(pair);
 			const withdraw = this.expect(column === vscode.ViewColumn.Active ? vscode.window.tabGroups.activeTabGroup.viewColumn : column,
 				tab => !!tab && tab.input instanceof vscode.TabInputTerminal && (!this.pairOfTab(tab) || this.pairOfTab(tab) === pair));
@@ -1190,11 +1190,11 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * Tabs opened, closed or changed (LIFECYCLE-2.2). A terminal tab that opens is the tab of the one terminal Facade created and
+	 * Tabs opened, closed or changed (LIFECYCLE-2.2). A terminal tab that opens is the tab of the one terminal Facade Code Extension created and
 	 * is waiting for one, where exactly one tab and one terminal are; any other number is ambiguous, and nothing is matched.
 	 */
 	private tabsChanged(event: vscode.TabChangeEvent): void {
-		// What the editor shows in front now, seen before anything Facade does about it changes it again
+		// What the editor shows in front now, seen before anything Facade Code Extension does about it changes it again
 		this.noteFront();
 		const now = Date.now();
 		this.opening = this.opening.filter(each => now - each.at <= OPENING_MS && this.entries.get(each.pair.run) === each.pair);
@@ -1233,11 +1233,11 @@ export class AgentTerminals implements vscode.Disposable {
 		// What opened that is no agent's tab: a copy's among them (LIFECYCLE-2.2)
 		this.strayOpened = [...this.strayOpened.filter(each => now - each.at <= 3 * COPIES_MS),
 			...opened.filter(tab => !this.pairOfTab(tab)).map(tab => ({ tab, at: now }))];
-		// A mark changed on a tab Facade cannot tell is the person's: kept with that tab until it is known (LIFECYCLE-3.4)
+		// A mark changed on a tab Facade Code Extension cannot tell is the person's: kept with that tab until it is known (LIFECYCLE-3.4)
 		for (const tab of [...event.opened, ...event.changed]) {
 			if (tab.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab)) {
 				const before = this.strayMarks.get(tab);
-				// One a mark's command changed is Facade's mistake, undone once the tab is known
+				// One a mark's command changed is Facade Code Extension's mistake, undone once the tab is known
 				if (this.markingCommand && before !== undefined && before.pinned !== tab.isPinned) {
 					this.wrongMarks.add(tab);
 				}
@@ -1420,10 +1420,10 @@ export class AgentTerminals implements vscode.Disposable {
 		if (placedBefore !== tab.group?.viewColumn) {
 			this.place(pair, tab.group?.viewColumn);
 		}
-		// A mark the person changed while the tab was unknown wins where that change came after Facade's last Pin or Unpin of the agent,
-		// however many changes there were - two that ended on the mark it showed before included; else Facade's Pin stands, its mark to
+		// A mark the person changed while the tab was unknown wins where that change came after Facade Code Extension's last Pin or Unpin of the agent,
+		// however many changes there were - two that ended on the mark it showed before included; else Facade Code Extension's Pin stands, its mark to
 		// follow (LIFECYCLE-3.4)
-		// A mark Facade put on this tab by mistake, before it knew it, is undone - never taken for the person's
+		// A mark Facade Code Extension put on this tab by mistake, before it knew it, is undone - never taken for the person's
 		if (this.wrongMarks.has(tab)) {
 			this.wrongMarks.delete(tab);
 			this.strayMarks.delete(tab);

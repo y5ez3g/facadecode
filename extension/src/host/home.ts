@@ -2,8 +2,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The Facade home this window uses (ARCHITECTURE-3.1): Facade: Home where the person set it, else the FACADE_HOME environment
-// variable, else ~/.facade. It is decided once, as the window starts, and a change takes a reload, which Facade offers.
+// The Facade home this window uses (ARCHITECTURE-3.1): Facade Code Extension: Home where the person set it, else the FACADE_HOME environment
+// variable, else ~/.facade. It is decided once, as the window starts, and a change takes a reload, which Facade Code Extension offers.
 
 import * as fs from 'fs';
 import * as os from 'os';
@@ -30,7 +30,7 @@ export function homePathOf(value: string, userHome: string = os.homedir(), platf
 }
 
 /**
- * What the person set as Facade: Home, in their user settings or the remote machine's (ARCHITECTURE-3.1): none where they never set it,
+ * What the person set as Facade Code Extension: Home, in their user settings or the remote machine's (ARCHITECTURE-3.1): none where they never set it,
  * left it blank or null, whatever its default shows. A value of another JSON type is set all the same, and no usable path: it is
  * given as its JSON. A workspace cannot set it: the setting is the machine's.
  */
@@ -42,7 +42,7 @@ export function homeSetting(): string | undefined {
 	return typeof set === 'string' ? set : JSON.stringify(set);
 }
 
-/** The folder FACADE_HOME or ~/.facade names, where Facade: Home names none (ARCHITECTURE-3.1). */
+/** The folder FACADE_HOME or ~/.facade names, where Facade Code Extension: Home names none (ARCHITECTURE-3.1). */
 function homeOtherwise(): string {
 	return process.env[FACADE_HOME_VARIABLE] || path.join(os.homedir(), '.facade');
 }
@@ -64,15 +64,15 @@ function reloadOffer(context: vscode.ExtensionContext, reloadText: () => string)
 	};
 }
 
-/** A Facade: Home that is no usable path, as the person typed it: the window starts no agent rather than use another home. */
+/** A Facade Code Extension: Home that is no usable path, as the person typed it: the window starts no agent rather than use another home. */
 export class UnusableHome extends Error {
 	constructor(readonly value: string) {
-		super(`Facade: Home is not a usable folder: ${value}`);
+		super(`Facade Code Extension: Home is not a usable folder: ${value}`);
 	}
 }
 
 /**
- * Decides this window's Facade home before anything reads it (ARCHITECTURE-3.1). A Facade: Home the person set is written to this
+ * Decides this window's Facade home before anything reads it (ARCHITECTURE-3.1). A Facade Code Extension: Home the person set is written to this
  * extension host's FACADE_HOME, which ptyd, the core and every agent it starts inherit; with `terminals`, the window's own terminals are
  * given it as well, so that `facade` typed there reaches the same agents. Never set, FACADE_HOME is left as it is. A value that is no
  * usable path throws `UnusableHome`. With `offerReload`, a later change of the setting offers the reload that uses it.
@@ -81,7 +81,7 @@ export function useFacadeHome(context: vscode.ExtensionContext, options: { reado
 	const set = homeSetting();
 	// Offered before an unusable value stops the window, so that fixing it offers the reload that uses it too
 	if (options.offerReload) {
-		// The folder this window uses: one of FACADE_HOME's is known only while no Facade: Home has replaced it here
+		// The folder this window uses: one of FACADE_HOME's is known only while no Facade Code Extension: Home has replaced it here
 		const inUse = set === undefined ? homeOtherwise() : homePathOf(set);
 		const offer = reloadOffer(context, options.reloadText);
 		context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
@@ -114,16 +114,16 @@ export function useFacadeHome(context: vscode.ExtensionContext, options: { reado
 }
 
 /**
- * Where this computer's local windows write down the Facade: Home they use (ARCHITECTURE-3.1): in the window component's own storage on
+ * Where this computer's local windows write down the Facade Code Extension: Home they use (ARCHITECTURE-3.1): in the window component's own storage on
  * this computer, which VS Code keeps for it whatever window runs it. A remote window's component reads it there, as VS Code gives it
- * only the remote machine's Facade: Home.
+ * only the remote machine's Facade Code Extension: Home.
  */
 export function homeRecordOf(context: vscode.ExtensionContext): string {
 	return path.join(context.globalStorageUri.fsPath, 'home.json');
 }
 
 /**
- * Writes down this computer's Facade: Home as a local window uses it: the folder where one is set and usable; nothing where none is,
+ * Writes down this computer's Facade Code Extension: Home as a local window uses it: the folder where one is set and usable; nothing where none is,
  * so that a remote window's component goes by FACADE_HOME or ~/.facade as the local windows do. An unusable value changes nothing:
  * the local windows start no agent until it is fixed, and remote windows keep the home they have. A record that cannot be written
  * leaves remote windows as they were, and is said in the log.
@@ -203,15 +203,15 @@ export function useRememberedHome(context: vscode.ExtensionContext, reloadText: 
 	}
 }
 
-/** Facade: Home changed: the window keeps the Facade home it started with until it reloads (ARCHITECTURE-3.1). */
+/** Facade Code Extension: Home changed: the window keeps the Facade home it started with until it reloads (ARCHITECTURE-3.1). */
 export function homeReloadText(): string {
 	return vscode.l10n.t("The new Facade home applies only after the window reloads.");
 }
 
 /**
- * Facade: Home is no usable path, so this window starts no agent rather than use another home (ARCHITECTURE-3.1).
+ * Facade Code Extension: Home is no usable path, so this window starts no agent rather than use another home (ARCHITECTURE-3.1).
  * {0} is the value as the person typed it.
  */
 export function unusableHomeText(value: string): string {
-	return vscode.l10n.t("Facade: Home \"{0}\" must start with ~/ or be absolute. No agent can start until it is fixed.", value);
+	return vscode.l10n.t("Facade Code Extension: Home \"{0}\" must start with ~/ or be absolute. No agent can start until it is fixed.", value);
 }

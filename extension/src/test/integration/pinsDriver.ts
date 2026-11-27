@@ -99,7 +99,7 @@ const isAgentLabel = (label: string | undefined, agent: { readonly name: string 
 
 /**
  * The agent tabs that opened since this activation, in turn - as a reload's open, the driver watching from its activation, which
- * comes before Facade's restoration begins - and whether every agent tab that opened before each one showed its mark as it opened.
+ * comes before Facade Code Extension's restoration begins - and whether every agent tab that opened before each one showed its mark as it opened.
  */
 const openings: { readonly label: string; readonly group: number; readonly earlierMarked: boolean }[] = [];
 function watchOpenings(): vscode.Disposable {
@@ -245,7 +245,7 @@ async function act(what: string, run: () => Thenable<unknown>, alias: string, pi
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	// Watched from the first moment, before Facade's restoration opens a tab
+	// Watched from the first moment, before Facade Code Extension's restoration opens a tab
 	context.subscriptions.push(watchOpenings());
 	try {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();

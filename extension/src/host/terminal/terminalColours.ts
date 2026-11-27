@@ -23,7 +23,7 @@ const BY_KIND: Readonly<Record<number, Required<TerminalColours>>> = {
 	[4]: { foreground: '0000/0000/0000', background: 'ffff/ffff/ffff', cursor: '0000/0000/0000' }
 };
 
-/** The Orchestrator takes #rrggbb instead of the OSC reply's variable-width components. */
+/** Facade Code Framework takes #rrggbb instead of the OSC reply's variable-width components. */
 function hex(rgb: string): string {
 	return `#${rgb.split('/').map(part => (part.length === 1 ? part.repeat(2) : part.slice(0, 2))).join('')}`;
 }

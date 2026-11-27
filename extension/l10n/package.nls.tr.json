@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code: Yapay Zeka Kodlama Aracılarını Birlikte Çalıştırın",
 	"description": "Facade Code’a VS Code üzerinden erişin. Makinelerinizde kodlama aracıları başlatın ve terminallerini dosyalarınızın yanında açın.",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "Yeni Aracı...",
 	"command.openTerminal": "Terminali Aç",
 	"command.renameAgent": "Aracıyı Yeniden Adlandır...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "Yukarı Taşı",
 	"command.moveDown": "Aşağı Taşı",
 	"command.revealAgent": "Aracıyı Göster",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Facade Code Pencere Bileşeni",
-	"windowDescription": "Uzak pencere yeniden bağlandığında veya uzantı yeniden başladığında Facade Code’dan kalan terminal sekmelerini kapatır.",
+	"windowDescription": "Uzak pencere yeniden bağlandığında veya uzantı yeniden başladığında Facade Code Extension’dan kalan terminal sekmelerini kapatır.",
 	"command.filter": "Aracıları Filtrele...",
 	"command.showAgentLaunch": "Aracının Komut Satırını Göster...",
 	"command.showAgentsLog": "Aracı Günlüğünü Göster",
@@ -41,6 +41,6 @@
 	"command.continueSession": "Oturumu Sürdür...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Bu pencerenin ayarlar, aracı kayıtları ve eski sürümlerden geçiş için kullandığı Facade klasörü. Buradaki yol, `FACADE_HOME` ve varsayılan `~/.facade` yolundan önceliklidir.\n\n[facade.json içinde düzenle](command:facade.openSettingsFile) bağlantısını kullanarak YOLO’yu, önerilen adları ve CLI’ların başlatılma biçimini değiştirin.",
+	"config.home": "Bu pencerenin ayarlar, aracı kayıtları ve eski sürümlerden geçiş için kullandığı Facade Code Extension klasörü. Buradaki yol, `FACADE_HOME` ve varsayılan `~/.facade` yolundan önceliklidir.\n\n[facade.json içinde düzenle](command:facade.openSettingsFile) bağlantısını kullanarak YOLO’yu, önerilen adları ve CLI’ların başlatılma biçimini değiştirin.",
 	"config.home.pattern": "Yol ~/ ile başlamalı veya mutlak olmalıdır."
 }

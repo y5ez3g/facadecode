@@ -75,7 +75,7 @@ export class PanelPrefs {
 
 	/** A workspace AgentRef survives reopening and distinguishes equal numbers on different machines (RULES-6.1). */
 	keyOf(run: RunFacts): string {
-		const reference = run.orchestrator?.reference;
+		const reference = run.framework?.reference;
 		if (reference) {
 			return `${reference.machine_id}/${reference.agent_id}`;
 		}

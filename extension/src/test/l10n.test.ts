@@ -76,12 +76,12 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			['Terminated by signal {0}', 'Process terminated · {0}'],
 			['Disconnected: exit cause unknown', 'Process lost · reason unknown'],
 			['Could not confirm that it stopped', 'Stop unconfirmed · check process'],
-			['Collaboration off · replace .cmd with CLI in facade.json', 'Facade tools unavailable · replace .cmd with CLI in facade.json'],
-			['Collaboration stopped · end and resume', 'Facade tools disconnected'],
-			['Collaboration off · move or rename {0}', 'Facade tools unavailable · move or rename {0}'],
-			['Collaboration off · {0} unreadable', 'Facade tools unavailable · {0} unreadable'],
-			['Collaboration off · file creation failed', 'Facade tools unavailable · file creation failed'],
-			['Collaboration not connected yet', 'Facade tools not connected yet'],
+			['Collaboration off · replace .cmd with CLI in facade.json', 'Facade Code Framework tools unavailable · replace .cmd with CLI in facade.json'],
+			['Collaboration stopped · end and resume', 'Facade Code Framework tools disconnected'],
+			['Collaboration off · move or rename {0}', 'Facade Code Framework tools unavailable · move or rename {0}'],
+			['Collaboration off · {0} unreadable', 'Facade Code Framework tools unavailable · {0} unreadable'],
+			['Collaboration off · file creation failed', 'Facade Code Framework tools unavailable · file creation failed'],
+			['Collaboration not connected yet', 'Facade Code Framework tools not connected yet'],
 			['Your last input: {0}', 'Last input: {0}'],
 			['Status unavailable · check terminal', 'State unavailable · check terminal'],
 			['No initial status · check terminal', 'No initial state · check terminal'],
@@ -139,7 +139,7 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 		for (const [locale, [line, item]] of Object.entries(checks)) {
 			const texts = textsOf(locale);
 			assert.match(texts.find(each => each.id === typeChange)!.text, line);
-			assert.match(texts.find(each => each.id === '{0}[{1}] is {2}, which Facade sets or decides itself; remove it')!.text, item);
+			assert.match(texts.find(each => each.id === '{0}[{1}] is {2}, which Facade Code Framework sets or decides itself; remove it')!.text, item);
 		}
 	});
 
@@ -157,10 +157,10 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			write('src/test/b.ts', 'import * as vscode from \'vscode\';\nvscode.l10n.t("Only a test says this");\n');
 			write('package.json', { displayName: '%displayName%', contributes: { commands: [{ command: 'x', title: '%command.x%' }] } });
 			write('l10n/bundle.l10n.json', { 'Hello {0}': 'Hello {0}', 'Bye/a farewell': { message: 'Bye', comment: ['a farewell'] } });
-			write('l10n/package.nls.json', { displayName: 'Facade Code', 'command.x': 'Do X' });
+			write('l10n/package.nls.json', { displayName: 'Facade Code Extension', 'command.x': 'Do X' });
 			for (const locale of LOCALES) {
 				write(`l10n/bundle.l10n.${locale}.json`, { 'Hello {0}': `[${locale}] {0}`, 'Bye/a farewell': `[${locale}] bye` });
-				write(`l10n/package.nls.${locale}.json`, { displayName: 'Facade Code', 'command.x': `[${locale}] X` });
+				write(`l10n/package.nls.${locale}.json`, { displayName: 'Facade Code Extension', 'command.x': `[${locale}] X` });
 			}
 		});
 
@@ -235,7 +235,7 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 });
 
 /** Names no language translates (UX-2.4), and the built-in CLIs' product names. */
-const NAMES = ['Facade Code', 'Facade', 'CLI', 'YOLO', 'Claude Code', 'Codex', 'Antigravity', 'Muse Code', 'OpenCode', 'Pi'];
+const NAMES = ['Facade Code Framework', 'Facade Code Extension', 'CLI', 'YOLO', 'Claude Code', 'Codex', 'Antigravity', 'Muse Code', 'OpenCode', 'Pi'];
 
 /**
  * Whether `text` says `name` as a word of its own: `Pi`, never the start of `Pick`. Only Latin letters and digits join a name, as a
@@ -262,7 +262,7 @@ const TERMS: { readonly [locale in typeof LOCALES[number]]: { readonly worktree:
 	'pl': { worktree: /drzew\S* robocz|robocz\S* drzew/i, location: /lokalizac\S* robocz/i, not: /worktree/i }
 };
 
-suite('Localization: the words each language has for Facade\'s things (UX-2.4)', () => {
+suite('Localization: the words each language has for Facade Code Extension\'s things (UX-2.4)', () => {
 
 	test('PANEL-1.5: each label a screen reader says before a card\'s details\' facts, from a `Label: {0}` text, keeps its one value last, after its colon, in every language - so that taking the value away leaves the label', () => {
 		const labels = ['Title: {0}', 'Location: {0}', 'Path: {0}'];
@@ -280,7 +280,7 @@ suite('Localization: the words each language has for Facade\'s things (UX-2.4)',
 		assert.deepStrictEqual(wrong, []);
 	});
 
-	test('Facade Code, Facade, CLI, YOLO and the CLIs\' names stay as they are in every language', () => {
+	test('the product names, CLI, YOLO and the CLIs\' names stay as they are in every language', () => {
 		const wrong = LOCALES.flatMap(locale => textsOf(locale).filter(text => NAMES.some(name => says(text.english, name) && !says(text.text, name)))).map(shown);
 		assert.deepStrictEqual(wrong, []);
 		// A name is a word: Pick and Pipe do not say Pi
@@ -350,7 +350,7 @@ suite('Localization: the words each language has for Facade\'s things (UX-2.4)',
 		for (const locale of LOCALES) {
 			const bundle = bundleOf(locale);
 			for (const key of ['This machine', 'Machine']) {
-				assert.strictEqual(textOf(bundle[key]).includes('Facade'), namesFacade.has(locale), `${locale}: ${key}`);
+				assert.strictEqual(textOf(bundle[key]).includes('Facade Code Framework'), namesFacade.has(locale), `${locale}: ${key}`);
 			}
 			assert.match(textOf(bundle['Needs SSH login']), /\bSSH\b/, locale);
 		}

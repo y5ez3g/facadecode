@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// A workspace extension beside Facade Code exercises real close and reload (RULES-4.1, LIFECYCLE-3.5).
+// A workspace extension beside Facade Code Extension exercises real close and reload (RULES-4.1, LIFECYCLE-3.5).
 // The runner keeps this workspace's profile and starts the next window when this one deactivates.
 
 import * as assert from 'assert';
@@ -226,9 +226,9 @@ export async function activate(): Promise<void> {
 			await checkLive(began.agent);
 			write({ phase: 'reopened', detail: began.agent });
 			const before = await servicePids();
-			assert.ok(before && Number.isSafeInteger(before.daemon) && before.daemon > 1, 'Facade runs with this window');
+			assert.ok(before && Number.isSafeInteger(before.daemon) && before.daemon > 1, 'Facade Code Extension runs with this window');
 			process.kill(before.daemon, 'SIGKILL');
-			// Until the keeper starts the replacement, no Facade responds
+			// Until the keeper starts the replacement, no Facade Code Extension responds
 			const replacement = await until('the replacement daemon', async () => {
 				const next = await servicePids();
 				return next && next.daemon !== before.daemon ? next : undefined;

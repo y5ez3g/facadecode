@@ -82,7 +82,7 @@ export function readLegacyPins(file: string | undefined): LegacyPinInput | undef
 		throw error;
 	}
 	if (!isJsonObject(value)) {
-		throw new Error(`Invalid Facade workspace state: ${file}`);
+		throw new Error(`Invalid Facade Code Extension workspace state: ${file}`);
 	}
 	const saved = value['facade.pins'];
 	if (!Array.isArray(saved)) {

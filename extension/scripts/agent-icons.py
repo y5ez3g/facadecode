@@ -129,7 +129,7 @@ font.setupCharacterMap({0xe001 + i: glyph(icon) for i, icon in enumerate(ICONS)}
 font.setupGlyf(GLYPHS)
 font.setupHorizontalMetrics({name: (1024, getattr(glyph, "xMin", 0)) for name, glyph in GLYPHS.items()})
 font.setupHorizontalHeader(ascent=896, descent=-128)
-font.setupNameTable({"familyName": "Facade Agent Icons", "styleName": "Regular", "uniqueFontIdentifier": "FacadeAgentIcons-1", "fullName": "Facade Agent Icons", "psName": "FacadeAgentIcons"})
+font.setupNameTable({"familyName": "Facade Code Extension Agent Icons", "styleName": "Regular", "uniqueFontIdentifier": "FacadeAgentIcons-1", "fullName": "Facade Code Extension Agent Icons", "psName": "FacadeAgentIcons"})
 font.setupOS2(sTypoAscender=896, sTypoDescender=-128, usWinAscent=896, usWinDescent=128)
 font.setupPost()
 font.font["COLR"] = buildCOLR({glyph(icon): layers for icon, layers in LAYERS.items()}, version=0, glyphMap=font.font.getReverseGlyphMap())

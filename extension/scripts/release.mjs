@@ -470,7 +470,7 @@ function verifyRun(args, work) {
 
 async function checkPromotion(version, build) {
 	const newest = extensionReleaseVersions({ stable: true }).sort(compareVersions).at(-1);
-	assert.ok(!newest || compareVersions(version, newest) >= 0, `Stable Facade is already at ${newest}`);
+	assert.ok(!newest || compareVersions(version, newest) >= 0, `Stable Facade Code Extension is already at ${newest}`);
 	const response = await fetch(`https://facadecode.com/${frameworkVersionFile}`, {
 		redirect: 'error', signal: AbortSignal.timeout(60_000),
 	});
@@ -482,7 +482,7 @@ async function checkPromotion(version, build) {
 	const versionOrder = compareVersions(version, current.version);
 	const buildTime = BigInt(parseFrameworkBuild(build).time ?? -1);
 	assert.ok(versionOrder > 0 || (versionOrder === 0 && buildTime >= BigInt(current.time ?? -1)),
-		`The website is already at Facade ${mirrored}`);
+		`The website is already at Facade Code Extension ${mirrored}`);
 	return mirrored;
 }
 

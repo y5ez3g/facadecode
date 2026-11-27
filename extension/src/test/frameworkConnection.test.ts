@@ -21,7 +21,7 @@ import { withModules } from './withModules';
 
 const build = '0.1.7';
 const machine = '00000000-0000-4000-8000-000000000001';
-type Connect = typeof import('../host/framework/connection').connectOrchestrator;
+type Connect = typeof import('../host/framework/connection').connectFramework;
 type TestRequest = { readonly id?: number; readonly method: string; readonly params: unknown };
 
 /** Drive the actual editor connection over private sockets, numbering each connection in arrival order. */
@@ -63,8 +63,8 @@ async function withDaemon(
 			},
 			startDaemon: () => assert.fail('The isolated hello fixture already answers.'),
 		};
-		const { connectOrchestrator } = load<typeof import('../host/framework/connection')>(require.resolve('../host/framework/connection'));
-		await check(() => connectOrchestrator({ home: home.dir, program: path.join(home.dir, FACADE_PROGRAM), build, log: () => {} }), home.dir);
+		const { connectFramework } = load<typeof import('../host/framework/connection')>(require.resolve('../host/framework/connection'));
+		await check(() => connectFramework({ home: home.dir, program: path.join(home.dir, FACADE_PROGRAM), build, log: () => {} }), home.dir);
 	} finally {
 		for (const socket of sockets) { socket.destroy(); }
 		await new Promise<void>(resolve => server.close(() => resolve()));
@@ -89,7 +89,7 @@ const welcome = {
 	ops: ['agent.inspect', 'future.operation'], topics: ['agents', 'attach', 'machines', 'future.topic'],
 };
 
-suite('Framework connection (ARCHITECTURE-1.4)', () => {
+suite('Facade Code Framework connection (ARCHITECTURE-1.4)', () => {
 	test('carries typed startup refusal and planned restart details through the editor adapter', async () => {
 		const home = tempDir('facade-startup-report-');
 		try {
@@ -253,7 +253,7 @@ suite('Framework connection (ARCHITECTURE-1.4)', () => {
 				settingsPath = 'relative/facade.json';
 				await edit();
 				assert.strictEqual(opened.length, 2);
-				assert.deepStrictEqual(errors, ['The Orchestrator did not return an absolute path to facade.json.']);
+				assert.deepStrictEqual(errors, ['Facade Code Framework did not return an absolute path to facade.json.']);
 			} finally {
 				registration.dispose();
 				link.dispose();

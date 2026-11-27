@@ -44,7 +44,7 @@ async function askName(facts: RunFacts, copy: { readonly placeholder: string; re
 	return name === facts.name ? undefined : name;
 }
 
-/** The workspace card's actions use its current run and the parent's Orchestrator callbacks (PANEL-4.2). */
+/** The workspace card's actions use its current run and the parent's Facade Code Framework callbacks (PANEL-4.2). */
 export function registerFrameworkAgentCommands(deps: {
 	readonly model: PanelModel;
 	readonly notifyError: HumanPort['error'];

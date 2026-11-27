@@ -144,7 +144,7 @@ function step(flow: Flow, locations: Locations, options: Omit<CatalogStepOptions
 export async function pickFilter(model: PanelModel, locations: Locations, log: LogPort): Promise<void> {
 	locations.refresh().catch(err => log.event(`Could not refresh the working locations: ${messageOf(err)}`));
 	const current = model.currentFilter();
-	if (model.usesOrchestrator?.()) {
+	if (model.usesFramework?.()) {
 		await pickAgentFilter(model, locations, current);
 		return;
 	}

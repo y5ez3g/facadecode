@@ -25,7 +25,7 @@ const AVATAR = process.env.FACADE_IT_AVATAR ?? `avatar-${CLI}.png`;
 const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
 
 /**
- * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3), after its Facade tools' own,
+ * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3), after its Facade Code Framework tools' own,
  * which the tools' journey checks (CLIS-3.2); Claude Code's and Codex's are checked apart.
  * The suite's program starts with exactly its args (CONFIGURATION-2.3).
  */
@@ -36,7 +36,7 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	pi: [],
 	'my-cli': ['--from-custom', 'two words']
 };
-/** Whether the windows run on the Framework: framework starts each CLI with its own wiring rather than the extension's run files. */
+/** Whether the windows run on the Facade Code Framework: framework starts each CLI with its own wiring rather than the extension's run files. */
 // Session fixture layout read by the Rust Pi integration.
 function piSessionFolderName(cwd: string): string {
 	return `--${path.resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
@@ -131,7 +131,7 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 	const card = until('a new card', async () => {
 		const now = await state();
 		const added = now.cards.find(card => !before.has(card.runId));
-		// On the Framework its short ID comes with framework's answer to the start (RULES-2.2): the card is the test's once it has it
+		// On the Facade Code Framework its short ID comes with framework's answer to the start (RULES-2.2): the card is the test's once it has it
 		if (added && fixtureAlias(added)) {
 			return added;
 		}
@@ -215,7 +215,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const folderTrusted = launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"'));
 			assert.strictEqual(folderTrusted, !FRAMEWORK, 'folder trust for a person starting Codex');
 		} else if (CLI === 'claude' && FRAMEWORK) {
-			// Framework's own wiring: its tools and its SessionStart hook come inline, in one `--settings`, and its plugin and MCP files are its run's
+			// Facade Code Framework's own wiring: its tools and its SessionStart hook come inline, in one `--settings`, and its plugin and MCP files are its run's
 			const settingsAt = launch.args.indexOf('--settings');
 			assert.ok(settingsAt >= 0 && launch.args.filter(arg => arg === '--settings').length === 1, 'one --settings carries the native session hook');
 			const settings = JSON.parse(launch.args[settingsAt + 1]);
@@ -247,7 +247,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 		// Check the folder trust in Antigravity's isolated settings (CLIS-3.3).
 		if (CLI === 'agy') {
-			// Framework gives the run's settings by file, or inline in earlier builds; the legacy implementation updates the CLI's settings file.
+			// Facade Code Framework gives the run's settings by file, or inline in earlier builds; the legacy implementation updates the CLI's settings file.
 			const argument = launch.args[launch.args.indexOf('--settings') + 1];
 			const text = FRAMEWORK ? (fs.existsSync(argument) ? fs.readFileSync(argument, 'utf8') : argument)
 				: fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8');
@@ -462,7 +462,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 	test('Resuming opens the saved cwd and exact session ID, with the implementation\'s Pin behavior', async function () {
 		if (CUSTOM) { this.skip(); }
 		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
-		// The Orchestrator matches the exact queried folder. The old history picker includes descendants.
+		// Facade Code Framework matches the exact queried folder. The old history picker includes descendants.
 		const cwd = FRAMEWORK ? folder : path.join(folder, 'nested');
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
@@ -485,7 +485,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			}).catch(error => { throw new Error(`${(error as Error).message}; picker: ${JSON.stringify(lastPicker)}`); });
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			await history;
-			// On the Framework its short ID and name come with framework's answer to the start.
+			// On the Facade Code Framework its short ID and name come with framework's answer to the start.
 			const card = await until('the resumed card', async () => (await started()).find(fixtureAlias));
 			assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 			const alias = fixtureAlias(card);
@@ -517,7 +517,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				throw error;
 			});
 			await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
-			// LIFECYCLE-3.4: the tab-change event can precede completion of Facade's own mark command. Observe the unpinned state across
+			// LIFECYCLE-3.4: the tab-change event can precede completion of Facade Code Extension's own mark command. Observe the unpinned state across
 			// two polls before issuing a separate native action; one early observation can still be inside that command's event guard.
 			let unpinned = 0;
 			await until('the unpinned card and tab to settle', async () => {
@@ -651,7 +651,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			this.skip();
 		}
 		const before = (await state()).cardCount;
-		// The Framework has no Show Agent Command Line (the specification takes it away); its log is framework's own
+		// The Facade Code Framework has no Show Agent Command Line (the specification takes it away); its log is framework's own
 		if (!FRAMEWORK) {
 			const showing = vscode.commands.executeCommand('facade.showAgentLaunch');
 			const launch = await until('the launch document', async () => {
@@ -676,7 +676,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		observeAcceptanceImplementation(this, card);
 		const pidFile = `${RECORD}.${fixtureAlias(card)}`;
 		const pid = await until('the logged fake CLI', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
-		await until('the log to contain a known event from this Facade root', async () => {
+		await until('the log to contain a known event from this Facade Code Extension root', async () => {
 			await vscode.commands.executeCommand('facade.showAgentsLog');
 			const document = vscode.window.activeTextEditor?.document;
 			if (document?.uri.scheme !== 'facade-agents-log') { return undefined; }

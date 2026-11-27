@@ -9,7 +9,7 @@ import { captureNativePackage, evidenceFile, validateSource, verifyArchiveProgra
 import { nativeProblems, packageTarget } from './native.mjs';
 import { fileFor, sha256, SUMS } from './release-assets.mjs';
 
-/** Read the verified Framework programs and build marker for the fixture's checkout and host. */
+/** Read the verified Facade Code Framework programs and build marker for the fixture's checkout and host. */
 export function readEditorFrameworkPackage(root, directory, digest) {
 	assert.ok(directory, 'Supply a native package artifact directory.');
 	assert.match(digest, /^[0-9a-f]{64}$/u, 'Supply a lowercase SHA-256 for ' + evidenceFile);

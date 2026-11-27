@@ -10,10 +10,10 @@ import { parseJsonc, type JsonNode } from '../../base/jsonc';
 import { isFullyQualified } from '../../record/paths';
 import { editorEnvironment } from '../editorEnvironment';
 import type { LegacyResumeAttempt, LegacyResumeTarget, LegacySessionPin } from '../legacyPins';
-import { DaemonError, type OrchestratorLink } from './types';
+import { DaemonError, type FrameworkLink } from './types';
 
 interface LegacyRecovery {
-	readonly link: OrchestratorLink;
+	readonly link: FrameworkLink;
 	readonly inspect: (reference: AgentInfo['reference']) => Promise<AgentInfo>;
 	readonly resume: (machine: string, target: ResumeCandidateTarget, folder: string) => Promise<AgentInfo>;
 	readonly restart: () => Promise<AgentInfo>;
@@ -28,7 +28,7 @@ const LEGACY_RESUME_REFUSALS = new Set([
 	'protocol_incompatible', 'refused', 'session_not_found', 'unsupported', 'upgrading',
 ]);
 
-// Entry IDs reserved by the published TypeScript implementation. Framework binds each of
+// Entry IDs reserved by the published TypeScript implementation. Facade Code Framework binds each of
 // these IDs to the same built-in and refuses settings that attempt to change its type.
 const LEGACY_BUILT_INS = new Set(['agy', 'claude', 'codex', 'muse', 'opencode', 'pi']);
 
@@ -109,7 +109,7 @@ export function matchesLegacyPin(pin: LegacySessionPin, machine: string, record:
 		&& (sessionId === undefined || record.session === sessionId) && isSameFolder(record.cwd, pin.cwd);
 }
 
-/** An unkeyed request can reconcile only the exact target whose Framework run changed after dispatch. */
+/** An unkeyed request can reconcile only the exact target whose Facade Code Framework run changed after dispatch. */
 export function confirmsLegacyResume(pin: LegacySessionPin, machine: string, attempt: LegacyResumeAttempt, record: AgentInfo): boolean {
 	const started = Date.parse(record.started_at);
 	return matchesLegacyPin(pin, machine, record) && record.reference.agent_id === attempt.reference.agent_id
@@ -118,7 +118,7 @@ export function confirmsLegacyResume(pin: LegacySessionPin, machine: string, att
 		&& (record.process === 'running' || record.process === 'ended');
 }
 
-async function verifyBuiltIn(pin: LegacySessionPin, link: OrchestratorLink): Promise<string> {
+async function verifyBuiltIn(pin: LegacySessionPin, link: FrameworkLink): Promise<string> {
 	const { cli, builtIn } = pin.conversation;
 	if (LEGACY_BUILT_INS.has(cli)) {
 		if (builtIn === undefined || builtIn === cli) { return cli; }
@@ -144,9 +144,9 @@ function unverifiedCli(cli: string, builtIn: string | undefined): Error {
 }
 
 function ambiguous(session: string): Error {
-	return new Error(vscode.l10n.t('Several Framework records match legacy session {0}.', session));
+	return new Error(vscode.l10n.t('Several Facade Code Framework records match legacy session {0}.', session));
 }
 
 function mismatched(session: string): Error {
-	return new Error(vscode.l10n.t('Framework did not confirm the exact legacy session {0}.', session));
+	return new Error(vscode.l10n.t('Facade Code Framework did not confirm the exact legacy session {0}.', session));
 }

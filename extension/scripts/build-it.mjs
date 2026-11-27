@@ -1,7 +1,7 @@
 // Assembles the integration suite's own extension in build/extension-it/: the shipped extension of build/extension/, built in test
-// mode with its test commands and the page's probe, and Framework's programs as they ship (scripts/framework.mjs).
+// mode with its test commands and the page's probe, and Facade Code Framework's programs as they ship (scripts/framework.mjs).
 // Nothing of the test code reaches the shipped extension or a package (UX-3.2).
-// --framework-package DIRECTORY --framework-package-evidence-sha256 DIGEST stages Framework from a verified native package artifact.
+// --framework-package DIRECTORY --framework-package-evidence-sha256 DIGEST stages Facade Code Framework from a verified native package artifact.
 // DIGEST is the independently verified SHA-256 of the artifact's native-package-evidence.json.
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
@@ -39,7 +39,7 @@ if (packagedFramework) {
 		}
 	}
 	fs.writeFileSync(path.join(bin, FRAMEWORK_BUILD_FILE), packagedFramework.marker);
-	console.info(`Staged Framework from the verified ${packagedFramework.target} package on tree ${packagedFramework.tree}.`);
+	console.info(`Staged Facade Code Framework from the verified ${packagedFramework.target} package on tree ${packagedFramework.tree}.`);
 } else if (frameworkTriple()) {
 	buildFramework();
 	fs.cpSync(BIN, bin, { recursive: true });

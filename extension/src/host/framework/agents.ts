@@ -15,8 +15,8 @@ import { errorOf, unavailable } from './rpc';
 import { agentFacts, agentKey, failedPinFacts, referenceOf, referenceOfPin } from './agentFacts';
 import { restoreFrameworkPins } from './pinRestore';
 import { confirmsLegacyResume, matchesLegacyPin, recoverLegacyPin } from './legacyRecovery';
-import type { OrchestratorTerminals } from './terminals';
-import { DaemonError, type OrchestratorLink } from './types';
+import type { FrameworkTerminals } from './terminals';
+import { DaemonError, type FrameworkLink } from './types';
 import type { FrameworkWorkspace, WorkspacePinFailure } from './workspace';
 
 type AgentInfo = DaemonOperations['agent.inspect']['result']['agent'];
@@ -43,8 +43,8 @@ function tracePinRestore(phase: string, detail: unknown): void {
 }
 
 interface AgentDeps {
-	readonly link: OrchestratorLink;
-	readonly terminals: OrchestratorTerminals;
+	readonly link: FrameworkLink;
+	readonly terminals: FrameworkTerminals;
 	readonly workspace: FrameworkWorkspace;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange'>;
 	readonly onDidChangeMachineNames: vscode.Event<void>;
@@ -54,8 +54,8 @@ interface AgentDeps {
 	readonly log: LogPort;
 }
 
-/** Joins the Orchestrator's records with the workspace's presentation (RULES-6.1). */
-export class OrchestratorAgents implements vscode.Disposable {
+/** Joins Facade Code Framework's records with the workspace's presentation (RULES-6.1). */
+export class FrameworkAgents implements vscode.Disposable {
 	private readonly records = new Map<RunId, AgentInfo>();
 	private readonly launches = new Map<RunId, PinLaunch>();
 	private readonly watchReferences = new Map<RunId, AgentRef>();
@@ -169,14 +169,14 @@ export class OrchestratorAgents implements vscode.Disposable {
 
 	async open(run: RunId): Promise<boolean> {
 		const card = this.cards.get(run);
-		if (!card?.orchestrator || card.lifecycle === 'ended') { return false; }
-		const record = await this.inspect(card.orchestrator.reference);
+		if (!card?.framework || card.lifecycle === 'ended') { return false; }
+		const record = await this.inspect(card.framework.reference);
 		await this.show(record);
 		return true;
 	}
 
 	async stop(run: RunId): Promise<void> {
-		const reference = this.cards.get(run)?.orchestrator?.reference;
+		const reference = this.cards.get(run)?.framework?.reference;
 		if (reference) { await this.stopReference(reference); }
 	}
 
@@ -195,7 +195,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 	}
 
 	async remove(run: RunId): Promise<void> {
-		const reference = this.cards.get(run)?.orchestrator?.reference;
+		const reference = this.cards.get(run)?.framework?.reference;
 		if (!reference) { return; }
 		await this.deps.link.call('agent.remove', { target: reference });
 		this.records.delete(run);
@@ -204,7 +204,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 	}
 
 	async rename(run: RunId, name: string): Promise<void> {
-		const reference = this.cards.get(run)?.orchestrator?.reference;
+		const reference = this.cards.get(run)?.framework?.reference;
 		if (!reference) { return; }
 		await this.deps.link.call('agent.rename', { target: reference, name });
 	}
@@ -513,7 +513,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 		const target = referenceOfPin(recovered);
 		try {
 			const { agent } = await this.deps.link.call('agent.rename', { target, name });
-			if (agentKey(agent.reference) !== agentKey(target)) { throw new Error('Framework returned a different agent.'); }
+			if (agentKey(agent.reference) !== agentKey(target)) { throw new Error('Facade Code Framework returned a different agent.'); }
 			if (!this.disposed) { this.remember(agent); }
 			this.deps.workspace.replacePin(recovered, { ...recovered, name: agent.name });
 		} catch (error) {

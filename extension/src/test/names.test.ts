@@ -14,7 +14,7 @@ const KEY_NAMES: readonly string[] = [
 ];
 
 suite('Agent names (LIFECYCLE-2.1)', () => {
-	test('the built-in names are over a hundred short ASCII machine words, no two with the same first three letters, none a key name, a Facade word or a CLI', () => {
+	test('the built-in names are over a hundred short ASCII machine words, no two with the same first three letters, none a key name, a Facade Code Extension word or a CLI', () => {
 		const keys = new Set(KEY_NAMES.map(key => key.toLowerCase()));
 		const words = ['agent', 'human', 'facade', 'pin', 'close', 'stop', 'resume', 'window', 'claude', 'codex', 'muse', 'qwen', 'agy', 'antigravity'];
 		assert.ok(BUILT_IN_NAMES.length >= 100, `${BUILT_IN_NAMES.length} names`);

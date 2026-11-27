@@ -14,7 +14,7 @@ const FACTS: RunFacts = {
 	root: RUN, origin: 'human', tools: 'not_injected'
 };
 
-suite('Framework agent command targets (UX-3.1, PANEL-4.2)', () => {
+suite('Facade Code Framework agent command targets (UX-3.1, PANEL-4.2)', () => {
 	test('PANEL-2.2, 4.2: a card\'s menu names its exact run, including same-numbered agents on two machines', async () => {
 		const registered = new Map<string, (arg?: unknown) => unknown>();
 		const done: unknown[][] = [];

@@ -1,4 +1,4 @@
-// Framework's two programs for the extension (ARCHITECTURE-4.3): `facade` and `facade-mcp`, built in release mode for this host's
+// Facade Code Framework's two programs for the extension (ARCHITECTURE-4.3): `facade` and `facade-mcp`, built in release mode for this host's
 // target - on Linux for musl, so one file runs on every Linux - and copied into bin/, from where packaging and the integration
 // build take them. A Windows package carries facade.exe and facade-mcp.exe, with ConPTY in bin/conpty/.
 //
@@ -39,7 +39,7 @@ export function sourceBuild(version, revision = 'HEAD') {
 export function executableBuild(program) {
 	const output = execFileSync(program, ['--version'], { encoding: 'utf8' });
 	const build = /^facade (.+)\r?\n$/.exec(output)?.[1];
-	assert.ok(parseFrameworkBuild(build), `${program} did not report a valid Facade build`);
+	assert.ok(parseFrameworkBuild(build), `${program} did not report a valid Facade Code Framework build`);
 	return build;
 }
 
@@ -55,7 +55,7 @@ export function frameworkTriple(platform = process.platform, arch = process.arch
 /** Builds framework's release for `triple` and puts its programs and, on Windows, ConPTY in bin/. */
 export function buildFramework(triple = frameworkTriple()) {
 	if (!triple) {
-		throw new Error(`Framework is built for macOS, Windows and Linux on x64 and arm64, not for ${process.platform}-${process.arch}.`);
+		throw new Error(`Facade Code Framework is built for macOS, Windows and Linux on x64 and arm64, not for ${process.platform}-${process.arch}.`);
 	}
 	const version = workspaceVersion(fs.readFileSync(path.join(FRAMEWORK, 'Cargo.toml'), 'utf8'));
 	const build = sourceBuild(version);
@@ -80,7 +80,7 @@ export function buildFramework(triple = frameworkTriple()) {
 		}
 	}
 	fs.writeFileSync(path.join(BIN, FRAMEWORK_BUILD_FILE), build + '\n');
-	console.info(`Framework ${build}: ${Object.keys(PROGRAMS).join(', ')} for ${triple} in bin/.`);
+	console.info(`Facade Code Framework ${build}: ${Object.keys(PROGRAMS).join(', ')} for ${triple} in bin/.`);
 	return build;
 }
 

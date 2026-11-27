@@ -71,13 +71,13 @@ interface PanelModelDeps {
 	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange' | 'onDidRemove' | 'removalOf'>;
 	readonly prefs: PanelPrefs;
 	readonly words: CardWords;
-	readonly orchestrator?: boolean;
+	readonly framework?: boolean;
 	readonly remote: boolean;
 	/** Settles once this window's runs are reconciled: until then the panel is loading (PANEL-1.1). */
 	readonly ready: Promise<unknown>;
 	/** How a remote environment is named in a card's details (LIFECYCLE-1.1): as VS Code's remote indicator names it. */
 	readonly environmentLabel?: (environment: string) => string;
-	/** Whether Facade has a history reader for a CLI, so a run's title can come: a program has none (PANEL-1.5, CLIS-2.4). */
+	/** Whether Facade Code Extension has a history reader for a CLI, so a run's title can come: a program has none (PANEL-1.5, CLIS-2.4). */
 	readonly readsTitles?: (cli: string) => boolean;
 	/** The icon each CLI shows, by its API ID, from one reading of the settings file (CONFIGURATION-2.4); none: each name's own. */
 	readonly icons?: () => (cli: string) => string;
@@ -204,8 +204,8 @@ export class PanelModel implements Disposable {
 		return this.selection;
 	}
 
-	usesOrchestrator(): boolean {
-		return this.deps.orchestrator === true;
+	usesFramework(): boolean {
+		return this.deps.framework === true;
 	}
 
 	runFacts(run: RunId): RunFacts | undefined {
@@ -265,8 +265,8 @@ export class PanelModel implements Disposable {
 		const add = (choice: FilterChoice) => choices.set(filterChoiceKey(choice), choice);
 		const machines = new Map<string, string>();
 		for (const facts of this.deps.agents.list()) {
-			if (!facts.orchestrator) { continue; }
-			const { reference, machine } = facts.orchestrator;
+			if (!facts.framework) { continue; }
+			const { reference, machine } = facts.framework;
 			machines.set(reference.machine_id, machine ?? reference.machine_id);
 			add({ kind: 'cli', id: facts.cli, label: facts.displayName });
 			const location = this.known.get(this.anchorOf(facts));
@@ -494,14 +494,14 @@ export class PanelModel implements Disposable {
 		// Counted among all of this window's cards, those the filter hides too (PANEL-1.3)
 		const repeated = repeatedNames(runs);
 		const icon = this.deps.icons?.();
-		const orchestrator = this.usesOrchestrator();
+		const framework = this.usesFramework();
 		const visible = (id: string) => shownSet.has(id);
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
-			const canPin = orchestrator || facts.remoteMachine === undefined;
+			const canPin = framework || facts.remoteMachine === undefined;
 			const withinArea = (other: string) => visible(other) && !!byId.get(other)?.pin === !!facts.pin;
 			const menu: CardMenu = {
-				...(!orchestrator && canDismiss(facts) ? { dismiss: true } : {}),
+				...(!framework && canDismiss(facts) ? { dismiss: true } : {}),
 				...(canPin && facts.pinnable && !facts.pin ? { pin: true } : {}),
 				...(canPin && facts.pin ? { unpin: true } : {}),
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
@@ -513,7 +513,7 @@ export class PanelModel implements Disposable {
 		this.exited.clear();
 		const empty: PanelState['empty'] = this.loading || cards.length ? undefined : filter ? 'noMatch' : catalog.folders.length ? 'noAgents' : 'noFolder';
 		const selected = this.selectedRun === undefined ? undefined : byId.get(this.selectedRun);
-		const canPinSelected = orchestrator || selected?.remoteMachine === undefined;
+		const canPinSelected = framework || selected?.remoteMachine === undefined;
 		return {
 			state: {
 				revision,
@@ -525,7 +525,7 @@ export class PanelModel implements Disposable {
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
 			},
-			...(selected ? { selection: { run: selected.id, ended: canDismiss(selected), ...(orchestrator ? { running: isAgentRunning(selected) } : {}), ...(canPinSelected && selected.pin ? { pinned: true } : {}), ...(canPinSelected && selected.pinnable ? { pinnable: true } : {}) } } : {})
+			...(selected ? { selection: { run: selected.id, ended: canDismiss(selected), ...(framework ? { running: isAgentRunning(selected) } : {}), ...(canPinSelected && selected.pin ? { pinned: true } : {}), ...(canPinSelected && selected.pinnable ? { pinnable: true } : {}) } } : {})
 		};
 	}
 
@@ -584,10 +584,10 @@ export class PanelModel implements Disposable {
 
 	private matchesChoice(facts: RunFacts, choice: FilterChoice): boolean {
 		switch (choice.kind) {
-			case 'machine': return facts.orchestrator?.reference.machine_id === choice.id;
-			case 'directory': return facts.orchestrator?.reference.machine_id === choice.machineId && facts.cwd === choice.folder;
+			case 'machine': return facts.framework?.reference.machine_id === choice.id;
+			case 'directory': return facts.framework?.reference.machine_id === choice.machineId && facts.cwd === choice.folder;
 			case 'cli': return facts.cli === choice.id;
-			case 'state': return facts.orchestrator !== undefined && frameworkStateOf(facts.orchestrator.state, facts) === choice.id;
+			case 'state': return facts.framework !== undefined && frameworkStateOf(facts.framework.state, facts) === choice.id;
 			case 'pin': return (facts.pin ? 'pinned' : 'unpinned') === choice.id;
 			case 'location': return facts.remoteMachine === undefined && this.anchorOf(facts) === this.locationOf(choice.id);
 			case 'folder': return facts.remoteMachine === undefined

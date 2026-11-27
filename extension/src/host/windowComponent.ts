@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The local component can retire stale Framework tabs (ARCHITECTURE-6.3). The legacy implementation waits for its window services
+// The local component can retire stale Facade Code Framework tabs (ARCHITECTURE-6.3). The legacy implementation waits for its window services
 // (ARCHITECTURE-4.3) when VS Code has not activated the component yet.
 
 import * as crypto from 'crypto';
@@ -36,7 +36,7 @@ export async function optionalTerminalOwner(_context: vscode.ExtensionContext, h
 	} catch (error) {
 		const message = messageOf(error);
 		if (!message.includes(`'${WINDOW_TERMINAL_OWNER_COMMAND}' not found`)) {
-			log.event(`Could not prepare cleanup for previous Facade tabs: ${message}`);
+			log.event(`Could not prepare cleanup for previous Facade Code Extension tabs: ${message}`);
 		}
 	}
 	return undefined;
@@ -112,14 +112,14 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
 }
 
 /**
- * Facade Code without its window component (ARCHITECTURE-4.3): the agents already running go on, nothing new starts, and the panel
- * and one notification say what to do, with an action that shows the component in the Extensions view; each of Facade's commands
+ * Facade Code Extension without its window component (ARCHITECTURE-4.3): the agents already running go on, nothing new starts, and the panel
+ * and one notification say what to do, with an action that shows the component in the Extensions view; each of Facade Code Extension's commands
  * says it again, rather than that the editor has no such command. Once the editor has it, a reload is offered. Answers what
  * deactivation disposes.
  */
 export function showComponentMissing(context: vscode.ExtensionContext, session: string): vscode.Disposable {
 	const show = vscode.l10n.t("Show Window Component");
-	const explanation = vscode.l10n.t("Facade Code requires its Window Component. Install and enable \"Facade Code Window Component\" on this computer, then reload the window. Active agents continue running.");
+	const explanation = vscode.l10n.t("Facade Code Extension requires its Window Component. Install and enable \"Facade Code Window Component\" on this computer, then reload the window. Active agents continue running.");
 	const open = () => void vscode.commands.executeCommand('extension.open', WINDOW_COMPONENT);
 	const view = vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
 		resolveWebviewView: webviewView => {
@@ -160,7 +160,7 @@ export function showComponentMissing(context: vscode.ExtensionContext, session: 
 		}
 		offered = true;
 		const reload = vscode.l10n.t("Reload Window");
-		void vscode.window.showInformationMessage(vscode.l10n.t("The Facade Code Window Component is installed. Reload the window to start Facade Code."), reload).then(choice => {
+		void vscode.window.showInformationMessage(vscode.l10n.t("The Facade Code Window Component is installed. Reload the window to start Facade Code Extension."), reload).then(choice => {
 			if (choice === reload) {
 				void vscode.commands.executeCommand('workbench.action.reloadWindow');
 			}

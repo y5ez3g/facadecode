@@ -49,7 +49,7 @@ export interface RunBinding {
 	readonly answersQueries: boolean;
 }
 
-/** A screen stream with complete redraws from the Orchestrator (RULES-6.3). */
+/** A screen stream with complete redraws from Facade Code Framework (RULES-6.3). */
 export interface ScreenBinding extends Pick<RunBinding, 'input' | 'resize'> {
 	readonly answersQueries: true;
 	watchScreen(draw: (screen: RunScreen) => void): Disposable;
@@ -60,7 +60,7 @@ function plainNote(text: string): string {
 	return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trimEnd();
 }
 
-/** A line of Facade's own in the terminal: dim, one line per line of text, no escape sequence of the text's own. */
+/** A line of Facade Code Extension's own in the terminal: dim, one line per line of text, no escape sequence of the text's own. */
 function noteLine(text: string): string {
 	const lines = text.replace(/\r\n?/g, '\n').split('\n').map(plainNote);
 	return lines.map(line => `\x1b[2m${line}\x1b[0m\r\n`).join('');
@@ -68,7 +68,7 @@ function noteLine(text: string): string {
 
 /**
  * An agent's editor terminal (LIFECYCLE-1.5, 2.2): a Pseudoterminal that exists from the accepted launch on, before any process.
- * It shows Facade's dim progress and failure lines; once the run's process starts, the same terminal shows the run - its screen
+ * It shows Facade Code Extension's dim progress and failure lines; once the run's process starts, the same terminal shows the run - its screen
  * as it stands, then each numbered output after it, never one twice. Its tab reads only the agent's name; its CLI's titles
  * are shown nowhere, and its status belongs to the panel.
  */
@@ -94,7 +94,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	/** What waits for the terminal to open: VS Code drops what is written before. */
 	private unopened: string[] = [];
 	private unopenedLength = 0;
-	/** Whether Facade's own lines are on screen, to be scrolled away before the run's screen is drawn. */
+	/** Whether Facade Code Extension's own lines are on screen, to be scrolled away before the run's screen is drawn. */
 	private noted = false;
 	private binding: RunBinding | ScreenBinding | undefined;
 	private screenWatch: Disposable | undefined;
@@ -125,7 +125,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private readonly mouseModes = new MouseModes();
 	/** The program's questions written to the editor's terminal, by which its answers reach the program or not (ARCHITECTURE-2.3). */
 	private readonly replies: TerminalReplies;
-	/** Whether Facade holds its tab in front for a mark: the person's keys meanwhile are left out (LIFECYCLE-3.4). */
+	/** Whether Facade Code Extension holds its tab in front for a mark: the person's keys meanwhile are left out (LIFECYCLE-3.4). */
 	private muted = false;
 	/** Whether its tab spins while the agent works, the frame it shows and what turns it (LIFECYCLE-2.2). */
 	private spinning = false;
@@ -268,7 +268,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.ended = true;
 			this.letStandInGo();
 			this.exitLine = `\r\n${noteLine(text)}`;
-			// With no screen of the run to come - none bound, as for a run whose supervisor went - it is written as Facade's other lines
+			// With no screen of the run to come - none bound, as for a run whose supervisor went - it is written as Facade Code Extension's other lines
 			if (!this.binding || (this.opened && this.applied !== undefined)) {
 				this.write(this.exitLine);
 			}
@@ -511,7 +511,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.standIn = undefined;
 	}
 
-	/** Leaves out the person's keys while Facade holds its tab in front for its mark, its answers to the program still going (LIFECYCLE-3.4). */
+	/** Leaves out the person's keys while Facade Code Extension holds its tab in front for its mark, its answers to the program still going (LIFECYCLE-3.4). */
 	muteInput(muted: boolean): void {
 		this.muted = muted;
 	}
@@ -521,7 +521,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	 * the answers ptyd gives itself and those that come too late for the program to wait for them (ARCHITECTURE-2.3).
 	 */
 	handleInput(given: string): void {
-		// Facade holds its tab in front for its mark: what the person types meanwhile is not its CLI's (LIFECYCLE-3.4)
+		// Facade Code Extension holds its tab in front for its mark: what the person types meanwhile is not its CLI's (LIFECYCLE-3.4)
 		const data = this.muted ? this.replies.answersOnly(given) : given;
 		if (this.binding && !this.ended && data) {
 			// Read for the colours it teaches either way; the answers to the window's own questions kept from the program always, the
@@ -612,7 +612,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 			if (this.binding === binding) {
 				this.standIn?.resume();
 			}
-			// No screen to follow: the line saying how it ended goes as Facade's other lines do
+			// No screen to follow: the line saying how it ended goes as Facade Code Extension's other lines do
 			if (this.exitLine && this.binding === binding) {
 				this.write(this.exitLine);
 			}
@@ -631,7 +631,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.standIn = undefined;
 		const later = (this.early ?? []).filter(each => each.seq > seq);
 		this.early = undefined;
-		// A redraw - the connection came back - starts from a reset terminal; Facade's own lines are scrolled away first, so that
+		// A redraw - the connection came back - starts from a reset terminal; Facade Code Extension's own lines are scrolled away first, so that
 		// the run's screen starts where its program's cursor positions expect it (ARCHITECTURE-2.3)
 		const before = completeRedraw ? '' : this.drawn ? '\x1bc' : this.noted ? `${'\r\n'.repeat(this.size?.rows ?? 30)}\x1b[H` : '';
 		this.applied = seq;

@@ -10,7 +10,7 @@ import { disposeAll } from '../../base/lifecycle';
 import type { LogPort, WorkspaceFolderInfo } from '../../core/ports';
 import { FACADE_HOME_VARIABLE } from '../../record/paths';
 import { COMMANDS } from '../../ui/catalog';
-import { registerOrchestratorUi, type OrchestratorUiDeps } from '../../ui/commands/index';
+import { registerFrameworkUi, type FrameworkUiDeps } from '../../ui/commands/index';
 import { registerWorktreeCommands } from '../../ui/commands/worktree';
 import { WindowColours } from '../terminal/terminalColours';
 import { WindowHuman } from '../human';
@@ -22,18 +22,18 @@ import { frameworkSettings, openSettingsOf } from './settings';
 import { FACADE_PROGRAM } from './daemonTypes';
 import { optionalTerminalOwner } from '../windowComponent';
 import { agentKey } from './agentFacts';
-import { OrchestratorAgents } from './agents';
-import { LaunchLocationHistory, OrchestratorLocations } from './catalog';
-import { connectOrchestrator } from './connection';
-import { OrchestratorTerminals } from './terminals';
-import { DaemonError, type OrchestratorLink } from './types';
+import { FrameworkAgents } from './agents';
+import { LaunchLocationHistory, FrameworkLocations } from './catalog';
+import { connectFramework } from './connection';
+import { FrameworkTerminals } from './terminals';
+import { DaemonError, type FrameworkLink } from './types';
 import { openFrameworkWorkspace } from './workspace';
 
 declare const FACADE_TEST_MODE: boolean;
 
 type MachineInfo = DaemonTopics['machines']['snapshot'][number];
 
-interface OrchestratorDeps {
+interface FrameworkDeps {
 	readonly root: string;
 	readonly home: string;
 	readonly legacy?: LegacyMigrationSource;
@@ -50,14 +50,14 @@ function workspaceFolders(): readonly WorkspaceFolderInfo[] {
 	}));
 }
 
-function panelPreferences(state: vscode.Memento): OrchestratorUiDeps['workspaceState'] {
+function panelPreferences(state: vscode.Memento): FrameworkUiDeps['workspaceState'] {
 	return {
 		get<T>(key: string): T | undefined { return state.get<T>(`facade.orchestrator.${key}`); },
 		update: (key, value) => state.update(`facade.orchestrator.${key}`, value)
 	};
 }
 
-function registerDaemonLog(link: OrchestratorLink): vscode.Disposable {
+function registerDaemonLog(link: FrameworkLink): vscode.Disposable {
 	const scheme = 'facade-agents-log';
 	const uri = vscode.Uri.from({ scheme, path: '/Agents Log' });
 	const changed = new vscode.EventEmitter<vscode.Uri>();
@@ -77,13 +77,13 @@ function registerDaemonLog(link: OrchestratorLink): vscode.Disposable {
 	);
 }
 
-/** The extension host connects to its own Orchestrator, including in Remote SSH windows (RULES-6.7). */
-export async function activateOrchestrator(context: vscode.ExtensionContext, deps: OrchestratorDeps): Promise<() => Promise<void>> {
-	const output = vscode.window.createOutputChannel('Facade Code', { log: true });
+/** The extension host connects to its own Facade Code Framework, including in Remote SSH windows (RULES-6.7). */
+export async function activateFramework(context: vscode.ExtensionContext, deps: FrameworkDeps): Promise<() => Promise<void>> {
+	const output = vscode.window.createOutputChannel('Facade Code Extension', { log: true });
 	const log: LogPort = { event: text => output.info(text) };
 	const disposables: vscode.Disposable[] = [output];
 	let stopAgents: (() => Promise<unknown> | undefined) | undefined;
-	let step = vscode.l10n.t('connect to the Orchestrator');
+	let step = vscode.l10n.t('connect to Facade Code Framework');
 	try {
 		await startDaemon({
 			home: deps.root,
@@ -91,8 +91,8 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			log: log.event
 		}, '--takeover');
 		const program = path.join(deps.root, 'framework', FACADE_PROGRAM);
-		log.event(`Using Facade program ${program}.`);
-		const link = await connectOrchestrator({
+		log.event(`Using Facade Code Framework program ${program}.`);
+		const link = await connectFramework({
 			home: deps.root,
 			program,
 			build: String(context.extension.packageJSON.version),
@@ -110,7 +110,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		const terminalOwner = await optionalTerminalOwner(context, deps.home, log);
 		const colours = new WindowColours();
 		disposables.push(colours);
-		const terminals = new OrchestratorTerminals(link, {
+		const terminals = new FrameworkTerminals(link, {
 			media: vscode.Uri.joinPath(context.extensionUri, 'media'),
 			icon: cli => cli,
 			log: log.event,
@@ -120,7 +120,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		});
 		disposables.push(terminals);
 		step = vscode.l10n.t('set up the Panel');
-		const locations = new OrchestratorLocations({
+		const locations = new FrameworkLocations({
 			folders: workspaceFolders,
 			onDidChangeFolders: listener => vscode.workspace.onDidChangeWorkspaceFolders(() => listener(undefined)),
 			list: args => link.call('location.list', args),
@@ -166,7 +166,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		const notifyError = (error: unknown): void => {
 			reportError(messageOf(error), { settingsFile: error instanceof HostSettingsError });
 		};
-		const agents = new OrchestratorAgents({
+		const agents = new FrameworkAgents({
 			link, terminals, workspace, locations,
 			onDidChangeMachineNames: machineNames.event,
 			machineName: machineId => machines.get(machineId)?.name,
@@ -191,10 +191,10 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		const settings = frameworkSettings({ status: () => link.call('daemon.status', {}), log });
 		disposables.push(...registerWorktreeCommands({
 			locations, worktrees: createWorktreeService(locations, log, deps.home), notifyError: reportError, log,
-			// No Framework agent stops when the picker removes a folder from the workspace.
+			// No Facade Code Framework agent stops when the picker removes a folder from the workspace.
 			agents: { list: () => [] }
 		}));
-		disposables.push(...registerOrchestratorUi({
+		disposables.push(...registerFrameworkUi({
 			agents, locations, ready, log,
 			pickers: {
 				hostMachineId: () => link.machineId,

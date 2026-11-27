@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code: uruchamiaj razem agentów programistycznych AI",
 	"description": "Dostęp do Facade Code z poziomu VS Code. Uruchamiaj agentów programistycznych na swoich maszynach i otwieraj ich terminale obok swoich plików.",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "Nowy agent...",
 	"command.openTerminal": "Otwórz terminal",
 	"command.renameAgent": "Zmień nazwę agenta...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "Przenieś w górę",
 	"command.moveDown": "Przenieś w dół",
 	"command.revealAgent": "Pokaż agenta",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Składnik okna Facade Code",
-	"windowDescription": "Zamyka pozostawione karty terminali Facade Code po ponownym połączeniu okna zdalnego lub ponownym uruchomieniu rozszerzenia.",
+	"windowDescription": "Zamyka pozostawione karty terminali Facade Code Extension po ponownym połączeniu okna zdalnego lub ponownym uruchomieniu rozszerzenia.",
 	"command.filter": "Filtruj agentów...",
 	"command.showAgentLaunch": "Pokaż wiersz polecenia agenta...",
 	"command.showAgentsLog": "Pokaż dziennik agentów",
@@ -41,6 +41,6 @@
 	"command.continueSession": "Kontynuuj sesję...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Folder Facade używany w tym oknie do przechowywania ustawień i danych agentów oraz migracji ze starszych wersji. Podana tutaj ścieżka ma pierwszeństwo przed `FACADE_HOME` i ścieżką domyślną `~/.facade`.\n\n[Edytuj w facade.json](command:facade.openSettingsFile) aby zmienić YOLO, sugerowane nazwy i sposób uruchamiania CLI.",
+	"config.home": "Folder Facade Code Extension używany w tym oknie do przechowywania ustawień i danych agentów oraz migracji ze starszych wersji. Podana tutaj ścieżka ma pierwszeństwo przed `FACADE_HOME` i ścieżką domyślną `~/.facade`.\n\n[Edytuj w facade.json](command:facade.openSettingsFile) aby zmienić YOLO, sugerowane nazwy i sposób uruchamiania CLI.",
 	"config.home.pattern": "Ścieżka musi zaczynać się od ~/ lub być bezwzględna."
 }

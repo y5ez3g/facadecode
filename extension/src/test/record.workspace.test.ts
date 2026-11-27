@@ -171,7 +171,7 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 	});
 });
 
-suite('Record: the Facade directory (ARCHITECTURE-3.1)', () => {
+suite('Record: the Facade Code Extension directory (ARCHITECTURE-3.1)', () => {
 	test('FACADE_HOME names an absolute folder; a relative one is refused, never read as the person\'s own ~/.facade, and an empty one is unset', () => {
 		const absolute = path.resolve('facade-root');
 		assert.strictEqual(facadeHome({ FACADE_HOME: absolute }), path.join(absolute, 'extension'));

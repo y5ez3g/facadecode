@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code: 複数の AI コーディングエージェントを一緒に実行",
 	"description": "VS Code から Facade Code を使用できます。各マシンでコーディングエージェントを起動し、ファイルの隣にそのターミナルを開けます。",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "新しいエージェント...",
 	"command.openTerminal": "ターミナルを開く",
 	"command.renameAgent": "エージェントの名前を変更...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "上へ移動",
 	"command.moveDown": "下へ移動",
 	"command.revealAgent": "エージェントを表示",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Facade Code ウィンドウ コンポーネント",
-	"windowDescription": "リモートウィンドウの再接続時や拡張機能の再起動時に、残っている古い Facade Code ターミナルタブを閉じます。",
+	"windowDescription": "リモートウィンドウの再接続時や拡張機能の再起動時に、残っている古い Facade Code Extension ターミナルタブを閉じます。",
 	"command.filter": "エージェントをフィルター...",
 	"command.showAgentLaunch": "エージェントのコマンド ラインを表示...",
 	"command.showAgentsLog": "Agent のログを表示",
@@ -41,6 +41,6 @@
 	"command.continueSession": "セッションを続行...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "このウィンドウで設定、エージェントの記録、旧バージョンからの移行に使う Facade のホームフォルダーです。ここで指定したパスは `FACADE_HOME` や既定の `~/.facade` より優先されます。\n\n[facade.json で編集](command:facade.openSettingsFile)で YOLO、候補の名前、CLI の起動方法を変更できます。",
+	"config.home": "このウィンドウで設定、エージェントの記録、旧バージョンからの移行に使う Facade Code Extension のホームフォルダーです。ここで指定したパスは `FACADE_HOME` や既定の `~/.facade` より優先されます。\n\n[facade.json で編集](command:facade.openSettingsFile)で YOLO、候補の名前、CLI の起動方法を変更できます。",
 	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。"
 }

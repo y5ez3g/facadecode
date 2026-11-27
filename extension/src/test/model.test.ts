@@ -13,7 +13,7 @@ import { TestEmitter } from './withModules';
 import { placeOf } from './detailLines';
 
 const WORDS: CardWords = {
-	orchestrator: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
+	framework: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
 		address: value => `Agent reference: ${value}`, session: value => `Session: ${value}`, name: value => `Name: ${value}` },
 	title: value => `Title: ${value}`,
 	location: value => `Location: ${value}`,
@@ -24,9 +24,9 @@ const WORDS: CardWords = {
 	runningOn: machine => `Running on ${machine}`,
 	connectionLost: 'Connection lost · reconnecting',
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', started: 'New session started', resumed: 'Agent resumed', continued: 'Session continued', working: 'Working', notWorking: 'Idle', error: reason => `Error · ${reason}`,
-	activityUnavailable: 'State unavailable · check terminal', activityUnknown: why => `State ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Facade tools not connected yet', needsPermission: 'Permission needed', needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed',
+	activityUnavailable: 'State unavailable · check terminal', activityUnknown: why => `State ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Facade Code Framework tools not connected yet', needsPermission: 'Permission needed', needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed',
 	exitedWithCode: code => `Process exited · code ${code}`, endedBySignal: signal => `Process terminated · ${signal}`,
-	toolsUnavailable: problem => `Facade tools unavailable · ${problem}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
+	toolsUnavailable: problem => `Facade Code Framework tools unavailable · ${problem}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Last input: ${line}`, saidByFacade: (line: string) => `Facade Code Framework result: ${line}`,
 	exitUnknown: 'Process lost · reason unknown', startFailed: reason => `Start failed · ${reason}`, worktreeFailed: reason => `Worktree failed · ${reason}`
 };
 
@@ -113,9 +113,9 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 	let states: PanelState[];
 	let settle: () => void;
 
-	const make = (ready: Promise<unknown> = Promise.resolve(), orchestrator = false) => {
-		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage, undefined, orchestrator),
-			words: WORDS, remote: false, ready, timers: clock, orchestrator });
+	const make = (ready: Promise<unknown> = Promise.resolve(), framework = false) => {
+		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage, undefined, framework),
+			words: WORDS, remote: false, ready, timers: clock, framework });
 		model.onDidChange(state => states.push(state));
 		models.push(model);
 		return model;
@@ -236,8 +236,8 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		model.dispose();
 		agents = new Agents();
 		storage = new Memory();
-		const first = run(1, { orchestrator: { reference: { machine_id: 'machine-one', agent_id: 'a1' }, state: 'idle' } });
-		const second = run(2, { alias: '#a1', orchestrator: { reference: { machine_id: 'machine-two', agent_id: 'a1' }, state: 'ended' },
+		const first = run(1, { framework: { reference: { machine_id: 'machine-one', agent_id: 'a1' }, state: 'idle' } });
+		const second = run(2, { alias: '#a1', framework: { reference: { machine_id: 'machine-two', agent_id: 'a1' }, state: 'ended' },
 			lifecycle: 'ended', remoteMachine: 'gpu', pinnable: true });
 		model = make(Promise.resolve(), true);
 		agents.add(second);
@@ -281,7 +281,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 
 	test('PANEL-4.3: alternative machines combine with CLI and Pin filters without changing the workspace roster', async () => {
 		const managed = (n: number, machine: string, cli: string, pin?: string) => run(n, {
-			cli, pin, orchestrator: { reference: { machine_id: machine, agent_id: `a${n}` }, state: 'idle' }
+			cli, pin, framework: { reference: { machine_id: machine, agent_id: `a${n}` }, state: 'idle' }
 		});
 		agents.add(managed(1, 'local', 'claude', 'pin-1'));
 		agents.add(managed(2, 'gpu', 'claude', 'pin-2'));
@@ -512,7 +512,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([shown, own, model.state().cards.map(card => card.runId)], [['folder', true], [id(1)], []]);
 	});
 
-	test('PANEL-1.5, CLIS-2.4: the model says of each card whether Facade has a history reader for its CLI: a custom CLI\'s untitled card says its title is unavailable, a built-in\'s that there is none yet', async () => {
+	test('PANEL-1.5, CLIS-2.4: the model says of each card whether Facade Code Extension has a history reader for its CLI: a custom CLI\'s untitled card says its title is unavailable, a built-in\'s that there is none yet', async () => {
 		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(new Memory(), { event: () => undefined }), words: WORDS, remote: false, ready: Promise.resolve(), readsTitles: cli => cli !== 'my-cli' });
 		agents.add(run(1, { cli: 'my-cli', displayName: 'my-cli' }));
 		agents.add(run(2));

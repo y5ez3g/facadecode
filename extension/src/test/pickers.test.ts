@@ -8,7 +8,7 @@ import * as path from 'path';
 import type { AgentListEntry, CliListArgs, LocationListArgs, MachineInfo, ResumeCandidate, ResumeListArgs, StartArgs } from '../base/frameworkProtocol';
 import type { Catalog, Location, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
-import type { FrameworkPickerDeps } from '../ui/pickers/orchestrator';
+import type { FrameworkPickerDeps } from '../ui/pickers/framework';
 import { TestEmitter, withModules } from './withModules';
 
 const BACK_BUTTON = { id: 'back' };
@@ -162,7 +162,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Stop Ag
 	});
 
 	function frameworkPickers(overrides: Partial<FrameworkPickerDeps>) {
-		const { createFrameworkPickers } = load<typeof import('../ui/pickers/orchestrator')>(require.resolve('../ui/pickers/orchestrator'));
+		const { createFrameworkPickers } = load<typeof import('../ui/pickers/framework')>(require.resolve('../ui/pickers/framework'));
 		const unexpected = () => assert.fail('unexpected picker operation');
 		return createFrameworkPickers({
 			media: { path: '/extension/media' } as never,
@@ -328,14 +328,14 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Stop Ag
 
 	suite('New Agent', () => {
 		test('RULES-6.5: New Agent chooses a saved machine and folder before loading its CLIs; the branch is sent at launch', async () => {
-			const { OrchestratorLocations } = load<typeof import('../host/framework/catalog')>(require.resolve('../host/framework/catalog'));
+			const { FrameworkLocations } = load<typeof import('../host/framework/catalog')>(require.resolve('../host/framework/catalog'));
 			const calls: unknown[][] = [];
 			const starts: StartArgs[] = [];
 			const selected: string[] = [];
 			const remoteScope = { kind: 'machine', machine: '1234abcd' } as const;
 			const foldersChanged = new TestEmitter<void>();
 			ui.workspaceFolders = [SHOP, DOCS];
-			const locations = new OrchestratorLocations({
+			const locations = new FrameworkLocations({
 				folders: () => ui.workspaceFolders,
 				onDidChangeFolders: foldersChanged.event,
 				list: async args => {
@@ -443,7 +443,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Stop Ag
 		});
 
 		test('RULES-6.5: same-name machines keep their canonical selectors, including a saved sleeping machine', async () => {
-			const { OrchestratorLocations } = load<typeof import('../host/framework/catalog')>(require.resolve('../host/framework/catalog'));
+			const { FrameworkLocations } = load<typeof import('../host/framework/catalog')>(require.resolve('../host/framework/catalog'));
 			const localId = '11111111-0000-4000-8000-000000000000';
 			const first: MachineInfo = {
 				machine_id: '22222222-0000-4000-8000-000000000000', short_id: '22222222', name: 'buildbox', selector: '22222222', state: 'online', connections: []
@@ -463,7 +463,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Stop Ag
 			const starts: StartArgs[] = [];
 			const selected: string[] = [];
 			const scope = (machine: string) => ({ kind: 'machine', machine });
-			const locations = new OrchestratorLocations({
+			const locations = new FrameworkLocations({
 				folders: () => ui.workspaceFolders,
 				onDidChangeFolders: new TestEmitter<void>().event,
 				list: async args => {

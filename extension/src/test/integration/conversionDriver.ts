@@ -2,9 +2,9 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The conversion journey's driver, an extension beside Facade Code in an editor that runs no extension tests: the editor refuses
+// The conversion journey's driver, an extension beside Facade Code Extension in an editor that runs no extension tests: the editor refuses
 // to enter a workspace in a test run, which is the journey (ARCHITECTURE-2.2). In the folder window it checks Pin and Unpin
-// across real reloads, then adds a folder. The editor restarts the extensions, this one with them, which then says what Facade
+// across real reloads, then adds a folder. The editor restarts the extensions, this one with them, which then says what Facade Code Extension
 // shows. Each step is a line of FACADE_IT_CONVERSION for the runner to judge; setup runs only on the first activation.
 
 import * as fs from 'fs';
@@ -25,12 +25,12 @@ const NATIVE = process.env.FACADE_IT_NATIVE;
 const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
 const HOME = process.env.FACADE_HOME!;
 
-/** The active agents in the Orchestrator's roster, by address. */
+/** The active agents in Facade Code Framework's roster, by address. */
 async function frameworkAgents(): Promise<string[]> {
 	return (await frameworkCall(HOME, 'agent.list', {})).agents.map(agent => agent.address);
 }
 
-/** Read the native session from the legacy run file or the Orchestrator's Inspect response. */
+/** Read the native session from the legacy run file or Facade Code Framework's Inspect response. */
 async function sessionOf(runId: string, alias: string): Promise<string | undefined> {
 	if (!FRAMEWORK) {
 		try {
@@ -147,13 +147,13 @@ export async function activate(): Promise<void> {
 				if (!now.cardCount) {
 					await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 				}
-				// The Framework shows a pending card before framework assigns its agent ID.
+				// The Facade Code Framework shows a pending card before framework assigns its agent ID.
 				return now.cards.find(each => each.alias);
 			});
 			const alias = card.alias;
 			const pid = await until(`the CLI to start for ${alias}`, async () => pidOf(alias));
 			// Its terminal open, as a person sees it before adding a folder: one the restart beat to opening tells the editor no
-			// process, which leaves its tab beside the new one, as Facade retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
+			// process, which leaves its tab beside the new one, as Facade Code Extension retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
 			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => unspun(each.name).startsWith(card.name)));
 			let opened = false;
 			void Promise.resolve(terminal.processId).then(() => { opened = true; }, () => { opened = true; });
@@ -190,7 +190,7 @@ export async function activate(): Promise<void> {
 			const alias = card.alias;
 			const pid = await until('the restored CLI process', async () => pidOf(alias));
 			const session = await until('the restored native session identity', async () => sessionOf(card.runId, alias));
-			// The reopened window's cards and terminals, and the Framework records in this Facade home (RULES-4.1).
+			// The reopened window's cards and terminals, and the Facade Code Framework records in this Facade home (RULES-4.1).
 			const { cards } = await state();
 			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length, cards: cards.map(each => ({ alias: each.alias, dot: each.dot })), ...FRAMEWORK ? { framework: await frameworkAgents() } : {} });
 			return;
@@ -234,7 +234,7 @@ export async function activate(): Promise<void> {
 			.map(each => unspun(each.name));
 		await until('one live terminal of the agent', async () => terminals().filter(name => name === card?.name).length === 1 || undefined);
 		if (FRAMEWORK && card) {
-			await until('one Orchestrator view of the original agent', async () =>
+			await until('one Facade Code Framework view of the original agent', async () =>
 				(await frameworkCall(HOME, 'agent.inspect', { target: card.alias })).viewers.length === 1 || undefined);
 		}
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length,

@@ -127,7 +127,7 @@ function readCutover(home: string): CutoverRecord {
 			isLegacyWorkspaceKey(owner) && Array.isArray(pins) && pins.every(isPin))
 		|| value.unrecognizedPins !== undefined && (!isJsonObject(value.unrecognizedPins)
 			|| !Object.entries(value.unrecognizedPins).every(([owner, pins]) => isLegacyWorkspaceKey(owner) && Array.isArray(pins)))) {
-		throw new InvalidCutoverRecord(`Invalid Facade legacy cutover record: ${file}`);
+		throw new InvalidCutoverRecord(`Invalid Facade Code Extension legacy cutover record: ${file}`);
 	}
 	return value as unknown as CutoverRecord;
 }
@@ -458,7 +458,7 @@ function pendingStatus(record: CutoverRecord, fresh: Scan, owner: string): Cutov
 	return { ready: false, unavailable, unconfirmed: pending.length, pendingExits, waitingForOwner: 0 };
 }
 
-/** ARCHITECTURE-1.4. Inventory elsewhere can qualify a Pin, but cannot keep this window out of Framework. */
+/** ARCHITECTURE-1.4. Inventory elsewhere can qualify a Pin, but cannot keep this window out of Facade Code Framework. */
 export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScope): Promise<CutoverState> {
 	if (!scope) { return READY; }
 	return withLongFileLock(journal(home), async () => {

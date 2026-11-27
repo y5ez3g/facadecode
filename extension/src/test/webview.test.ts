@@ -1446,7 +1446,7 @@ suite('The agent panel in Chromium', function () {
 		], [0]]);
 	});
 
-	test('the Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)', async () => {
+	test('the Facade Code Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)', async () => {
 		const older = await evaluate('panel.page');
 		await load();
 		const current = await evaluate('panel.page');

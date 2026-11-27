@@ -165,11 +165,11 @@ export interface McpServerLaunch {
 }
 
 /**
- * Why an agent runs without its Facade tools, as the card says it in plain words (PANEL-1.4): its CLI starts through cmd.exe, which
+ * Why an agent runs without its Facade Code Framework tools, as the card says it in plain words (PANEL-1.4): its CLI starts through cmd.exe, which
  * cannot take their arguments; the files they need could not be written; or its folder holds another `facade` skill or server.
  */
 /**
- * Why a run has no Facade tools, for the person's words (CLIS-2.2): its CLI runs through cmd.exe, its files could not be written, a
+ * Why a run has no Facade Code Framework tools, for the person's words (CLIS-2.2): its CLI runs through cmd.exe, its files could not be written, a
  * file of the person's is in the way, or a variable of theirs the tools' would go on could not be read.
  */
 export type ToolsProblem = 'cmd' | 'files' | 'conflict' | 'variable' | 'disconnected';
@@ -196,7 +196,7 @@ export interface LaunchPlan {
 	readonly version?: string;
 	readonly model?: string;
 	readonly effort?: string;
-	/** Whether the Facade MCP server was injected, and why not where it could not be (CLIS-2.2), by kind for the person's words. */
+	/** Whether the Facade Code Extension MCP server was injected, and why not where it could not be (CLIS-2.2), by kind for the person's words. */
 	readonly tools: { readonly state: 'injected' | 'not_injected' | 'unavailable'; readonly reason?: string; readonly problem?: ToolsProblem; readonly file?: string };
 	/** How a requested creation prompt goes in: in the invocation, or as the first message once the process starts. */
 	readonly prompt?: { readonly path: 'native' | 'post_start'; readonly capability: CapabilityState };
@@ -215,12 +215,12 @@ export interface LaunchPlan {
 	/**
 	 * What its start types before its first turn (COLLABORATION-2.2): `text` into its empty input, Enter once its screen shows `typed`,
 	 * then `close` once it shows `ready`, while it shows `opened` - regular expressions' sources - where its first turn could not use
-	 * the Facade tools otherwise.
+	 * the Facade Code Framework tools otherwise.
 	 */
 	readonly warmUp?: { readonly text: string; readonly typed: string; readonly ready: string; readonly opened: string; readonly close: string };
 }
 
-/** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
+/** A reason Facade Code Extension itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
 export interface FacadeReason {
 	readonly kind: string;
 	readonly values: readonly string[];
@@ -281,22 +281,22 @@ export interface ActivityReport {
 	readonly reason?: string;
 	/** Which reason it is, where activity is unknown: the card words it in the person's language (PANEL-1.4). */
 	readonly unknown?: ActivityUnknown;
-	/** `reason` in the person's words, where it is Facade's own English and differs: what the card says (UX-2.4). */
+	/** `reason` in the person's words, where it is Facade Code Extension's own English and differs: what the card says (UX-2.4). */
 	readonly reasonWords?: string;
-	/** A known error the CLI reported: its own words, else Facade's in English, as agents read it (UX-2.4). */
+	/** A known error the CLI reported: its own words, else Facade Code Extension's in English, as agents read it (UX-2.4). */
 	readonly error?: string;
-	/** `error` in the person's words, where it is Facade's own English and differs: what the card says (UX-2.4). */
+	/** `error` in the person's words, where it is Facade Code Extension's own English and differs: what the card says (UX-2.4). */
 	readonly errorWords?: string;
 	/** A missing supervisor connection is infrastructure uncertainty, independent of the CLI's activity. */
 	readonly disconnected?: boolean;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;
 	/**
-	 * Its run is still starting - its CLI has not shown its activity yet, or its Facade tools have not connected - within its bound
+	 * Its run is still starting - its CLI has not shown its activity yet, or its Facade Code Framework tools have not connected - within its bound
 	 * from its process start (CLIS-2.3).
 	 */
 	readonly awaitingActivity?: true;
-	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly (RULES-3.2). */
+	/** Its bound passed before its CLI showed its activity or its Facade Code Framework tools connected: it did not start properly (RULES-3.2). */
 	readonly notReady?: true;
 }
 
@@ -329,7 +329,7 @@ export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'f
 
 /**
  * Who sent what a card's second line says, as its record keeps it: another agent - its name, short ID and, from another window, that
- * window's label - or Facade, for a result; none is the person's own input (PANEL-1.4, 1.5).
+ * window's label - or Facade Code Extension, for a result; none is the person's own input (PANEL-1.4, 1.5).
  */
 export type SaidSource = { readonly kind: 'agent'; readonly name?: string; readonly alias?: string; readonly window?: string } | { readonly kind: 'facade' };
 
@@ -422,7 +422,7 @@ export interface RunMeta {
 	readonly pin?: string;
 	readonly sessionId?: string;
 	readonly exactResume?: boolean;
-	/** Whether its conversation is known to be saved - Facade resumed it, or its CLI named it - so that it can be pinned (LIFECYCLE-3.4). */
+	/** Whether its conversation is known to be saved - Facade Code Extension resumed it, or its CLI named it - so that it can be pinned (LIFECYCLE-3.4). */
 	readonly resumable?: boolean;
 	readonly alias: string;
 	readonly name: string;
@@ -452,7 +452,7 @@ export interface RunMeta {
 	readonly model?: string;
 	readonly effort?: string;
 	readonly version?: string;
-	/** Whether the Facade MCP server was injected and has connected, kept across a reload. */
+	/** Whether the Facade Code Extension MCP server was injected and has connected, kept across a reload. */
 	readonly tools?: RunFacts['tools'];
 	readonly toolsReason?: string;
 	readonly toolsProblem?: ToolsProblem;
@@ -517,7 +517,7 @@ export interface ConversationEntry {
 	readonly unavailable?: string;
 }
 
-/** A retained Framework agent offered by the Framework Resume picker under its original number (LIFECYCLE-3.2). */
+/** A retained Facade Code Framework agent offered by the Facade Code Framework Resume picker under its original number (LIFECYCLE-3.2). */
 export interface RetainedConversation {
 	readonly agent: string;
 	readonly alias: string;
@@ -536,7 +536,7 @@ export interface ConversationDiscoveryPort {
 	open(scope: { readonly environment: string; readonly directories: readonly string[] }): ConversationPager;
 }
 
-/** What Facade keeps of its own conversations so Resume/Pin restore their place and name (RULES-4.2, ARCHITECTURE-3.1). */
+/** What Facade Code Extension keeps of its own conversations so Resume/Pin restore their place and name (RULES-4.2, ARCHITECTURE-3.1). */
 export interface ConversationMeta {
 	readonly location?: LocationId;
 	readonly cwd: string;
@@ -602,7 +602,7 @@ export interface PinStore {
 	reorder(ids: readonly string[]): void;
 }
 
-/** A Framework Pin's identity is unique within a workspace, independently of which member window writes it. */
+/** A Facade Code Framework Pin's identity is unique within a workspace, independently of which member window writes it. */
 export interface FrameworkPinStore extends PinStore {
 	/** Saves the person's Pin, reusing an entry for its identity or a matching session-only Pin. */
 	pinAgent(pin: FrameworkPin): Pin;
@@ -664,7 +664,7 @@ export type Lifecycle = 'starting' | 'running' | 'ended';
 export type Phase = 'creating_worktree' | 'launching_cli' | 'running';
 
 export interface RunError {
-	/** The reason as the person reads it, in their language where Facade words it (UX-2.4). */
+	/** The reason as the person reads it, in their language where Facade Code Extension words it (UX-2.4). */
 	readonly reason: string;
 	/** The same reason in English, for agents and logs (UX-1.3, MCP-1.2), where it differs from `reason`. */
 	readonly english?: string;
@@ -675,15 +675,15 @@ export interface RunError {
 }
 
 export interface RunFacts {
-	/** The Orchestrator facts for a card on the Framework (PANEL-4.1). */
-	readonly orchestrator?: {
+	/** The Facade Code Framework facts for a card on the Facade Code Framework (PANEL-4.1). */
+	readonly framework?: {
 		readonly reference: AgentRef;
 		readonly state: Exclude<AgentState, 'online'>;
 		readonly machine?: string;
 	};
 	/** The running machine's display name when its ID differs from the editor window's. */
 	readonly remoteMachine?: string;
-	/** The copyable, machine-qualified Framework reference. */
+	/** The copyable, machine-qualified Facade Code Framework reference. */
 	readonly address?: string;
 	readonly sessionId?: string;
 	readonly resumable?: boolean;
@@ -731,11 +731,11 @@ export interface RunFacts {
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown (RULES-3.2). */
 	readonly reporting: boolean;
 	/**
-	 * Its process started, and its CLI has not shown its activity yet or its Facade tools have not connected: the run is still
+	 * Its process started, and its CLI has not shown its activity yet or its Facade Code Framework tools have not connected: the run is still
 	 * starting, within CLIS-2.3's bound (CLIS-2.3).
 	 */
 	readonly awaitingActivity?: true;
-	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly, red (RULES-3.2). */
+	/** Its bound passed before its CLI showed its activity or its Facade Code Framework tools connected: it did not start properly, red (RULES-3.2). */
 	readonly notReady?: true;
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	/**
@@ -756,7 +756,7 @@ export interface RunFacts {
 	/** A known opening. Resume reuses its agent number. Continue starts another agent from a saved session (PANEL-1.4). */
 	readonly sessionOpening?: 'started' | 'resumed' | 'continued';
 	/**
-	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade
+	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade Code Extension
 	 * delivered. Its card's second line says it from then on.
 	 */
 	readonly said?: string;
@@ -789,17 +789,17 @@ export interface RunFacts {
 	readonly version?: string;
 	/** Tool connection axis (RULES-3.1): injected and connecting, connected, failed to inject, or none injected (CLIS-2.2). */
 	readonly tools: 'connecting' | 'available' | 'unavailable' | 'not_injected';
-	/** Why the Facade tools could not be injected, where they could not: the CLI runs without them. English, for agents and the log. */
+	/** Why the Facade Code Framework tools could not be injected, where they could not: the CLI runs without them. English, for agents and the log. */
 	readonly toolsReason?: string;
 	/** The same, by kind, for the person's words (PANEL-1.4). */
 	readonly toolsProblem?: ToolsProblem;
-	/** For a conflict, the folder's file Facade would not overwrite, relative to its folder: what the person moves or renames. */
+	/** For a conflict, the folder's file Facade Code Extension would not overwrite, relative to its folder: what the person moves or renames. */
 	readonly toolsFile?: string;
 	/** The first line of an agent's creation prompt, for the card's second line (PANEL-1.4). */
 	readonly promptLine?: string;
 	/** The input reader of its ordinary-message input, as its launch planned it (CLIS-2.1). */
 	readonly inputAdapter?: string;
-	/** Whether Facade can read that input, and why not; none before its launch is planned. */
+	/** Whether Facade Code Extension can read that input, and why not; none before its launch is planned. */
 	readonly inputCapability?: CapabilityState;
 }
 
@@ -908,7 +908,7 @@ export interface StartOutcome {
 /** A new or retained run, or a conversation already running (LIFECYCLE-3.2). */
 export type ResumeResult = RunId | { readonly running: RunId | 'elsewhere' };
 
-/** An agent a Framework window can adopt via Go to Agent (LIFECYCLE-2.3). */
+/** An agent a Facade Code Framework window can adopt via Go to Agent (LIFECYCLE-2.3). */
 export interface OtherAgent {
 	readonly facts: RunFacts;
 	readonly windows: readonly { readonly label: string; readonly connected?: boolean }[];

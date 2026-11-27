@@ -61,7 +61,7 @@ export type WorktreeProblem =
 	 * through: nothing was deleted.
 	 */
 	| { readonly kind: 'worktree_linked'; readonly name: string; readonly link: string }
-	/** Git removed the worktree `name` from its repository but left its folder `folder` behind, which Facade does not delete itself. */
+	/** Git removed the worktree `name` from its repository but left its folder `folder` behind, which Facade Code Extension does not delete itself. */
 	| { readonly kind: 'worktree_left'; readonly name: string; readonly folder: string }
 	/** `git worktree remove` refused or failed; `detail` is what Git said. */
 	| { readonly kind: 'deletion_failed'; readonly name: string; readonly detail: string };
