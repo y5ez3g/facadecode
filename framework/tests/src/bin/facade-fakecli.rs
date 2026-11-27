@@ -3,7 +3,8 @@
 //! and the rest indented, and is logged so tests can check what arrived.
 //!
 //! Environment: `FAKECLI_LOG` sets the JSON-lines log path; `FAKECLI_SYNC=0` disables synchronized
-//! drawing; `FAKECLI_NAME` sets the header name; `FAKECLI_FDS` names a file to which it writes, at
+//! drawing; `FAKECLI_DRAW_INTERVAL_MS` sets the minimum time between redraws; `FAKECLI_NAME` sets the
+//! header name; `FAKECLI_FDS` names a file to which it writes, at
 //! start, the descriptors above 2 it was given; `FAKECLI_ARGS` names a file to which it writes, at
 //! start, its arguments as a JSON list; `FAKECLI_ENV` names a JSON output file for the variables
 //! listed in `FAKECLI_ENV_KEYS` (comma-separated); `FAKECLI_IGNORE_INPUT=1` makes it read no input, so
@@ -1998,6 +1999,8 @@ fn run() -> anyhow::Result<()> {
     } else {
         crossterm::terminal::size().unwrap_or((80, 24))
     };
+    let draw_interval = milliseconds("FAKECLI_DRAW_INTERVAL_MS");
+    let mut draw_at = Instant::now();
     loop {
         let mut dirty = false;
         // Nothing came for a while: an Escape that may begin a paste's start is the key alone, as a
@@ -2172,6 +2175,10 @@ fn run() -> anyhow::Result<()> {
                 .as_ref()
                 .is_some_and(|status| !status.reports.is_empty())
         {
+            if let Some(interval) = draw_interval {
+                std::thread::sleep(draw_at.saturating_duration_since(Instant::now()));
+                draw_at = Instant::now() + interval;
+            }
             app.draw(&mut out);
             if typed {
                 note_key_time("out", 0);
@@ -2329,7 +2336,8 @@ fn note_key_time(what: &str, bytes: usize) {
         .append(true)
         .open(path)
     {
-        let _ = writeln!(log, "{what} {at} {bytes}");
+        // The reader and renderer append independently. Keep each record in one write.
+        let _ = log.write_all(format!("{what} {at} {bytes}\n").as_bytes());
     }
 }
 

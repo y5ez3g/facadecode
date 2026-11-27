@@ -477,9 +477,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     wait clears.
     Under `answers_ask`, a fresh complete ordinary frame can settle the native question itself.
     The terminal reads the finite prefix of output already available before it tries an automatic
-    write. The actor uses those bytes to check the intent again. If a submission's sampled output
-    ends inside a redraw, the actor keeps the sample and waits for a complete frame to revalidate
-    the submission. An interaction or a person taking the input revokes the offer.
+    write. The actor uses those bytes to check the intent again.
     The typist changes the delivery phase only when the system takes the first write.
   - An ordinary message paste carries one trailing ASCII space when the message ends in a non-whitespace
     character. The stored message and initial prompt use their original text.

@@ -430,14 +430,18 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
     );
 }
 
-/// A CLI at work redraws frame after frame, and a frame reaches Facade in pieces. Messages go in one
-/// after the other all the same. The test CLI redraws whenever it reads something; the question in
-/// its name, which its terminal answers, has it redraw without a pause.
+/// A CLI redraws frame after frame while messages go in. Each draw queries its terminal's device
+/// attributes, and each reply triggers the next redraw. The redraw interval is shorter than the
+/// draft's settle time.
 #[test]
 fn messages_go_into_a_cli_that_redraws_without_a_pause() {
+    const ATTRIBUTES_REPLY: &[u8] = b"\x1b[?6c";
+    const PASTE_END: &[u8] = b"\x1b[201~";
+
     for sync in ["0", "1"] {
         let home = TestHome::new("busyredraw");
         let keys = home.folder().join("keys");
+        let key_times = home.folder().join("key-times");
         std::fs::write(&keys, []).unwrap();
         let worker = home.start_fake_with(
             "worker",
@@ -445,11 +449,15 @@ fn messages_go_into_a_cli_that_redraws_without_a_pause() {
                 ("FAKECLI_NAME", "worker\u{1b}[c"),
                 ("FAKECLI_SYNC", sync),
                 ("FAKECLI_KEYS", keys.to_str().unwrap()),
+                ("FAKECLI_KEYLOG", key_times.to_str().unwrap()),
+                ("FAKECLI_DRAW_INTERVAL_MS", "8"),
             ],
         );
         let answers = || {
             let read = std::fs::read(&keys).unwrap();
-            read.windows(3).filter(|bytes| bytes == b"\x1b[?").count()
+            read.windows(ATTRIBUTES_REPLY.len())
+                .filter(|&bytes| bytes == ATTRIBUTES_REPLY)
+                .count()
         };
         let drawn = answers();
         let sends: Vec<Sending> = (1..=5)
@@ -472,6 +480,26 @@ fn messages_go_into_a_cli_that_redraws_without_a_pause() {
         let expected: Vec<String> = (1..=5).map(|number| format!("{number}\nof five")).collect();
         let pasted: Vec<_> = expected.iter().map(|text| format!("{text} ")).collect();
         assert_eq!(texts, pasted, "sync {sync}: {submitted:?}");
+        let wire = std::fs::read(keys).unwrap();
+        let mut input = wire.as_slice();
+        for _ in 0..5 {
+            let paste_end = input
+                .windows(PASTE_END.len())
+                .position(|bytes| bytes == PASTE_END)
+                .expect("bracketed paste");
+            let after_paste = &input[paste_end + PASTE_END.len()..];
+            let enter = after_paste
+                .iter()
+                .position(|&key| key == b'\r')
+                .expect("submit");
+            assert!(
+                after_paste[..enter]
+                    .windows(ATTRIBUTES_REPLY.len())
+                    .any(|bytes| bytes == ATTRIBUTES_REPLY),
+                "sync {sync}: expected a redraw after paste and before Enter"
+            );
+            input = &after_paste[enter + 1..];
+        }
     }
 }
 
