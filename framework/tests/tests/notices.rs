@@ -1276,7 +1276,16 @@ fn a_continuous_error_reports_again_only_after_recovery_and_30_more_seconds() {
             reaches(&home, "child", "unknown");
         }
     }
-    assert_eq!(system_inbox(&mut tools).len(), 2, "{:?}", notices(&home));
+    // The fake CLI logs Enter before its next frame confirms the submission.
+    let mut inbox = Vec::new();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            inbox = system_inbox(&mut tools);
+            inbox.len() >= 2
+        }),
+        "the submitted notices did not settle in the inbox: {inbox:?}"
+    );
+    assert_eq!(inbox.len(), 2, "{inbox:?}");
 }
 
 #[test]
