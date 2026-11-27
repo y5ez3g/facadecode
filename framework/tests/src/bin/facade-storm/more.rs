@@ -279,6 +279,7 @@ fn start_by(
         arguments["prompt"] = json!(prompt);
     }
     let began = Instant::now();
+    let called_us = crate::person::now_us();
     let started = mcp.call("start_agent", arguments)?;
     let took = began.elapsed().as_secs_f64() * 1000.0;
     anyhow::ensure!(started["status"] == "success", "start_agent: {started}");
@@ -289,6 +290,9 @@ fn start_by(
         .call("agent.inspect", json!({ "target": address }))?;
     let agent = crate::lab::Lab::agent(&info["agent"])?;
     field.watch(&agent, &[]);
+    if let Some(prompt) = prompt {
+        field.note_first_prompt(&agent, prompt, called_us, took);
+    }
     Ok((agent, took))
 }
 
@@ -356,6 +360,7 @@ fn s2(name: &str, out: &Path) -> anyhow::Result<Outcome> {
     let pending: Vec<_> = (0..30)
         .map(|n| {
             let prompt = format!("first-{n:02} do the thing");
+            let called_us = crate::person::now_us();
             let answer = mcp.begin(
                 "start_agent",
                 json!({
@@ -363,12 +368,12 @@ fn s2(name: &str, out: &Path) -> anyhow::Result<Outcome> {
                     "prompt": prompt,
                 }),
             );
-            (n, prompt, answer)
+            (n, prompt, called_us, answer)
         })
         .collect();
     let mut calls = Vec::new();
     let mut agents = Vec::new();
-    for (n, prompt, answer) in pending {
+    for (n, prompt, called_us, answer) in pending {
         let Ok((at, answer)) = answer.recv_timeout(Duration::from_secs(90)) else {
             field.violation("I11", format!("start {n} was never answered"));
             continue;
@@ -385,11 +390,18 @@ fn s2(name: &str, out: &Path) -> anyhow::Result<Outcome> {
             .call("agent.inspect", json!({ "target": started["data"]["id"] }))?;
         let agent = crate::lab::Lab::agent(&info["agent"])?;
         field.watch(&agent, &[]);
+        field.note_first_prompt(
+            &agent,
+            &prompt,
+            called_us,
+            (at.duration_since(began)).as_secs_f64() * 1000.0,
+        );
         agents.push((agent, prompt));
     }
     for (agent, prompt) in &agents {
         first_is(&field, agent, prompt, Duration::from_secs(60));
     }
+    field.note("start_requests", json!(30));
     field.note("answered_after_ms", crate::judge::summary(calls));
     drop(mcp);
     field.finish(out)

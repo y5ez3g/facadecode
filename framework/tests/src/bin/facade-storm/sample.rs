@@ -4,6 +4,10 @@ use std::time::Instant;
 
 use facade_scenarios::serde_json::{Value, json};
 
+pub fn pr_metrics() -> bool {
+    std::env::var("FACADE_STORM_PR_METRICS").as_deref() == Ok("1")
+}
+
 /// One process at one moment.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Usage {
@@ -54,14 +58,34 @@ impl Over {
     }
 
     pub fn end(&self) -> Value {
-        let after = one(self.pid);
+        self.report(one(self.pid))
+    }
+
+    /// Takes measurements only from a daemon that can be sampled at both ends.
+    pub fn observed(pid: i32) -> Option<Self> {
+        Some(Self {
+            pid,
+            began: Instant::now(),
+            before: usage(&[pid])[0]?,
+        })
+    }
+
+    pub fn observed_end(&self, pid: Option<i32>) -> Option<Value> {
+        if pid != Some(self.pid) {
+            return None;
+        }
+        let after = usage(&[self.pid])[0]?;
+        (after.cpu_s >= self.before.cpu_s).then(|| self.report(after))
+    }
+
+    fn report(&self, after: Usage) -> Value {
         let seconds = self.began.elapsed().as_secs_f64();
         json!({
             "seconds": round(seconds),
             "cpu_percent": round(100.0 * (after.cpu_s - self.before.cpu_s) / seconds),
             "cpu_ms": round(1000.0 * (after.cpu_s - self.before.cpu_s)),
             "switches_per_s": round(after.switches.saturating_sub(self.before.switches) as f64 / seconds),
-            "private_mb": round(after.private_mb),
+            "private_mb_before": round(self.before.private_mb), "private_mb": round(after.private_mb),
             "private_mb_grew": round(after.private_mb - self.before.private_mb),
             "handles": after.handles, "threads": after.threads,
         })

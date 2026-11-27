@@ -5,16 +5,60 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use facade_base::model::message::FACADE;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
 use crate::client::{self, Mcp};
 use crate::judge::{Kind, Verdict, Violation, kind, short};
 use crate::lab::{Agent, Lab};
+use crate::person::now_us;
 use crate::storm::{Hogs, Outcome};
 
 const ROUNDS: usize = 30;
 const EACH: usize = 4;
+const LATE_WAIT: Duration = Duration::from_secs(60);
+
+struct DaemonGenerations {
+    current: Option<crate::sample::Over>,
+    samples: Vec<Value>,
+    machine: Option<(f64, f64)>,
+}
+
+impl DaemonGenerations {
+    fn start(lab: &Lab) -> Option<Self> {
+        crate::sample::pr_metrics().then(|| Self {
+            current: lab
+                .home
+                .daemon_pid()
+                .and_then(crate::sample::Over::observed),
+            samples: Vec::new(),
+            machine: crate::sample::machine(),
+        })
+    }
+
+    fn capture(&mut self, lab: &Lab) {
+        self.samples.push(json!(
+            self.current
+                .take()
+                .and_then(|usage| usage.observed_end(lab.home.daemon_pid()))
+        ));
+    }
+
+    fn restart(&mut self, lab: &Lab) {
+        self.current = lab
+            .home
+            .daemon_pid()
+            .and_then(crate::sample::Over::observed);
+    }
+
+    fn finish(mut self, lab: &Lab, stats: &mut Value, latencies: Vec<f64>) {
+        self.capture(lab);
+        stats["daemon_generations"] = json!(self.samples);
+        stats["machine_cpu_percent"] = json!(crate::sample::machine_percent(self.machine));
+        stats["delivery_latency_ms"] = json!(latencies);
+    }
+}
 
 /// Kills the daemon, and connects to the one the keeper starts after it.
 fn crash(lab: &mut Lab) -> anyhow::Result<()> {
@@ -39,24 +83,57 @@ fn named(lab: &Lab, name: &str) -> Option<Agent> {
     Lab::agent(&info).ok()
 }
 
-fn stop(lab: &Lab, agent: &Agent) {
-    let _ = lab.wire.call(
+fn stop(lab: &Lab, agent: &Agent) -> anyhow::Result<Value> {
+    lab.wire.call(
         "agent.stop",
         json!({ "selection": { "kind": "targets", "targets": [agent.reference] } }),
-    );
+    )
 }
 
 /// The notices `agent`'s CLI was given that name `about`.
-fn notices(lab: &Lab, agent: &Agent, about: &str) -> Vec<String> {
+fn notices(lab: &Lab, agent: &Agent, about: &str) -> Vec<(u64, String)> {
     let named = format!("({about})");
     lab.tape(&agent.id)
         .submissions
         .iter()
         .filter_map(|submission| match kind(submission) {
-            Kind::Notice(text) if text.contains(&named) => Some(text),
+            Kind::Notice(text) if text.contains(&named) => Some((submission.us, text)),
             _ => None,
         })
         .collect()
+}
+
+fn notice_sample(lab: &Lab, boss: &Agent) -> anyhow::Result<Value> {
+    let started_us = now_us();
+    let rows: Vec<Value> = lab
+        .rows()?
+        .into_values()
+        .filter(|row| row.from == FACADE && row.to == boss.id)
+        .map(|row| {
+            json!({
+                "number": row.number, "body": row.text, "status": row.status,
+                "reason": row.reason, "created_ms": row.at_ms, "delivered_ms": row.delivered_ms,
+            })
+        })
+        .collect();
+    let received: Vec<Value> = lab
+        .tape(&boss.id)
+        .submissions
+        .iter()
+        .filter_map(|submission| match kind(submission) {
+            Kind::Notice(text) => Some(json!({ "us": submission.us, "text": text })),
+            _ => None,
+        })
+        .collect();
+    let process = lab
+        .inspect(boss)
+        .map(|info| info["agent"]["process"].clone())
+        .unwrap_or_else(|err| json!({ "error": format!("{err:#}") }));
+    Ok(json!({
+        "started_us": started_us, "completed_us": now_us(),
+        "daemon_pid": lab.home.daemon_pid(), "creator_process": process,
+        "rows": rows, "received": received,
+    }))
 }
 
 fn outcome(
@@ -89,34 +166,45 @@ pub fn prompts(name: &str, out: &Path) -> anyhow::Result<Outcome> {
     let boss = lab.start_fake("boss", &[])?;
     lab.wait_ready(std::slice::from_ref(&boss), Duration::from_secs(60))?;
     let mcp = Mcp::managed_process(&lab.home, &boss.id)?;
+    let mut usage = DaemonGenerations::start(&lab);
+    let mut latencies = Vec::new();
     let hogs = Hogs::start(14);
     let mut verdict = Verdict::default();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for round in 0..ROUNDS {
         let delay = Duration::from_millis((round as u64 * 137) % 2600);
         let prompt = |k: usize| format!("z{round:02}-{k} the first line\nthe second\nthe third");
-        let answers: Vec<Value> = std::thread::scope(|scope| -> anyhow::Result<Vec<Value>> {
+        let answers = std::thread::scope(|scope| -> anyhow::Result<Vec<(u64, Value)>> {
             let calls: Vec<_> = (0..EACH)
                 .map(|k| {
                     let (mcp, folder) = (&mcp, &lab.home.project);
                     let text = prompt(k);
                     scope.spawn(move || {
-                        mcp.call(
-                            "start_agent",
-                            json!({
-                                "cli": "fake", "name": format!("z{round:02}-{k}"),
-                                "folder": folder, "prompt": text,
-                            }),
-                        )
-                        .unwrap_or_else(|err| json!({ "error": format!("{err:#}") }))
+                        let called = now_us();
+                        let answer = mcp
+                            .call(
+                                "start_agent",
+                                json!({
+                                    "cli": "fake", "name": format!("z{round:02}-{k}"),
+                                    "folder": folder, "prompt": text,
+                                }),
+                            )
+                            .unwrap_or_else(|err| json!({ "error": format!("{err:#}") }));
+                        (called, answer)
                     })
                 })
                 .collect();
             std::thread::sleep(delay);
+            if let Some(usage) = &mut usage {
+                usage.capture(&lab);
+            }
             let old = lab.home.kill_daemon();
             lab.home
                 .wait_for_daemon_after(old, Duration::from_secs(30))
                 .ok_or_else(|| anyhow::anyhow!("no daemon came after {old}"))?;
+            if let Some(usage) = &mut usage {
+                usage.restart(&lab);
+            }
             Ok(calls
                 .into_iter()
                 .map(|call| call.join().expect("a start"))
@@ -153,6 +241,9 @@ pub fn prompts(name: &str, out: &Path) -> anyhow::Result<Outcome> {
                 (_, 0) => "not whole",
                 _ => "more than once",
             };
+            if usage.is_some() && what == "whole, once" {
+                latencies.push(tape.submissions[0].us.saturating_sub(answers[k].0) as f64 / 1000.0);
+            }
             *counts.entry(what.into()).or_default() += 1;
             if what != "whole, once" && what != "not submitted, and told" {
                 verdict.violations.push(Violation {
@@ -167,33 +258,40 @@ pub fn prompts(name: &str, out: &Path) -> anyhow::Result<Outcome> {
                             .map(|one| short(&format!("{:?}", one.pieces)))
                             .collect::<Vec<_>>(),
                         short(tape.last_box()),
-                        answers[k]["status"]
+                        answers[k].1["status"]
                     ),
                     class: None,
                 });
             }
         }
         for child in children.iter().flatten() {
-            stop(&lab, child);
+            let _ = stop(&lab, child);
         }
         println!("   round {round}: {counts:?}");
     }
     drop(hogs);
     drop(mcp);
     verdict.stats = json!({ "starts": ROUNDS * EACH, "first_messages": counts });
+    if let Some(usage) = usage {
+        usage.finish(&lab, &mut verdict.stats, latencies);
+    }
     outcome(name, out, &lab, &boss, verdict, began)
 }
 
 /// Agents stopped by a person before their first message, and the daemon killed right after.
 pub fn ends(name: &str, out: &Path) -> anyhow::Result<Outcome> {
     let began = Instant::now();
+    let watch_late = std::env::var("FACADE_STORM_Z2_WAIT_60").as_deref() == Ok("1");
     let mut lab = Lab::fake("crash-ends")?;
     let boss = lab.start_fake("boss", &[])?;
     lab.wait_ready(std::slice::from_ref(&boss), Duration::from_secs(60))?;
     let mcp = Mcp::managed_process(&lab.home, &boss.id)?;
+    let mut usage = DaemonGenerations::start(&lab);
+    let mut latencies = Vec::new();
     let hogs = Hogs::start(14);
     let mut verdict = Verdict::default();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut stops = Vec::new();
     for round in 0..ROUNDS {
         let stopped_after = Duration::from_millis((round as u64 * 61) % 900);
         let killed_after = Duration::from_millis((round as u64 * 37) % 400);
@@ -215,12 +313,29 @@ pub fn ends(name: &str, out: &Path) -> anyhow::Result<Outcome> {
             children.extend(named(&lab, &format!("e{round:02}-{k}")));
         }
         std::thread::sleep(stopped_after);
+        let mut stopped_at = BTreeMap::new();
         for child in &children {
-            stop(&lab, child);
+            if usage.is_some() {
+                stopped_at.insert(&child.id, now_us());
+            }
+            let result = stop(&lab, child);
+            if watch_late {
+                let reply = result.unwrap_or_else(|err| json!({ "error": format!("{err:#}") }));
+                stops.push(json!({
+                    "round": round, "daemon_killed": kills, "first_prompt": prompts,
+                    "agent": child.id, "address": child.address, "reply": reply,
+                }));
+            }
         }
         std::thread::sleep(killed_after);
         if kills {
+            if let Some(usage) = &mut usage {
+                usage.capture(&lab);
+            }
             crash(&mut lab)?;
+            if let Some(usage) = &mut usage {
+                usage.restart(&lab);
+            }
         }
         // Until the one who started them was told of each end, then long enough for a second time.
         wait_until(Duration::from_secs(35), || {
@@ -231,6 +346,9 @@ pub fn ends(name: &str, out: &Path) -> anyhow::Result<Outcome> {
         std::thread::sleep(Duration::from_secs(3));
         for child in &children {
             let told = notices(&lab, &boss, &child.address);
+            if let ([(received, _)], Some(started)) = (told.as_slice(), stopped_at.get(&child.id)) {
+                latencies.push(received.saturating_sub(*started) as f64 / 1000.0);
+            }
             let what = format!(
                 "told {} times{}{}",
                 told.len(),
@@ -267,8 +385,22 @@ pub fn ends(name: &str, out: &Path) -> anyhow::Result<Outcome> {
         }
         println!("   round {round}: {counts:?}");
     }
+    verdict.stats = json!({ "ended": ROUNDS * EACH, "told": counts });
+    if let Some(usage) = usage {
+        usage.finish(&lab, &mut verdict.stats, latencies);
+    }
+    if watch_late {
+        // The ordinary verdict is fixed. Leave the creator and daemon running for both samples.
+        let before = notice_sample(&lab, &boss)?;
+        println!(
+            "   watching end notices for another {} s",
+            LATE_WAIT.as_secs()
+        );
+        std::thread::sleep(LATE_WAIT);
+        let after = notice_sample(&lab, &boss)?;
+        verdict.stats["late_notices"] = json!({ "stops": stops, "before": before, "after": after });
+    }
     drop(hogs);
     drop(mcp);
-    verdict.stats = json!({ "ended": ROUNDS * EACH, "told": counts });
     outcome(name, out, &lab, &boss, verdict, began)
 }

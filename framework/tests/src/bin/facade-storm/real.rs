@@ -1,5 +1,4 @@
-//! Real CLIs as recipients: a Facade home of the storm's own with the person's own home folder and
-//! logins, the cheapest models, and what each CLI submitted as its own saved session says.
+//! Real CLIs as recipients in an isolated Facade home, verified against each CLI's saved session.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -88,7 +87,8 @@ pub fn cli(name: &str) -> anyhow::Result<&'static Cli> {
         .with_context(|| format!("no CLI under test is named {name}"))
 }
 
-const MUSE_BUSY_DELAY_MS: &str = "1800";
+const MUSE_BUSY_DELAY_MS: u64 = 1_800;
+const MUSE_KEYS_DELAY_MS: u64 = 12_000;
 
 /// The variables a person's terminal has: this process's, without any run's or Facade's own.
 pub fn person_env() -> BTreeMap<String, String> {
@@ -103,10 +103,43 @@ pub fn person_env() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// The daemon and every starter must agree about where the isolated CLI keeps its files.
+pub fn lab_env(home: &TestHome) -> BTreeMap<String, String> {
+    let mut env = person_env();
+    env.retain(|key, _| {
+        PASSED_THROUGH
+            .iter()
+            .chain(&["PATH", "TERM", "COLORTERM", "FORCE_COLOR"])
+            .any(|name| name.eq_ignore_ascii_case(key))
+    });
+    env.extend(
+        home.isolating_env()
+            .into_iter()
+            .filter(|(key, _)| *key != "PATH")
+            .map(|(key, value)| (key.to_string(), value)),
+    );
+    for (name, path) in [
+        ("XDG_DATA_HOME", ".local/share"),
+        ("XDG_STATE_HOME", ".local/state"),
+        ("XDG_CACHE_HOME", ".cache"),
+        ("PI_CODING_AGENT_DIR", ".pi/agent"),
+    ] {
+        env.insert(
+            name.into(),
+            home.user_home().join(path).display().to_string(),
+        );
+    }
+    for name in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+        env.insert(name.into(), "http://127.0.0.1:1".into());
+    }
+    env.insert("NO_PROXY".into(), "127.0.0.1,localhost".into());
+    env
+}
+
 impl Lab {
     /// A home whose agents run real CLIs, under `root`, its daemon running.
     pub fn real(root: &Path, name: &str, work: &Path) -> anyhow::Result<Lab> {
-        Self::real_with(root, name, work, &[], own_model().as_deref(), false)
+        Self::real_with(root, name, work, &[], own_model().as_deref(), None)
     }
 
     /// [`Lab::real`], each CLI with `env` besides.
@@ -116,7 +149,7 @@ impl Lab {
         work: &Path,
         env: &[(&str, &str)],
         model: Option<&str>,
-        busy_muse: bool,
+        muse_delay_ms: Option<u64>,
     ) -> anyhow::Result<Lab> {
         let folder = root.join(format!("stress-{name}-{}", std::process::id()));
         let home = TestHome {
@@ -127,16 +160,40 @@ impl Lab {
         facade_base::files::create_private_folder_all(&home.path)?;
         std::fs::create_dir_all(&home.project)?;
         std::fs::create_dir_all(work)?;
+        let h2 = std::env::var_os("FACADE_STORM_H2_LOG").is_some();
+        let audited_model = h2 || std::env::var("FACADE_STORM_AUDITED_MODEL").as_deref() == Ok("1");
+        let h2_agy_plan = h2 && std::env::var_os("FACADE_STORM_H2_AGY_PLAN").is_some();
+        let agy_settings = if h2_agy_plan {
+            r#"{"modelProvider":"gemini","agentMode":"plan"}"#
+        } else {
+            r#"{"modelProvider":"gemini"}"#
+        };
+        let h2_pi = std::env::var("FACADE_STORM_H2_PI")
+            .ok()
+            .filter(|_| audited_model);
+        if audited_model {
+            std::fs::create_dir_all(home.user_home().join(".claude"))?;
+            std::fs::write(
+                home.user_home().join(".claude").join(".claude.json"),
+                r#"{"hasCompletedOnboarding":true}"#,
+            )?;
+            let agy = home.user_home().join(".gemini/antigravity-cli");
+            std::fs::create_dir_all(agy.join("cache"))?;
+            std::fs::write(agy.join("settings.json"), agy_settings)?;
+            std::fs::write(
+                agy.join("cache/onboarding.json"),
+                r#"{"consumerOnboardingComplete":true,"enterpriseOnboardingComplete":true,"onboardingComplete":true}"#,
+            )?;
+        }
         let mut clis = serde_json::Map::new();
         let asks = std::env::var_os("FACADE_STORM_ASKS").is_some();
         for cli in CLIS {
             let mut entry = serde_json::Map::new();
             let mut args: Vec<String> = cli.args.iter().map(|arg| arg.to_string()).collect();
-            if busy_muse && cli.name == "muse" {
-                args.extend([
-                    "--echo-delay-ms".to_string(),
-                    MUSE_BUSY_DELAY_MS.to_string(),
-                ]);
+            if cli.name == "muse"
+                && let Some(delay) = muse_delay_ms
+            {
+                args.extend(["--echo-delay-ms".to_string(), delay.to_string()]);
             }
             if let (Some(url), "codex") = (model, cli.name) {
                 for set in [
@@ -151,18 +208,81 @@ impl Lab {
                 }
             }
             // Without YOLO, Codex asks to update itself before anything; Facade trusts its folder.
-            if asks && cli.name == "codex" {
+            if (asks || audited_model) && cli.name == "codex" {
                 args.extend(["-c".to_string(), "check_for_update_on_startup=false".into()]);
+            }
+            if audited_model && cli.name == "codex" {
+                args.extend([
+                    "-c".into(),
+                    "cli_auth_credentials_store=\"file\"".into(),
+                    "-c".into(),
+                    "mcp_oauth_credentials_store=\"file\"".into(),
+                ]);
+            }
+            if audited_model && cli.name == "agy" {
+                args.extend(["--settings".into(), agy_settings.into()]);
+            }
+            if let Some(extension) = h2_pi.as_ref().filter(|_| cli.name == "pi") {
+                if let Ok(wrapper) = std::env::var("FACADE_STORM_H2_PI_WRAPPER") {
+                    entry.insert("program".into(), json!(wrapper));
+                }
+                args.extend([
+                    "--extension".into(),
+                    extension.clone(),
+                    "--session-dir".into(),
+                    home.user_home()
+                        .join(".pi/agent/sessions")
+                        .display()
+                        .to_string(),
+                ]);
+            }
+            if audited_model
+                && cli.name == "muse"
+                && muse_delay_ms != Some(MUSE_KEYS_DELAY_MS)
+                && let Some(url) = model
+            {
+                args = vec![
+                    "--provider".into(),
+                    "meta".into(),
+                    "--base-url".into(),
+                    url.into(),
+                ];
             }
             if !args.is_empty() {
                 entry.insert("args".into(), json!(args));
             }
             let mut env: BTreeMap<&str, &str> = env.iter().copied().collect();
             let base;
+            let pi_node;
+            let pi_runtime;
             if let (Some(url), "claude") = (model, cli.name) {
                 base = url.trim_end_matches("/v1").to_string();
                 env.insert("ANTHROPIC_BASE_URL", &base);
                 env.insert("ANTHROPIC_AUTH_TOKEN", "none");
+            }
+            if let (Some(url), "pi", Some(_)) = (model, cli.name, &h2_pi) {
+                env.insert("FACADE_H2_PI_URL", url);
+                env.insert("PI_SKIP_VERSION_CHECK", "1");
+                if std::env::var_os("FACADE_STORM_H2_PI_WRAPPER").is_some() {
+                    pi_node = std::env::var("FACADE_STORM_H2_NODE")
+                        .context("Pi's test node executable")?;
+                    pi_runtime =
+                        std::env::var("FACADE_STORM_H2_PI_RUNTIME").context("Pi's test runtime")?;
+                    env.insert("FACADE_H2_NODE", &pi_node);
+                    env.insert("FACADE_H2_PI_RUNTIME", &pi_runtime);
+                }
+            }
+            if audited_model && let Some(url) = model {
+                match cli.name {
+                    "agy" => {
+                        env.insert("GOOGLE_GEMINI_BASE_URL", url.trim_end_matches("/v1"));
+                        env.insert("GEMINI_API_KEY", "loopback-test");
+                    }
+                    "muse" => {
+                        env.insert("META_API_KEY", "loopback-test");
+                    }
+                    _ => {}
+                }
             }
             if !env.is_empty() {
                 entry.insert("env".into(), json!(env));
@@ -172,7 +292,7 @@ impl Lab {
             }
         }
         let mut settings = json!({ "clis": clis });
-        if std::env::var_os("FACADE_STORM_ASKS").is_some() {
+        if asks || h2_agy_plan {
             settings["yolo"] = json!(false);
         }
         std::fs::write(
@@ -182,8 +302,13 @@ impl Lab {
         let started = std::process::Command::new(&test_binaries().facade)
             .args(["daemon", "--detach"])
             .env_clear()
-            .envs(person_env())
+            .envs(lab_env(&home))
             .env("FACADE_HOME", &home.path)
+            .env("FACADE_STORM_H2", if h2 { "1" } else { "0" })
+            .env(
+                "FACADE_STORM_E2",
+                std::env::var("FACADE_STORM_E2").unwrap_or_default(),
+            )
             .current_dir(&home.project)
             .stdin(std::process::Stdio::null())
             .output()?;
@@ -223,7 +348,7 @@ impl Lab {
             )?;
         }
         let mut args = json!({
-            "name": name, "cli": cli.name, "folder": folder, "env": person_env(),
+            "name": name, "cli": cli.name, "folder": folder, "env": lab_env(&self.home),
             "size": { "cols": COLS, "rows": ROWS },
         });
         for (key, value) in [
@@ -295,6 +420,9 @@ fn files_of(roots: &[PathBuf], session: &str, since: SystemTime) -> Vec<PathBuf>
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
+                continue;
+            }
             let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
                 folders.push(path);
@@ -309,12 +437,7 @@ fn files_of(roots: &[PathBuf], session: &str, since: SystemTime) -> Vec<PathBuf>
 }
 
 /// The folders `cli` saves its sessions in.
-pub fn session_roots(cli: &str) -> Vec<PathBuf> {
-    let home = PathBuf::from(
-        std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .unwrap_or_default(),
-    );
+fn session_roots(cli: &str, home: &Path) -> Vec<PathBuf> {
     match cli {
         "claude" => vec![home.join(".claude/projects")],
         "muse" => vec![home.join(".local/share/muse/sessions")],
@@ -367,7 +490,7 @@ pub fn smoke(root: &Path, out: &Path, names: &[String]) -> anyhow::Result<Value>
         let files = if session.is_empty() {
             Vec::new()
         } else {
-            files_of(&session_roots(name), &session, since)
+            files_of(&session_roots(name, &lab.home.user_home()), &session, since)
         };
         let screen = lab
             .wire
@@ -422,6 +545,14 @@ pub enum Course {
     Narrow,
     /// Send messages while a loopback response waits, with or without the holding menu.
     Buffering { show_menu: bool },
+    /// Sends to Claude's startup hint, then tries a draft, its removal, and a first human turn.
+    StartupHint,
+    /// Confirms that a real CLI can return a known answer to an isolated question.
+    H2Calibration,
+    /// Observe deliveries at the boundary of an isolated CLI's question.
+    H2Trials(usize),
+    /// Audit the real child environment and complete one turn against the loopback model.
+    H2Profile,
     /// One sends each of [`shapes`] in turn.
     Shapes,
     /// One sends each of [`endings`] this many times.
@@ -460,6 +591,10 @@ pub fn specs(
     each: Option<usize>,
     size: (u16, u16),
 ) -> Vec<RealSpec> {
+    let codex_cores = std::env::var("FACADE_STORM_H1_CORES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|cores| [0, 4, 8, 12, 16].contains(cores));
     let mut specs = Vec::new();
     for cli in CLIS {
         for (what, busy, hogs) in [
@@ -468,6 +603,10 @@ pub fn specs(
             ("idle cores", false, 15),
             ("busy cores", true, 15),
         ] {
+            let hogs = match (cli.name, what) {
+                ("codex", "idle") => codex_cores.unwrap_or(hogs),
+                _ => hogs,
+            };
             specs.push(RealSpec {
                 name: format!("{} {what}.", cli.name),
                 cli,
@@ -480,6 +619,39 @@ pub fn specs(
             });
         }
         let times = each.unwrap_or(30);
+        let hint = "claude startup hint.";
+        if cli.name == "claude" && only.is_some_and(|only| only.split(',').any(|name| name == hint))
+        {
+            specs.push(RealSpec {
+                name: hint.into(),
+                cli,
+                senders: 1,
+                each: 1,
+                size,
+                busy: false,
+                hogs: 0,
+                course: Course::StartupHint,
+            });
+        }
+        for (label, course) in [
+            ("calibrate", Course::H2Calibration),
+            ("trials", Course::H2Trials(each.unwrap_or(6))),
+            ("profile", Course::H2Profile),
+        ] {
+            let name = format!("{} h2 {label}.", cli.name);
+            if only.is_some_and(|only| only.split(',').any(|wanted| wanted == name)) {
+                specs.push(RealSpec {
+                    name,
+                    cli,
+                    senders: 1,
+                    each: 1,
+                    size,
+                    busy: false,
+                    hogs: 0,
+                    course,
+                });
+            }
+        }
         if cli.name == "codex" {
             for (what, show_menu) in [("buffering", true), ("buffering control", false)] {
                 let name = format!("{} {what}.", cli.name);
@@ -544,6 +716,11 @@ const LONG_ANSWER: &str = "Write the integers from 1 to 700 in English words, on
 
 /// Runs one storm of fake senders to one real CLI.
 pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Result<Outcome> {
+    let h2 = matches!(
+        spec.course,
+        Course::H2Calibration | Course::H2Trials(_) | Course::H2Profile
+    );
+    let audited_model = h2 || std::env::var("FACADE_STORM_AUDITED_MODEL").as_deref() == Ok("1");
     match spec.course {
         Course::Returns => return returns(spec, name, root, out),
         Course::Ends(times) => return ends(spec, times, name, root, out),
@@ -552,6 +729,20 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
             "the buffering probe needs its loopback model"
         ),
         _ => {}
+    }
+    if audited_model {
+        anyhow::ensure!(
+            own_model().is_some() && (!h2 || std::env::var_os("FACADE_STORM_H2_LOG").is_some()),
+            "the audited case needs an owned loopback model"
+        );
+        anyhow::ensure!(
+            matches!(
+                spec.cli.name,
+                "claude" | "codex" | "opencode" | "muse" | "agy"
+            ) || spec.cli.name == "pi" && std::env::var_os("FACADE_STORM_H2_PI").is_some(),
+            "{} needs an isolated loopback provider",
+            spec.cli.name
+        );
     }
     let tag: String = name
         .chars()
@@ -562,19 +753,32 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         .join("real")
         .join(format!("{tag}{}", std::process::id()));
     let busy_muse = spec.busy && spec.cli.name == "muse";
+    let muse_keys = spec.cli.name == "muse" && matches!(spec.course, Course::Keys(_));
+    let muse_delay_ms = if muse_keys {
+        Some(MUSE_KEYS_DELAY_MS)
+    } else {
+        (busy_muse && !audited_model).then_some(MUSE_BUSY_DELAY_MS)
+    };
     let lab = Lab::real_with(
         &root.join("homes"),
         &tag,
         &work,
         &[],
         own_model().as_deref(),
-        busy_muse,
+        muse_delay_ms,
     )?;
     let field = Field::over(name, format!("{spec:?}"), lab)?;
     let lead = field.start("lead", &[])?;
     let senders = field.start_all("s", spec.senders, &[])?;
     let clients = field.clients(&senders)?;
     let lead_client = field.client(&lead)?;
+    let h2_agy_plan =
+        h2 && spec.cli.name == "agy" && std::env::var_os("FACADE_STORM_H2_AGY_PLAN").is_some();
+    let creator = if h2_agy_plan {
+        &clients[0]
+    } else {
+        &lead_client
+    };
 
     // An agent starts it, so that a new folder is trusted as Facade trusts one.
     let folder = work.join(spec.cli.name);
@@ -582,26 +786,34 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     prepare(spec.cli, &folder, own_model().as_deref())?;
     let since = SystemTime::now();
     let mut arguments = json!({ "cli": spec.cli.name, "name": "boss", "folder": folder });
-    for (key, value) in [("model", spec.cli.model), ("effort", spec.cli.effort)] {
+    let model = match spec.cli.name {
+        "pi" if audited_model => Some("h2/fake"),
+        "muse" if audited_model && !muse_keys => Some("muse-spark-1.3"),
+        "agy" if audited_model => None,
+        _ => spec.cli.model,
+    };
+    for (key, value) in [("model", model), ("effort", spec.cli.effort)] {
         if let Some(value) = value {
             arguments[key] = json!(value);
         }
     }
-    if spec.busy {
+    if spec.busy && !audited_model {
         arguments["prompt"] = json!(LONG_ANSWER);
     }
     let began = Instant::now();
-    let started = lead_client.call("start_agent", arguments)?;
-    anyhow::ensure!(started["status"] == "success", "start_agent: {started}");
-    let address = started["data"]["id"]
-        .as_str()
-        .context("its address")?
-        .to_string();
-    let info = field
-        .lab
-        .wire
-        .call("agent.inspect", json!({ "target": address }))?;
-    let boss = Lab::agent(&info["agent"])?;
+    let boss = start_receiver(&field.lab, creator, arguments.clone())?;
+    let profile = audited_model.then(|| h2_process_profile(&field.lab, &boss, spec.cli.name));
+    let profile = match profile.transpose() {
+        Ok(profile) => profile,
+        Err(error) => {
+            let mut verdict = crate::judge::Verdict::default();
+            crate::storm::stop_all(&field.lab, &[boss, lead], &mut verdict);
+            return Err(error);
+        }
+    };
+    if spec.course == Course::StartupHint {
+        return startup_hint(&field, &clients[0], &senders[0], &lead, &boss, name, out);
+    }
     let ready = wait_until(Duration::from_secs(120), || {
         let Ok(info) = field.lab.inspect(&boss) else {
             return false;
@@ -614,7 +826,7 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
             let _ = type_raw(&field, &boss, b"\r");
             std::thread::sleep(Duration::from_millis(1500));
         }
-        match spec.busy {
+        match spec.busy && !audited_model {
             true => info["agent"]["state"] == "working",
             false => {
                 info["input"]["state"] == "usable" && info["agent"]["tools_state"] != "connecting"
@@ -634,6 +846,125 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         "ready_s",
         json!(crate::sample::round(began.elapsed().as_secs_f64())),
     );
+    let warm_muse =
+        audited_model && crate::sample::pr_metrics() && !spec.busy && spec.cli.name == "muse";
+    let setup_prompt = if spec.busy {
+        Some(LONG_ANSWER)
+    } else if warm_muse {
+        Some("Reply with the single word ok. This turn initializes the benchmark session.")
+    } else {
+        None
+    };
+    if audited_model && let Some(prompt) = setup_prompt {
+        let (seq, _) = field.name_next(&senders[0].id);
+        let sent = crate::storm::send(
+            &clients[0],
+            &senders[0].id,
+            &boss,
+            seq,
+            prompt.into(),
+            "delivery",
+        );
+        anyhow::ensure!(
+            sent.succeeded,
+            "the isolated setup prompt had no delivery receipt"
+        );
+        field.note("fixture_startup_message", json!(sent.number));
+        field.note_sent(sent);
+        if spec.busy {
+            anyhow::ensure!(
+                wait_until(Duration::from_secs(30), || {
+                    field
+                        .lab
+                        .inspect(&boss)
+                        .is_ok_and(|info| info["agent"]["state"] == "working")
+                }),
+                "the isolated CLI did not enter the requested initial state"
+            );
+        }
+    }
+    if spec.course == Course::H2Profile {
+        return h2_profile(
+            &field,
+            &clients[0],
+            &senders[0],
+            &lead,
+            &boss,
+            (name, out, profile.expect("H2 child profile")),
+        );
+    }
+    if h2 && spec.cli.name == "codex" {
+        anyhow::ensure!(
+            h2_codex_plan(&field, &boss)?,
+            "Codex could not enter Plan mode: {}",
+            screen_tail(&field.lab, &boss)
+        );
+    }
+    if h2_agy_plan {
+        anyhow::ensure!(
+            screen_tail(&field.lab, &boss)
+                .lines()
+                .next_back()
+                .is_some_and(|line| line
+                    .split(|ch: char| !ch.is_ascii_alphabetic())
+                    .any(|word| word == "plan")),
+            "Agy did not open in its isolated Plan mode"
+        );
+    }
+    match spec.course {
+        Course::H2Calibration => {
+            return h2_calibration(&field, &clients[0], &senders[0], &lead, &boss, name, out);
+        }
+        Course::H2Trials(rounds) => {
+            let restart = |round: usize| -> anyhow::Result<Agent> {
+                let folder = work.join(format!("{}-{round}", spec.cli.name));
+                std::fs::create_dir_all(&folder)?;
+                prepare(spec.cli, &folder, own_model().as_deref())?;
+                let mut args = arguments.clone();
+                args["folder"] = json!(folder);
+                args["name"] = json!(format!("boss{round}"));
+                let receiver = start_receiver(&field.lab, creator, args)?;
+                if let Err(error) = h2_process_profile(&field.lab, &receiver, spec.cli.name) {
+                    let mut verdict = crate::judge::Verdict::default();
+                    crate::storm::stop_all(&field.lab, &[receiver], &mut verdict);
+                    return Err(error);
+                }
+                let ready = wait_until(Duration::from_secs(30), || {
+                    let Ok(info) = field.lab.inspect(&receiver) else {
+                        return false;
+                    };
+                    if h2_agy_plan
+                        && info["agent"]["state_detail"]["text"] == "Trust this folder?"
+                        && screen_tail(&field.lab, &receiver).contains("Yes, I trust this folder")
+                    {
+                        let _ = type_raw(&field, &receiver, b"\r");
+                        std::thread::sleep(Duration::from_millis(900));
+                    }
+                    info["input"]["state"] == "usable"
+                        && info["agent"]["tools_state"] != "connecting"
+                });
+                let planned =
+                    ready && (spec.cli.name != "codex" || h2_codex_plan(&field, &receiver)?);
+                if !planned {
+                    let screen = screen_tail(&field.lab, &receiver);
+                    let mut verdict = crate::judge::Verdict::default();
+                    crate::storm::stop_all(&field.lab, &[receiver], &mut verdict);
+                    anyhow::bail!("the replacement receiver was not ready: {screen}");
+                }
+                Ok(receiver)
+            };
+            return h2_trials(
+                &field,
+                &clients[0],
+                &senders[0],
+                &lead,
+                &boss,
+                (name, out, rounds),
+                restart,
+            );
+        }
+        _ => {}
+    }
     let frames = Frames::watch_drafts(
         &field.lab,
         &boss,
@@ -668,20 +999,60 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     if spec.busy && !busy_muse {
         std::thread::sleep(Duration::from_millis(2500));
     }
+    if warm_muse {
+        // The draft can clear before the model starts. Wait for its rendered answer and a steady input.
+        let mut idle_since = None;
+        anyhow::ensure!(
+            wait_until(Duration::from_secs(30), || {
+                let idle = field.lab.inspect(&boss).is_ok_and(|info| {
+                    matches!(info["agent"]["state"].as_str(), Some("idle" | "just_done"))
+                        && info["input"]["state"] == "usable"
+                });
+                if !idle {
+                    idle_since = None;
+                    return false;
+                }
+                if idle_since.is_none() && !screen_tail(&field.lab, &boss).contains("◆ ok") {
+                    return false;
+                }
+                idle_since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_millis(1200)
+            }),
+            "the Muse initialization answer and a steady idle input did not appear: {}",
+            screen_tail(&field.lab, &boss)
+        );
+        field.note("fixture_idle_stable_ms", json!(1200));
+    }
     let traffic_cpu = crate::sample::machine();
+    let traffic_daemon = crate::sample::pr_metrics()
+        .then(|| {
+            field
+                .lab
+                .home
+                .daemon_pid()
+                .and_then(crate::sample::Over::observed)
+        })
+        .flatten();
     let hogs = crate::storm::Hogs::start(spec.hogs);
+    let record_e2 = std::env::var("FACADE_STORM_E2").as_deref() == Ok("1");
+    let saved_poll = if record_e2 {
+        Duration::from_millis(100)
+    } else {
+        Duration::from_secs(5)
+    };
     let saved = RealAgent {
         agent: boss.clone(),
         cli: spec.cli,
         since,
-        timeline: Timeline::watch(
-            &field.lab.home.daemon_socket(),
-            &boss.reference,
-            Duration::from_secs(5),
-        )?,
+        timeline: Timeline::watch(&field.lab.home.daemon_socket(), &boss.reference, saved_poll)?,
     };
     match spec.course {
-        Course::Burst | Course::Returns | Course::Ends(_) => {}
+        Course::Burst
+        | Course::Returns
+        | Course::Ends(_)
+        | Course::StartupHint
+        | Course::H2Calibration
+        | Course::H2Trials(_)
+        | Course::H2Profile => {}
         Course::Narrow => {
             field.send(
                 &clients[0],
@@ -765,6 +1136,11 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     let _ = saved.timeline.end();
     let barrier = std::sync::Barrier::new(senders.len().max(1));
     let state_before = field.lab.inspect(&boss)?["agent"]["state"].clone();
+    anyhow::ensure!(
+        !warm_muse || matches!(state_before.as_str(), Some("idle" | "just_done")),
+        "Muse left idle before the burst"
+    );
+    let traffic_began = Instant::now();
     std::thread::scope(|scope| {
         for (sender, mcp) in senders.iter().zip(&clients) {
             let (barrier, field, boss) = (&barrier, &field, &boss);
@@ -775,7 +1151,17 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
                     _ => 0,
                 };
                 for _ in 0..count {
-                    field.send(mcp, &sender.id, boss, Shape::Ask, "inbox");
+                    if record_e2 && audited_model {
+                        if traffic_began.elapsed() >= Duration::from_secs(18 * 60) {
+                            break;
+                        }
+                        field.send(mcp, &sender.id, boss, Shape::Ask, "delivery");
+                        if !spec.busy {
+                            wait_idle(field, boss, Duration::from_secs(15));
+                        }
+                    } else {
+                        field.send(mcp, &sender.id, boss, Shape::Ask, "inbox");
+                    }
                 }
             });
         }
@@ -785,7 +1171,17 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         "traffic_machine_cpu_percent",
         json!(crate::sample::machine_percent(traffic_cpu)),
     );
+    field.note("controlled_hogs", json!(spec.hogs));
+    if let Some(daemon) = traffic_daemon {
+        field.note(
+            "traffic_daemon",
+            json!(daemon.observed_end(field.lab.home.daemon_pid())),
+        );
+    }
     drop(hogs);
+    if audited_model && spec.busy {
+        std::fs::write(out.join("traffic-complete"), b"traffic complete\n")?;
+    }
     let state_after = field.lab.inspect(&boss)?["agent"]["state"].clone();
     field.note(
         "state",
@@ -809,9 +1205,662 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         "frames",
         frames.end(&out.join(format!("{tag}frames.jsonl")))?,
     );
+    if record_e2 {
+        save_submit_writes(&field.lab, &boss, out, &tag)?;
+    }
     drop(clients);
     drop(lead_client);
     field.finish(out)
+}
+
+fn start_receiver(lab: &Lab, creator: &client::Mcp, args: Value) -> anyhow::Result<Agent> {
+    let started = creator.call("start_agent", args)?;
+    anyhow::ensure!(started["status"] == "success", "start_agent: {started}");
+    let address = started["data"]["id"].as_str().context("its address")?;
+    let info = lab
+        .wire
+        .call("agent.inspect", json!({ "target": address }))?;
+    Lab::agent(&info["agent"])
+}
+
+fn save_submit_writes(lab: &Lab, boss: &Agent, out: &Path, tag: &str) -> anyhow::Result<()> {
+    let log = lab.home.daemon_log();
+    let writes: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("storm E2 write "))
+        .collect();
+    let messages: Vec<Value> = lab
+        .rows()?
+        .into_values()
+        .filter(|row| row.to == boss.id && row.text.contains("reply with the single word ok"))
+        .map(|row| {
+            json!({
+                "number": row.number, "status": row.status, "reason": row.reason,
+                "enter_written": row.enter_written, "delivered_ms": row.delivered_ms,
+            })
+        })
+        .collect();
+    std::fs::write(
+        out.join(format!("{tag}submit-writes.json")),
+        serde_json::to_string_pretty(&json!({ "writes": writes, "messages": messages }))?,
+    )?;
+    Ok(())
+}
+
+/// An independent delivery can run even where the traffic fixture's usual empty-box gate waits.
+fn startup_hint(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    lead: &Agent,
+    boss: &Agent,
+    name: &str,
+    out: &Path,
+) -> anyhow::Result<Outcome> {
+    let began = Instant::now();
+    let observe = || -> anyhow::Result<Value> {
+        let info = field.lab.inspect(boss)?;
+        let screen = screen_tail(&field.lab, boss);
+        let prompt = screen
+            .lines()
+            .rfind(|line| line.starts_with("❯\u{a0}"))
+            .map(str::trim_end);
+        Ok(json!({
+            "us": now_us(), "input": info["input"], "state": info["agent"]["state"],
+            "tools": info["agent"]["tools_state"],
+            "hint": prompt
+                .and_then(|line| line.strip_prefix("❯\u{a0}"))
+                .is_some_and(|text| text.trim_start_matches("{{").starts_with("Try ")),
+            "prompt": prompt,
+        }))
+    };
+    anyhow::ensure!(
+        wait_until(Duration::from_secs(120), || {
+            observe().is_ok_and(|sample| {
+                sample["state"] == "idle"
+                    && sample["tools"] != "connecting"
+                    && sample["prompt"].is_string()
+            })
+        }),
+        "Claude did not reach an idle prompt: {}",
+        observe()?
+    );
+    let natural = Instant::now();
+    let watch_hint = std::env::var("FACADE_STORM_HINT_QUICK").as_deref() != Ok("1");
+    let mut samples = vec![observe()?];
+    while watch_hint
+        && samples.last().is_some_and(|sample| sample["hint"] == true)
+        && natural.elapsed() < Duration::from_secs(120)
+    {
+        std::thread::sleep(Duration::from_secs(1));
+        samples.push(observe()?);
+    }
+
+    let send = |text: &str| -> anyhow::Result<Value> {
+        let before = observe()?;
+        let (seq, _) = field.name_next(&sender.id);
+        let result = crate::storm::send(mcp, &sender.id, boss, seq, text.into(), "delivery");
+        println!("   {text}: {}", result.succeeded);
+        Ok(json!({
+            "before": before, "send": result.to_json(), "succeeded": result.succeeded,
+            "after": observe()?,
+        }))
+    };
+    let untouched = send("hint-probe untouched. Reply with ok. Use no tools.")?;
+    wait_idle(field, boss, Duration::from_secs(45));
+
+    type_raw(field, boss, b"x")?;
+    anyhow::ensure!(
+        wait_until(Duration::from_secs(8), || observe()
+            .is_ok_and(|sample| { sample["prompt"] == "❯\u{a0}x" })),
+        "the test draft was not drawn: {}",
+        observe()?
+    );
+    let with_draft = send("hint-probe human draft. Reply with ok. Use no tools.")?;
+    let draft_kept = observe()?["prompt"] == "❯\u{a0}x";
+    if draft_kept {
+        type_raw(field, boss, b"\x7f")?;
+    }
+    std::thread::sleep(Duration::from_millis(800));
+    let after_clear = send("hint-probe after Backspace. Reply with ok. Use no tools.")?;
+    wait_idle(field, boss, Duration::from_secs(45));
+
+    type_raw(field, boss, b"Reply with ok. Use no tools.")?;
+    anyhow::ensure!(
+        wait_until(Duration::from_secs(8), || observe().is_ok_and(|sample| {
+            sample["prompt"] == "❯\u{a0}Reply with ok. Use no tools."
+        })),
+        "the warm-up prompt was not drawn: {}",
+        observe()?
+    );
+    type_raw(field, boss, b"\r")?;
+    wait_idle(field, boss, Duration::from_secs(45));
+    let after_turn = send("hint-probe after human turn. Reply with ok. Use no tools.")?;
+    wait_idle(field, boss, Duration::from_secs(45));
+
+    let folder = out.join("startup-hint");
+    field.lab.keep_evidence(&folder)?;
+    let mut verdict = crate::judge::Verdict {
+        stats: json!({
+            "natural": samples,
+            "untouched": untouched, "with_draft": with_draft, "draft_kept": draft_kept,
+            "after_clear": after_clear, "after_turn": after_turn,
+            "no_color": std::env::var("NO_COLOR").ok(), "term": std::env::var("TERM").ok(),
+        }),
+        ..Default::default()
+    };
+    crate::storm::stop_all(
+        &field.lab,
+        &[boss.clone(), sender.clone(), lead.clone()],
+        &mut verdict,
+    );
+    Ok(Outcome {
+        name: name.into(),
+        verdict,
+        seconds: began.elapsed().as_secs_f64(),
+        evidence: Some(folder),
+    })
+}
+
+/// Presses a known answer only in the control, after the fixture question is visibly open.
+fn h2_calibration(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    lead: &Agent,
+    boss: &Agent,
+    name: &str,
+    out: &Path,
+) -> anyhow::Result<Outcome> {
+    let began = Instant::now();
+    anyhow::ensure!(own_model().is_some(), "the question needs a loopback model");
+    let trial = format!("H2Q_{}_{}", std::process::id(), now_us());
+    let question = format!("Pick a value for {trial}");
+    let sent = h2_seed(field, mcp, sender, boss, &trial);
+    let visible = |screen: &str| h2_shown(screen, &question);
+    let shown = sent.succeeded
+        && wait_until(Duration::from_secs(25), || {
+            visible(&screen_text(&field.lab, boss))
+        });
+    let before = screen_text(&field.lab, boss);
+    let mut selected = None;
+    let mut submitted_again = false;
+    if shown {
+        type_raw(field, boss, b"\x1b[B")?;
+        std::thread::sleep(Duration::from_millis(350));
+        selected = Some(screen_text(&field.lab, boss));
+        type_raw(field, boss, b"\r")?;
+        std::thread::sleep(Duration::from_millis(800));
+        let screen = screen_text(&field.lab, boss);
+        if visible(&screen) && screen.contains("Submit answers") {
+            type_raw(field, boss, b"\r")?;
+            submitted_again = true;
+        }
+        wait_idle(field, boss, Duration::from_secs(15));
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let info = field.lab.inspect(boss)?;
+    let stats = json!({
+        "trial": trial, "question": question, "seed": sent.to_json(), "shown": shown,
+        "before": before, "selected": selected, "submitted_again": submitted_again,
+        "after": screen_text(&field.lab, boss), "after_state": info["agent"]["state"],
+    });
+    println!("   {trial}: question visible={shown}");
+    let mut verdict = crate::judge::Verdict {
+        stats,
+        ..Default::default()
+    };
+    let folder = out.join("h2-calibration");
+    field.lab.keep_evidence(&folder)?;
+    crate::storm::stop_all(
+        &field.lab,
+        &[boss.clone(), sender.clone(), lead.clone()],
+        &mut verdict,
+    );
+    Ok(Outcome {
+        name: name.into(),
+        verdict,
+        seconds: began.elapsed().as_secs_f64(),
+        evidence: Some(folder),
+    })
+}
+
+fn h2_process_profile(lab: &Lab, agent: &Agent, cli: &str) -> anyhow::Result<Value> {
+    use facade_base::process::ProcessIdentity;
+    use facade_base::unix_process;
+
+    let pid = u32::try_from(agent.pid)?;
+    let birth = unix_process::birth(pid)?.context("the isolated CLI process ended")?;
+    let env = unix_process::environment(&ProcessIdentity { pid, birth })?
+        .context("the isolated CLI process environment is unavailable")?;
+    let read = |name: &str| {
+        env.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    };
+    let expected = lab_env(&lab.home);
+    let mut paths = BTreeMap::new();
+    for name in [
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ProgramData",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
+    ] {
+        if let Some(path) = expected.get(name) {
+            anyhow::ensure!(
+                read(name) == Some(path.as_str()),
+                "isolated CLI {cli} did not inherit {name}"
+            );
+            paths.insert(name, path);
+        }
+    }
+    let url = own_model().context("the owned model URL is unavailable")?;
+    let base = url.trim_end_matches("/v1");
+    let required = match cli {
+        "claude" => vec![
+            ("ANTHROPIC_BASE_URL", base),
+            ("ANTHROPIC_AUTH_TOKEN", "none"),
+        ],
+        "agy" => vec![
+            ("GOOGLE_GEMINI_BASE_URL", base),
+            ("GEMINI_API_KEY", "loopback-test"),
+        ],
+        "pi" => vec![("FACADE_H2_PI_URL", url.as_str())],
+        "muse" => vec![("META_API_KEY", "loopback-test")],
+        _ => Vec::new(),
+    };
+    for (name, value) in required {
+        anyhow::ensure!(
+            read(name) == Some(value),
+            "isolated CLI {cli} did not inherit {name}"
+        );
+    }
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "AGY_ADC_AUTH",
+        "MODEL_API_KEY",
+    ] {
+        anyhow::ensure!(read(name).is_none(), "isolated CLI {cli} inherited {name}");
+    }
+    anyhow::ensure!(
+        read("HTTPS_PROXY") == Some("http://127.0.0.1:1"),
+        "isolated CLI {cli} did not inherit its external network proxy",
+    );
+    if cli == "agy" {
+        let runs = lab
+            .database()
+            .parent()
+            .context("the framework directory")?
+            .join("runs")
+            .join(&agent.id);
+        let settings = std::fs::read_dir(runs)?
+            .filter_map(Result::ok)
+            .find_map(|entry| std::fs::read_to_string(entry.path().join("settings.json")).ok())
+            .context("Agy has no isolated run settings")?;
+        let settings: Value = serde_json::from_str(&settings)?;
+        anyhow::ensure!(
+            settings["modelProvider"] == "gemini",
+            "Agy did not receive its fixture provider"
+        );
+    }
+    Ok(
+        json!({"pid": pid, "profile_paths": paths, "loopback_settings": true, "external_proxy": true}),
+    )
+}
+
+fn h2_profile(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    lead: &Agent,
+    boss: &Agent,
+    (name, out, profile): (&str, &Path, Value),
+) -> anyhow::Result<Outcome> {
+    let began = Instant::now();
+    let folder = out.join("h2-profile");
+    std::fs::create_dir_all(&folder)?;
+    let log = PathBuf::from(std::env::var_os("FACADE_STORM_H2_LOG").context("the model log")?);
+    let trial = format!("H2P_{}_{}", std::process::id(), now_us());
+    let (seq, _) = field.name_next(&sender.id);
+    let sent = crate::storm::send(
+        mcp,
+        &sender.id,
+        boss,
+        seq,
+        format!("Reply with the word ok. Scope verification {trial}."),
+        "delivery",
+    );
+    let receipt = h2_until_event(&log, &trial, "profile_probe", Duration::from_secs(15));
+    if receipt.is_some() {
+        wait_idle(field, boss, Duration::from_secs(10));
+    }
+    let native = if std::env::var("FACADE_STORM_AUDITED_MODEL").as_deref() == Ok("1")
+        && receipt.is_some()
+    {
+        let receiver = field.lab.inspect(boss)?;
+        let session = receiver["agent"]["session"].as_str().unwrap_or_default();
+        let cli = cli(name
+            .split_whitespace()
+            .next()
+            .context("profile scenario CLI")?)?;
+        match submissions_of(
+            cli,
+            &field.lab.home.user_home(),
+            session,
+            SystemTime::UNIX_EPOCH,
+        ) {
+            Ok(submissions) => {
+                json!({"saved": submissions.as_ref().is_some_and(|submissions| submissions.iter().any(|entry| {
+                    matches!(crate::judge::kind(entry), crate::judge::Kind::Message(number, body)
+                        if Some(number) == sent.number && body.trim_end() == sent.text.trim_end())
+                }))})
+            }
+            Err(error) => json!({"saved": false, "error": format!("{error:#}")}),
+        }
+    } else {
+        Value::Null
+    };
+    let stats = json!({"profile": profile, "trial": trial, "receiver": boss.id,
+        "sent": sent.to_json(), "loopback_receipt": receipt, "native": native, "screen": screen_text(&field.lab, boss)});
+    std::fs::write(
+        folder.join("profile.json"),
+        serde_json::to_string_pretty(&stats)?,
+    )?;
+    let mut verdict = crate::judge::Verdict {
+        stats,
+        ..Default::default()
+    };
+    field.lab.keep_evidence(&folder)?;
+    crate::storm::stop_all(
+        &field.lab,
+        &[boss.clone(), sender.clone(), lead.clone()],
+        &mut verdict,
+    );
+    anyhow::ensure!(
+        receipt.is_some(),
+        "the isolated model did not receive the profile probe"
+    );
+    Ok(Outcome {
+        name: name.into(),
+        verdict,
+        seconds: began.elapsed().as_secs_f64(),
+        evidence: Some(folder),
+    })
+}
+
+fn h2_codex_plan(field: &Field, boss: &Agent) -> anyhow::Result<bool> {
+    type_raw(field, boss, b"\x1b[Z")?;
+    let in_plan = || screen_tail(&field.lab, boss).contains("Plan mode");
+    if wait_until(Duration::from_secs(2), in_plan) {
+        return Ok(true);
+    }
+    type_raw(field, boss, b"/plan\r")?;
+    Ok(wait_until(Duration::from_secs(4), in_plan))
+}
+
+fn h2_seed(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    boss: &Agent,
+    trial: &str,
+) -> crate::judge::Sent {
+    let (seq, _) = field.name_next(&sender.id);
+    let text = format!("Run the single-choice test identified by {trial}.");
+    let arguments =
+        json!({"to":boss.address, "text":text, "wait_for":"delivery", "timeout_seconds":8});
+    crate::storm::send_as(mcp, &sender.id, boss, seq, text, "delivery", arguments)
+}
+
+fn h2_shown(screen: &str, question: &str) -> bool {
+    let rows: Vec<_> = screen.lines().collect();
+    let Some(at) = rows.iter().rposition(|line| line.contains(question)) else {
+        return false;
+    };
+    let mut one = false;
+    for line in rows.iter().skip(at + 1).take(12) {
+        let words = || line.split(|ch: char| !ch.is_ascii_alphanumeric());
+        let has_one = words().any(|word| word == "One");
+        let has_two = words().any(|word| word == "Two");
+        if one && has_two && !has_one {
+            return true;
+        }
+        one |= has_one && !has_two;
+    }
+    false
+}
+
+fn h2_event(log: &Path, trial: &str, event: &str) -> Option<Value> {
+    std::fs::read_to_string(log)
+        .ok()?
+        .lines()
+        .filter(|line| line.contains(trial))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|record| record["trial"] == trial && record["event"] == event)
+}
+
+fn h2_until_event(log: &Path, trial: &str, event: &str, limit: Duration) -> Option<Value> {
+    let mut seen = None;
+    wait_until(limit, || {
+        seen = h2_event(log, trial, event);
+        seen.is_some()
+    });
+    seen
+}
+
+fn h2_race_sends(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    boss: &Agent,
+    log: &Path,
+    trial: &str,
+    lead_ms: u64,
+) -> Vec<Value> {
+    let Some(schedule) = h2_until_event(log, trial, "scheduled", Duration::from_secs(12)) else {
+        return Vec::new();
+    };
+    // Sweep the remaining time to the model's tool event across a paste/settle/submit interval.
+    let planned_ms = schedule["planned_ms"].as_u64().unwrap_or_default();
+    let delay_us = (planned_ms.saturating_sub(lead_ms) * 1_000).saturating_sub(now_us());
+    std::thread::sleep(Duration::from_micros(delay_us.min(900_000)));
+    let send = |index| {
+        let (seq, _) = field.name_next(&sender.id);
+        crate::storm::send(
+            mcp,
+            &sender.id,
+            boss,
+            seq,
+            format!(
+                "Message H2R_{}_{index}. Receipt only.",
+                trial.trim_start_matches("H2Q_")
+            ),
+            "inbox",
+        )
+        .to_json()
+    };
+    let mut sends = vec![send(1)];
+    if h2_until_event(log, trial, "question", Duration::from_secs(5)).is_some() {
+        sends.push(send(2));
+    }
+    sends
+}
+
+fn h2_trials(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    lead: &Agent,
+    boss: &Agent,
+    (name, out, rounds): (&str, &Path, usize),
+    restart: impl Fn(usize) -> anyhow::Result<Agent>,
+) -> anyhow::Result<Outcome> {
+    anyhow::ensure!(
+        (1..=130).contains(&rounds),
+        "H2 permits at most 390 messages in one batch"
+    );
+    let log = PathBuf::from(std::env::var_os("FACADE_STORM_H2_LOG").context("the model log")?);
+    let leads = match std::env::var("FACADE_STORM_H2_LEADS") {
+        Ok(offsets) => offsets
+            .split(',')
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(_) => vec![300, 240, 180, 120, 60, 15],
+    };
+    anyhow::ensure!(
+        leads.iter().all(|&lead| lead <= 1_000),
+        "invalid H2 timing lead"
+    );
+    let began = Instant::now();
+    let folder = out.join("h2-trials");
+    std::fs::create_dir_all(&folder)?;
+    let mut report = std::io::BufWriter::new(std::fs::File::create(folder.join("trials.jsonl"))?);
+    use std::io::Write;
+    let mut verdict = crate::judge::Verdict::default();
+    let mut completed = 0;
+    let mut receiver = Some(boss.clone());
+    let mut needs_fresh_receiver = false;
+    let mut restarts = 0;
+    let mut previous: Option<(String, String)> = None;
+    let mut reached_time_limit = false;
+    let composer_wait = if name.starts_with("codex ") || name.starts_with("muse ") {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_secs(8)
+    };
+    for round in 0..rounds {
+        // Leave time to finish the active round, save evidence, and release the shared lease.
+        if began.elapsed() >= Duration::from_secs(18 * 60) {
+            reached_time_limit = true;
+            break;
+        }
+        let boss = receiver.as_ref().context("no H2 receiver")?;
+        let mut ready = !needs_fresh_receiver
+            && wait_until(composer_wait, || field.lab.input_state(boss) == "usable");
+        if !ready
+            && !needs_fresh_receiver
+            && field.lab.input_state(boss) == "draft"
+            && let Some((trial, question)) = &previous
+        {
+            let screen = screen_text(&field.lab, boss);
+            let recent_race = format!("H2R_{}_", trial.trim_start_matches("H2Q_"));
+            if !h2_shown(&screen, question) && screen_tail(&field.lab, boss).contains(&recent_race)
+            {
+                ready = clear_input(field, boss, 180)?;
+            }
+        }
+        if !ready {
+            let old_screen = screen_text(&field.lab, boss);
+            let stale = receiver.take().context("no H2 receiver to replace")?;
+            crate::storm::stop_all(&field.lab, &[stale], &mut verdict);
+            match restart(round) {
+                Ok(agent) => {
+                    receiver = Some(agent);
+                    restarts += 1;
+                }
+                Err(error) => {
+                    writeln!(
+                        report,
+                        "{}",
+                        json!({"round": round, "excluded": "replacement receiver not ready",
+                            "error": error.to_string(), "screen": old_screen})
+                    )?;
+                    break;
+                }
+            }
+        }
+        let boss = receiver.as_ref().context("no H2 receiver")?;
+        let trial = format!("H2Q_{}_{}", std::process::id(), now_us());
+        let question = format!("Pick a value for {trial}");
+        let seed = h2_seed(field, mcp, sender, boss, &trial);
+        let mut opened = None;
+        let mut screen = String::new();
+        let mut checkpoints = Vec::new();
+        let lead_ms = leads[round % leads.len()];
+        let (sends, closed_us) = std::thread::scope(|scope| {
+            let worker =
+                scope.spawn(|| h2_race_sends(field, mcp, sender, boss, &log, &trial, lead_ms));
+            wait_until(Duration::from_secs(12), || {
+                screen = screen_text(&field.lab, boss);
+                if h2_shown(&screen, &question) {
+                    opened = Some(now_us());
+                    return true;
+                }
+                h2_event(&log, &trial, "answer").is_some()
+            });
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(250));
+                let frame = screen_text(&field.lab, boss);
+                let state = field.lab.input_state(boss);
+                let shown = h2_shown(&frame, &question);
+                checkpoints
+                    .push(json!({"us": now_us(), "input": state, "shown": shown, "screen": frame}));
+            }
+            (worker.join().expect("the race sender"), now_us())
+        });
+        let answer = h2_event(&log, &trial, "answer");
+        let last_shown = checkpoints
+            .last()
+            .is_some_and(|checkpoint| checkpoint["shown"] == true);
+        writeln!(
+            report,
+            "{}",
+            json!({ "round": round, "seed": seed.to_json(), "trial": trial, "receiver": boss.id, "lead_ms": lead_ms,
+                "question": question, "opened_us": opened, "closed_us": closed_us,
+                "opened_screen": screen, "checkpoints": checkpoints, "sends": sends,
+                "answer_seen": answer, "dismissed_after": last_shown })
+        )?;
+        report.flush()?;
+        completed += 1;
+        if last_shown {
+            for _ in 0..3 {
+                if !h2_shown(&screen_text(&field.lab, boss), &question) {
+                    break;
+                }
+                type_raw(field, boss, b"\x1b")?;
+                std::thread::sleep(Duration::from_millis(400));
+            }
+            if name.starts_with("muse ") && h2_shown(&screen_text(&field.lab, boss), &question) {
+                type_raw(field, boss, b"\x03")?;
+            }
+        }
+        needs_fresh_receiver = opened.is_none() && answer.is_none();
+        previous = Some((trial.clone(), question));
+        if round < 6 || round % 10 == 9 {
+            println!(
+                "   H2 {round}: {trial}, visible={}, observed answer={}",
+                opened.is_some(),
+                answer.is_some()
+            );
+        }
+    }
+    report.flush()?;
+    field.lab.keep_evidence(&folder)?;
+    verdict.stats = json!({ "requested": rounds, "observed": completed, "restarts": restarts,
+        "reached_time_limit": reached_time_limit });
+    let agents: Vec<_> = receiver
+        .into_iter()
+        .chain([sender.clone(), lead.clone()])
+        .collect();
+    crate::storm::stop_all(&field.lab, &agents, &mut verdict);
+    Ok(Outcome {
+        name: name.into(),
+        verdict,
+        seconds: began.elapsed().as_secs_f64(),
+        evidence: Some(folder),
+    })
 }
 
 /// Observe the menu independently of Facade's input reading and the reason in its receipt.
@@ -1547,6 +2596,9 @@ fn empty_keys(
             mcp, &sender.id, boss, seq, text, "delivery",
         ));
     };
+    if real.cli.name == "muse" {
+        return muse_empty_keys(field, real, send, times, out);
+    }
     let keys: &[(&str, &[u8])] = match real.cli.name {
         "codex" => &[("enter", b"\r"), ("tab", b"\t")],
         _ => &[("enter", b"\r")],
@@ -1577,10 +2629,7 @@ fn empty_keys(
                     }
                 }
                 let before = now_of(field, real);
-                // Muse's empty input reads as one Facade would have to probe.
-                let empty =
-                    before.1 == "usable" || (real.cli.name == "muse" && before.1 == "unknown");
-                if !empty {
+                if before.1 != "usable" {
                     std::thread::sleep(Duration::from_millis(500));
                     left -= 1;
                     continue;
@@ -1624,6 +2673,106 @@ fn empty_keys(
             )?;
         }
         wait_idle(field, boss, Duration::from_secs(90));
+    }
+    field.note("keys", json!(report));
+    Ok(())
+}
+
+/// Delays echo long enough to verify the visible queue and to press while a turn is still active.
+fn muse_empty_keys(
+    field: &Field,
+    real: &RealAgent,
+    send: impl Fn(&str),
+    times: usize,
+    out: &Path,
+) -> anyhow::Result<()> {
+    fn queue_line(screen: &str) -> Option<&str> {
+        screen
+            .lines()
+            .find(|line| line.trim_start().starts_with("◆ Queued input"))
+    }
+
+    let boss = &real.agent;
+    let capture = || -> anyhow::Result<Value> {
+        let turns = submissions(&field.lab, real)?.context("Muse did not save its session")?;
+        let info = field.lab.inspect(boss)?;
+        let screen = screen_tail(&field.lab, boss);
+        Ok(json!({
+            "us": now_us(), "turns": turns.len(), "state": info["agent"]["state"],
+            "input": info["input"]["state"], "queue": queue_line(&screen),
+            "shows_work": screen.contains("esc to interrupt)"),
+            "blank_prompt": screen.lines().any(|line| line.trim() == "❯"), "screen": screen,
+        }))
+    };
+    let mut report = Vec::new();
+    send(PLAIN);
+    for state in ["idle", "working", "queued"] {
+        let mut presses = Vec::new();
+        for _ in 0..20 {
+            wait_idle(field, boss, Duration::from_secs(45));
+            let mut until = None;
+            if state != "idle" {
+                let began = Instant::now();
+                send(LONG_ANSWER);
+                wait_until(Duration::from_secs(3), || {
+                    screen_tail(&field.lab, boss).contains("esc to interrupt)")
+                });
+                if state == "queued" {
+                    send(PLAIN);
+                    wait_until(Duration::from_secs(2), || {
+                        queue_line(&screen_tail(&field.lab, boss)).is_some()
+                    });
+                }
+                until = Some(began + Duration::from_millis(MUSE_KEYS_DELAY_MS - 2_000));
+            }
+            while presses.len() < times && until.is_none_or(|until| Instant::now() < until) {
+                let before = capture()?;
+                let idle = matches!(before["state"].as_str(), Some("idle" | "just_done"));
+                let working = before["state"] == "working" && before["shows_work"] == true;
+                let queued = !before["queue"].is_null();
+                let empty = before["input"] == "usable"
+                    || (before["input"] == "unknown" && before["blank_prompt"] == true);
+                if !empty
+                    || (state == "idle" && !idle)
+                    || (state != "idle" && !working)
+                    || queued != (state == "queued")
+                {
+                    break;
+                }
+                type_raw(field, boss, b"\r")?;
+                std::thread::sleep(Duration::from_millis(900));
+                let after = capture()?;
+                let effect = after["turns"] != before["turns"]
+                    || after["input"] == "draft"
+                    || after["input"] == "interaction"
+                    || after["queue"] != before["queue"]
+                    || after["shows_work"] != before["shows_work"];
+                presses.push(json!({ "before": before, "after": after, "effect": effect }));
+                if effect {
+                    break;
+                }
+            }
+            if presses.len() >= times {
+                break;
+            }
+        }
+        let effects = presses
+            .iter()
+            .filter(|press| press["effect"] == true)
+            .count();
+        println!(
+            "   {state} enter: pressed {}, effects {effects}",
+            presses.len()
+        );
+        report.push(
+            json!({ "state": state, "key": "enter", "pressed": presses.len(),
+                "effects": effects, "presses": presses, "echo_delay_ms": MUSE_KEYS_DELAY_MS,
+            }),
+        );
+        std::fs::write(
+            out.join("keys.json"),
+            serde_json::to_string_pretty(&report)?,
+        )?;
     }
     field.note("keys", json!(report));
     Ok(())
@@ -2209,7 +3358,7 @@ fn returns(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
             &work,
             env,
             model.as_deref(),
-            false,
+            None,
         )?;
         let field = Field::over(name, format!("{spec:?} {part}"), lab)?;
         let lead = field.start("lead", &[])?;
@@ -2327,7 +3476,7 @@ fn cut_short(
             .inspect(&boss)
             .map(|info| info["agent"]["session"].clone());
         if !had.is_empty() && now.is_ok_and(|now| now != had) {
-            let older = submissions_of(cli, &had, since)
+            let older = submissions_of(cli, &field.lab.home.user_home(), &had, since)
                 .ok()
                 .flatten()
                 .unwrap_or_default();
@@ -2795,21 +3944,27 @@ impl Frames {
 pub fn submissions(lab: &Lab, real: &RealAgent) -> anyhow::Result<Option<Vec<Submission>>> {
     let info = lab.inspect(&real.agent)?;
     let session = info["agent"]["session"].as_str().unwrap_or("").to_string();
-    anyhow::ensure!(!session.is_empty(), "{} has no session", real.agent.id);
-    submissions_of(real.cli, &session, real.since)
+    submissions_of(real.cli, &lab.home.user_home(), &session, real.since)
 }
 
 fn submissions_of(
     cli: &Cli,
+    home: &Path,
     session: &str,
     since: SystemTime,
 ) -> anyhow::Result<Option<Vec<Submission>>> {
     match cli.name {
-        "opencode" => return opencode(session).map(Some),
-        "agy" => return antigravity(session).map(Some),
+        "opencode" => return opencode(home, session),
+        "agy" => return antigravity(home, session, since),
         _ => {}
     }
-    let files = files_of(&session_roots(cli.name), session, since);
+    let files: Vec<_> = files_of(&session_roots(cli.name, home), session, since)
+        .into_iter()
+        .filter(|file| file.extension().is_some_and(|suffix| suffix == "jsonl"))
+        .collect();
+    if files.is_empty() || session.is_empty() && files.len() != 1 {
+        return Ok(None);
+    }
     let mut out: Vec<Submission> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -2901,18 +4056,27 @@ fn facades_text(value: &Value) -> Option<String> {
 }
 
 /// What OpenCode's store says the person gave in `session`.
-fn opencode(session: &str) -> anyhow::Result<Vec<Submission>> {
-    let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
-    let connection = rusqlite::Connection::open_with_flags(
-        home.join(".local/share/opencode/opencode.db"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+fn opencode(home: &Path, session: &str) -> anyhow::Result<Option<Vec<Submission>>> {
+    let file = home.join(".local/share/opencode/opencode.db");
+    if !file.is_file() {
+        return Ok(None);
+    }
+    let connection =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_secs(5))?;
+    let only: Option<String> = if session.is_empty() {
+        connection.query_row("SELECT CASE WHEN COUNT(DISTINCT session_id) = 1 THEN MIN(session_id) END FROM session_message WHERE type = 'user'", [], |row| row.get(0))?
+    } else {
+        Some(session.to_owned())
+    };
+    let Some(only) = only else {
+        return Ok(None);
+    };
     let mut statement = connection.prepare(
         "SELECT time_created, data FROM session_message \
          WHERE session_id = ?1 AND type = 'user' ORDER BY seq",
     )?;
-    let rows = statement.query_map([session], |row| {
+    let rows = statement.query_map([only], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
     })?;
     let mut out = Vec::new();
@@ -2926,18 +4090,40 @@ fn opencode(session: &str) -> anyhow::Result<Vec<Submission>> {
             )],
         });
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 /// What Antigravity's store says the person gave in `session`. It puts what waited into one step.
-fn antigravity(session: &str) -> anyhow::Result<Vec<Submission>> {
+fn antigravity(
+    home: &Path,
+    session: &str,
+    since: SystemTime,
+) -> anyhow::Result<Option<Vec<Submission>>> {
     const PERSON_GAVE: i64 = 14;
-    let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
-    let connection = rusqlite::Connection::open_with_flags(
-        home.join(".gemini/antigravity-cli/conversations")
-            .join(format!("{session}.db")),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+    let root = home.join(".gemini/antigravity-cli/conversations");
+    anyhow::ensure!(
+        session
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')),
+        "Agy session ID is not a file name"
+    );
+    let file = if session.is_empty() {
+        let files: Vec<_> = files_of(&[root], "", since)
+            .into_iter()
+            .filter(|file| file.extension().is_some_and(|suffix| suffix == "db"))
+            .collect();
+        if files.len() != 1 {
+            return Ok(None);
+        }
+        files.into_iter().next().expect("the sole session")
+    } else {
+        root.join(format!("{session}.db"))
+    };
+    if !file.is_file() {
+        return Ok(None);
+    }
+    let connection =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     let mut statement = connection
         .prepare("SELECT idx, step_payload FROM steps WHERE step_type = ?1 ORDER BY idx")?;
@@ -2969,7 +4155,7 @@ fn antigravity(session: &str) -> anyhow::Result<Vec<Submission>> {
             }
         }
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 /// When an entry was saved, in microseconds since 1970.

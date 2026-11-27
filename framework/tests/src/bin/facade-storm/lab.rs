@@ -92,7 +92,7 @@ impl Lab {
         let mut env: BTreeMap<String, String> = match self.person {
             true => {
                 // The programs under test, then the person's own.
-                let mut given = crate::real::person_env();
+                let mut given = crate::real::lab_env(&self.home);
                 let path = given
                     .iter()
                     .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))

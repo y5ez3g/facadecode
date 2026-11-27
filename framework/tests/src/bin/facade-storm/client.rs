@@ -195,7 +195,7 @@ impl Mcp {
         read.read_line(&mut answered)?;
         let answered: Value = serde_json::from_str(&answered)?;
         anyhow::ensure!(
-            answered["result"] == json!({ "relay": 1 }),
+            answered["result"]["relay"].as_u64() == Some(1),
             "the relay's hello: {answered}"
         );
         Self::initialize(Rpc::over(stream, read, |_| {})?, Server::Daemon)

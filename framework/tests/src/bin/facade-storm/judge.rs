@@ -227,6 +227,8 @@ const STAYS_MS: u64 = 1000;
 const TYPIST_MS: u64 = 180;
 
 pub fn judge(case: &Case<'_>) -> Verdict {
+    let permits_terminal_space =
+        std::env::var_os("FACADE_STORM_DELIVERY_PASTE_SPACE").is_some_and(|value| value == "1");
     let mut verdict = Verdict::default();
     let mut reasonable: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut say = |rule: &'static str, what: String, class: Option<&'static str>| {
@@ -287,12 +289,31 @@ pub fn judge(case: &Case<'_>) -> Verdict {
     let mut delivered = 0usize;
     let mut failed: BTreeMap<String, usize> = BTreeMap::new();
     let mut waits: Vec<f64> = Vec::new();
+    let report_messages = crate::sample::pr_metrics();
+    let mut messages = Vec::new();
     for sent in case.sent {
         let Some(number) = sent.number else {
             failed
                 .entry(format!("refused: {}", sent.said))
                 .and_modify(|count| *count += 1)
                 .or_insert(1);
+            if report_messages {
+                let category = if sent.wait == "start_prompt" {
+                    if case
+                        .windows
+                        .iter()
+                        .any(|window| window.agent == sent.to && window.ended_us.is_some())
+                    {
+                        "L4"
+                    } else {
+                        "missing_first_prompt"
+                    }
+                } else {
+                    "refused"
+                };
+                messages.push(json!({"seq": sent.seq, "number": null, "status": "refused",
+                    "category": category, "reason": sent.said, "call_ms": sent.took_ms}));
+            }
             // Nothing was kept: nothing of it may arrive.
             if case.windows.iter().any(|window| {
                 window.tape.submissions.iter().any(|submission| {
@@ -323,6 +344,13 @@ pub fn judge(case: &Case<'_>) -> Verdict {
         });
         let read = row.is_some_and(|row| row.delivered_via.as_deref() == Some("read"));
         let who = format!("m{number} ({} to {})", sent.from, sent.to);
+        let mut category = if status == "success" {
+            "missing_delivery"
+        } else {
+            status
+        }
+        .to_owned();
+        let mut received_us = None;
         if here.len() > 1 {
             say(
                 "I2",
@@ -364,12 +392,21 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                     if read.agent != sent.to
                         || text.is_none_or(|text| plain(text) != plain(&sent.text))
                     {
+                        category = "wrong_read".into();
                         say(
                             "I1",
                             format!("{who} was returned to {} as {text:?}", read.agent),
                             None,
                         );
+                    } else if here.is_empty() && category == "missing_delivery" {
+                        category = "delivered".into();
+                        received_us = Some(read.ended_us);
+                    } else if category == "delivered" {
+                        category = "duplicate_read".into();
                     }
+                }
+                if !here.is_empty() {
+                    category = "read_and_submitted".into();
                 }
             }
             "success" => {
@@ -398,9 +435,10 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                         })
                 });
                 match here {
-                    [] if unsaved => {}
+                    [] if unsaved => category = "unverified_session".into(),
                     [] if gave_back => {
                         *reasonable.entry("L7").or_default() += 1;
+                        category = "L7".into();
                     }
                     [] => say(
                         "I1",
@@ -413,9 +451,16 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                             .windows
                             .iter()
                             .any(|window| window.agent == *agent && window.timeline.is_some());
+                        let expected = plain(&sent.text);
                         let same = match saved {
-                            true => body.trim_end() == plain(&sent.text).trim_end(),
-                            false => *body == plain(&sent.text),
+                            true => body.trim_end() == expected.trim_end(),
+                            false => {
+                                *body == expected
+                                    || (permits_terminal_space
+                                        && sent.wait != "start_prompt"
+                                        && !expected.ends_with(char::is_whitespace)
+                                        && body.strip_suffix(' ') == Some(expected.as_str()))
+                            }
                         };
                         if !same && body != "<mixed>" {
                             say(
@@ -428,6 +473,17 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                                 None,
                             );
                         }
+                        if same {
+                            category = "delivered".into();
+                            received_us = Some(*us);
+                        } else {
+                            category = if body == "<mixed>" {
+                                "mixed_body"
+                            } else {
+                                "changed_body"
+                            }
+                            .into();
+                        }
                         waits.push((us.saturating_sub(sent.called_us)) as f64 / 1000.0);
                     }
                 }
@@ -437,6 +493,7 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 let reason = row
                     .and_then(|row| row.reason.clone())
                     .unwrap_or_else(|| status.to_string());
+                category.clone_from(&reason);
                 let row_says = row.map_or_else(String::new, |row| {
                     format!(
                         " text_written={} enter_written={:?}",
@@ -504,10 +561,13 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                     });
                 if ended.is_some_and(|us| us < sent.called_us + sent.limit_us + 1_000_000) {
                     *reasonable.entry("L4").or_default() += 1;
+                    category = "L4".into();
                 } else if unread {
                     *reasonable.entry("L3").or_default() += 1;
+                    category = "L3".into();
                 } else if window.is_some_and(|window| removed_by_person(window, number)) {
                     *reasonable.entry("L6").or_default() += 1;
+                    category = "L6".into();
                 } else if held > 0 && free < needed {
                     let kind = if back > 0 {
                         "L7"
@@ -519,6 +579,7 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                         "L1"
                     };
                     *reasonable.entry(kind).or_default() += 1;
+                    category = kind.into();
                 } else {
                     say(
                         "I15",
@@ -532,10 +593,14 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                             .then_some("behind Facade's own text"),
                     );
                 }
+                if !here.is_empty() {
+                    category = "failed_receipt_after_submission".into();
+                }
             }
         }
         // What the caller was told agrees with the store.
         if sent.wait == "delivery" && sent.succeeded != (status == "success") {
+            category = "caller_receipt_mismatch".into();
             say(
                 "I3",
                 format!(
@@ -544,6 +609,24 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 ),
                 None,
             );
+        }
+        if report_messages {
+            if here.len() > 1 {
+                category = "duplicate_submission".into();
+            } else if here.iter().any(|(agent, _, _)| *agent != sent.to) {
+                category = "wrong_recipient".into();
+            }
+            let received = received_us.filter(|_| category == "delivered");
+            let receipt = (category == "delivered")
+                .then(|| row.and_then(|row| row.delivered_ms))
+                .flatten();
+            messages.push(json!({"seq": sent.seq, "number": number, "status": status,
+                "category": category, "reason": row.and_then(|row| row.reason.as_deref()),
+                "text_written": row.map(|row| row.text_written.as_str()),
+                "enter_written": row.and_then(|row| row.enter_written),
+                "latency_ms": receipt.map(|ms| (ms * 1000).saturating_sub(sent.called_us) as f64 / 1000.0),
+                "observed_latency_ms": received.and_then(|us| us.checked_sub(sent.called_us)).map(|us| us as f64 / 1000.0),
+                "call_ms": sent.took_ms}));
         }
         if sent.wait == "inbox" && sent.from_managed {
             let named = notices.get(&sent.from).map_or(0, |texts| {
@@ -743,6 +826,9 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 || !window["keys"].is_null()
         }).collect::<Vec<_>>(),
     });
+    if report_messages {
+        verdict.stats["messages"] = json!(messages);
+    }
     verdict
 }
 

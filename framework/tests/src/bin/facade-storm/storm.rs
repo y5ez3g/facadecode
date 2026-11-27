@@ -351,6 +351,7 @@ pub struct Field {
     readings: Mutex<HashMap<String, Vec<(u64, String)>>>,
     /// The machine's processors as the storm began.
     machine: Option<(f64, f64)>,
+    daemon_usage: Option<crate::sample::Over>,
     expected_warnings: Mutex<Vec<&'static str>>,
     notes: Mutex<BTreeMap<String, Value>>,
     reals: Mutex<Vec<RealAgent>>,
@@ -371,6 +372,13 @@ impl Field {
 
     pub fn over(name: &str, shape: String, lab: Lab) -> anyhow::Result<Field> {
         println!("   home {}", lab.home.path.display());
+        let daemon_usage = crate::sample::pr_metrics()
+            .then(|| {
+                lab.home
+                    .daemon_pid()
+                    .and_then(crate::sample::Over::observed)
+            })
+            .flatten();
         Ok(Field {
             reals: Mutex::default(),
             name: name.into(),
@@ -389,6 +397,7 @@ impl Field {
             returned: Mutex::default(),
             readings: Mutex::default(),
             machine: crate::sample::machine(),
+            daemon_usage,
             expected_warnings: Mutex::default(),
             notes: Mutex::default(),
         })
@@ -501,6 +510,29 @@ impl Field {
     pub fn note_sent(&self, sent: Sent) -> Sent {
         self.sent.lock().unwrap().push(sent.clone());
         sent
+    }
+
+    pub fn note_first_prompt(&self, agent: &Agent, text: &str, called_us: u64, took_ms: f64) {
+        if !crate::sample::pr_metrics() {
+            return;
+        }
+        let (seq, _) = self.name_next("start_agent");
+        self.note_sent(Sent {
+            seq,
+            from: "start_agent".into(),
+            from_managed: false,
+            to: agent.id.clone(),
+            text: text.into(),
+            wait: "start_prompt",
+            called_us,
+            answered_us: now_us(),
+            took_ms,
+            number: None,
+            succeeded: true,
+            said: "first prompt accepted".into(),
+            failure: None,
+            limit_us: judge::LIMIT_US,
+        });
     }
 
     pub fn note_read(&self, read: Read) {
@@ -670,6 +702,15 @@ impl Field {
             })
             .collect();
         let rows = self.lab.rows()?;
+        for prompt in sent.iter_mut().filter(|sent| sent.wait == "start_prompt") {
+            if let Some(row) = rows
+                .values()
+                .find(|row| row.to == prompt.to && row.text == prompt.text)
+            {
+                prompt.number = Some(row.number);
+                prompt.from.clone_from(&row.from);
+            }
+        }
         let expected = self.expected_warnings.lock().unwrap().clone();
         let warnings: Vec<String> = warnings(&self.lab.home)
             .into_iter()
@@ -702,9 +743,24 @@ impl Field {
             .filter(|agent| !ended.contains_key(&agent.id))
             .cloned()
             .collect();
+        let daemon_before_stop = self
+            .daemon_usage
+            .as_ref()
+            .and_then(|usage| usage.observed_end(self.lab.home.daemon_pid()));
         stop_all(&self.lab, &alive, &mut verdict);
+        if let Some(usage) = &self.daemon_usage {
+            verdict.stats["daemon_case"] = json!({
+                "before_stop": daemon_before_stop,
+                "after_stop": usage.observed_end(self.lab.home.daemon_pid()),
+                "live_agents": alive.iter().filter(|agent| agent.pid > 0).count(),
+            });
+        }
 
-        let evidence = if verdict.violations.is_empty() {
+        let human_queue = matches!(
+            self.name.as_str(),
+            "H1 fast attach queue" | "H1 fast raw queue"
+        );
+        let evidence = if verdict.violations.is_empty() && !human_queue {
             None
         } else {
             let folder = out.join(file_name(&self.name));
@@ -806,7 +862,7 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
     let strangers = Strangers::watch(&field.lab, &boss, viewers)?;
     let idle_cpu = (spec.hogs > 0).then(crate::sample::machine);
     std::thread::sleep(Duration::from_millis(500));
-    let load = if spec.hogs > 0 {
+    let load = if spec.hogs > 0 || crate::sample::pr_metrics() {
         let pid = field.lab.home.daemon_pid().context("the daemon PID")?;
         Some((crate::sample::Over::start(pid), crate::sample::machine()))
     } else {
