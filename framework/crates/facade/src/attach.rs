@@ -207,6 +207,7 @@ impl ConsoleLease {
             enabled_raw,
             input: None,
             colors: HostColors::default(),
+            color_scheme_reporting: false,
         });
         Ok(Self)
     }
@@ -234,6 +235,26 @@ struct ConsoleModes {
     /// Present once Attach takes over the display.
     input: Option<Arc<AgentInput>>,
     colors: HostColors,
+    /// The CLI left color scheme notifications enabled in the host terminal.
+    color_scheme_reporting: bool,
+}
+
+impl ConsoleModes {
+    fn forward_output(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.colors.observe_output(bytes);
+        let mut reporting = self.color_scheme_reporting;
+        for (params, end) in escapes(bytes).filter_map(csi) {
+            if private_modes(params, end).is_some_and(|mut modes| modes.any(|mode| mode == b"2031"))
+            {
+                reporting = end == b'h';
+                // A partially written frame can enable reporting before its reset reaches the host.
+                self.color_scheme_reporting |= reporting;
+            }
+        }
+        write_frame(bytes)?;
+        self.color_scheme_reporting = reporting;
+        Ok(())
+    }
 }
 
 impl Drop for ConsoleModes {
@@ -1586,9 +1607,10 @@ impl Display {
         let held = self.held.is_some();
         if !switches_screen && !held && grid_fits && !shared.uses_viewport() {
             if let Some(console) = &mut self.console {
-                console.colors.observe_output(&bytes);
+                console.forward_output(&bytes)?;
+            } else {
+                write_frame(&bytes)?;
             }
-            write_frame(&bytes)?;
             return self.set_mouse(mouse);
         }
 
@@ -2290,6 +2312,9 @@ fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> 
     let alternate = std::mem::take(&mut terminal.host_alternate);
     let cli_title_shown = std::mem::take(&mut terminal.cli_title_shown);
     let mut restoration = restoration(alternate, cli_title_shown);
+    if console.color_scheme_reporting {
+        restoration.extend_from_slice(b"\x1b[?2031l");
+    }
     console.colors.restore(&mut restoration);
     let _ = write_terminal(&restoration);
     terminal.shared = None;

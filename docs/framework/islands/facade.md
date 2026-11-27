@@ -213,7 +213,9 @@ Attach so cursor moves after a full row follow the same geometry as the agent's 
 At the end of an attachment, Attach leaves the alternate screen if it entered it, returning to the shell page,
 cursor and scrollback. Before the receipt, it restores the terminal modes and any measured foreground, background
 or cursor colors that forwarded CLI output set or reset. It preserves the channel values reported by the host,
-including values with more than eight bits. The receipt and any unsent-input warning follow the opening line.
+including values with more than eight bits. Attach also disables color scheme notifications (DEC mode 2031) when
+its forwarded output left them enabled, including after a daemon reconnect. The receipt and any unsent-input warning
+follow the opening line.
 A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
 lets an active dedicated watcher receive the final output and exit in order, then closes that connection within its
 post-exit grace period. A removal or lost connection uses the corresponding Shell diagnostic.
