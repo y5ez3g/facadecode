@@ -148,11 +148,11 @@ impl Input {
     }
 }
 
-/// An agent's record, its input as its rule reads the screen now, and whether its session is
-/// followed, taken at one moment.
+/// The agent record and current terminal facts, taken at one moment.
 pub(crate) struct Inspection {
     pub(crate) agent: ManagedAgent,
     pub(crate) input: InputInfo,
+    pub(crate) colors: TerminalColors,
     pub(crate) session_tracking: bool,
     pub(crate) viewers: Vec<String>,
     pub(crate) attachments: Vec<AttachmentInfo>,

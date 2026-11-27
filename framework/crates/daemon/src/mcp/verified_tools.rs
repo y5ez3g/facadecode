@@ -24,6 +24,7 @@ use super::{
 };
 use crate::delivery::SendTurn;
 use crate::messages::{InboxRead, read_before_deadline};
+use crate::service::{CallResult, launch_color_environment};
 
 const EFFECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -154,6 +155,7 @@ async fn start(
     let mut size = Size { cols, rows };
     let mut folder = optional(arguments, "folder");
     let mut folder_is_default = false;
+    let mut env = None;
     if actor.kind == AgentKind::Managed {
         let inspect = DaemonCall::AgentInspect(AgentTargetArgs {
             target: AgentTarget::Reference(AgentRef {
@@ -161,13 +163,20 @@ async fn start(
                 agent_id: actor.reference.agent_id.clone(),
             }),
         });
-        match result!(daemon_call(relay, actor, inspect, None).await, Inspected) {
-            Ok(inspected) => {
+        match daemon_call(relay, actor, inspect, None).await {
+            Ok(CallResult::Inspected(inspected, colors)) => {
                 size = inspected.agent.size.unwrap_or(size);
+                env = launch_color_environment(Some(&colors));
                 if folder.is_none() {
                     folder = Some(inspected.agent.cwd);
                     folder_is_default = true;
                 }
+            }
+            Ok(_) => {
+                return envelope::failure(
+                    "internal",
+                    "Facade returned the result of a different operation",
+                );
             }
             Err(error) => return envelope::daemon_refusal(&error),
         }
@@ -185,7 +194,7 @@ async fn start(
         effort: optional(arguments, "effort"),
         name: optional(arguments, "name"),
         prompt: optional(arguments, "prompt"),
-        env: None,
+        env,
         call_id: Some(call.id.clone()),
         request_id: Some(call.request_id.clone()),
     };

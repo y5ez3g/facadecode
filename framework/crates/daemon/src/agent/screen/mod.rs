@@ -411,6 +411,11 @@ impl LoggedScreen {
             log: None,
         }
     }
+    /// The terminal colors for the screen's query replies.
+    pub(crate) fn colors(&self) -> TerminalColors {
+        self.colors
+    }
+
     /// Keeps the supplied colors on the current screen and every screen loaded later.
     pub(crate) fn set_colors(&mut self, colors: TerminalColors) {
         self.colors = colors;

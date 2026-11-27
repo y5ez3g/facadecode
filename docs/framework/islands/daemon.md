@@ -51,11 +51,13 @@ public `run()` entry point.
   text goes to the store or actor. Inspection reads this value from the same run as its screen
   facts. For a Terminal caller, inspection also reads the native session name or preview within the roster deadline.
   A recovered keeper run with no committed launch has no displayed command.
-- A start or resume takes the private launch context off its caller's environment. Only a Terminal
-  caller's terminal colors are used. They reach the agent's screen before the run's first output is
-  read, and a launch forwarded to another machine carries them as its whole environment. The daemon
-  keeps them in memory only. Without colors, a new agent's screen has none and a resume keeps the
-  agent's, an editor's included. With colors, a resume replaces all of them.
+- A start or resume takes the private launch context off its caller's environment. Shell supplies
+  the terminal colors it sampled. A managed MCP start samples the caller's terminal colors through
+  actor inspection. Launch colors reach the agent's screen before it reads the run's first output.
+  A forwarded launch's environment carries only the launch context. The daemon keeps terminal
+  colors in memory. A new agent without launch colors, including one started by a Guest, uses its
+  CLI's default theme. A resume with launch colors replaces all terminal colors. A resume without
+  them keeps the agent's terminal colors, including any colors supplied by an editor.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
   keeper link's copy, before it asks the keeper to stop. Batch stop uses that same path and reports
   each selected Agent's outcome. Scope stops report connected Guests as skipped.
@@ -221,7 +223,7 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `presence.rs` | Recovers Guests, retires their inboxes, validates an editor's terminal colors and maps those of a launch. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
 | `machine_service.rs`, `network_operations.rs` | Authorize and register machine streams, track routes and resolve requests to stable targets. |
-| `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. `service.rs` takes the launch context off every caller's environment and keeps the terminal colors of a Terminal caller. |
+| `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. `service.rs` takes the launch context off the caller's environment and uses launch colors from Shell and managed MCP starts. |
 | `recovery.rs` | Reconnects to keeper-held runs, restores screens and recovers pending deliveries. |
 | `command_line.rs` | Resolves launch environment, settings and program. `cli.list` uses the same resolver as start. |
 | `waits.rs` | Reports a managed run's trouble to its live agent creator, including across machines. |

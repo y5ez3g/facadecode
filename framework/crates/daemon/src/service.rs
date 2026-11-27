@@ -70,7 +70,7 @@ pub(crate) enum CallResult {
     Listed(wire::AgentListResult),
     Started(Box<wire::StartResult>),
     Stopped(wire::BatchStopResult),
-    Inspected(Box<wire::InspectResult>),
+    Inspected(Box<wire::InspectResult>, LaunchColors),
     Screen(wire::ScreenText),
     Typed(wire::TypeResult),
     Sent(Box<wire::SendResult>),
@@ -88,7 +88,7 @@ impl CallResult {
             Self::Listed(result) => value_of(result),
             Self::Started(result) => value_of(result),
             Self::Stopped(result) => value_of(result),
-            Self::Inspected(result) => value_of(result),
+            Self::Inspected(result, _) => value_of(result),
             Self::Screen(result) => value_of(result),
             Self::Typed(result) => value_of(result),
             Self::Sent(result) => value_of(result),
@@ -789,7 +789,12 @@ impl Daemon {
                 "start_agent accepts a configured CLI without trailing arguments",
             ));
         }
-        let colors = shell_launch_colors(caller, args.env.as_mut());
+        // A managed MCP start carries the verified caller's terminal colors.
+        let colors = args
+            .env
+            .as_mut()
+            .and_then(facade_base::start::take_terminal_colors)
+            .filter(|_| matches!(caller, Caller::Terminal { .. } | Caller::Agent { .. }));
         let machine = api::single_machine(args.scope.take());
         let name = incoming
             .as_ref()
@@ -964,10 +969,10 @@ impl Daemon {
         let address = self.agent_address(&reference)?;
         let result: Result<CallResult, ErrorBody> = async {
             let result = match action {
-                AgentAction::Inspect => CallResult::Inspected(Box::new(
+                AgentAction::Inspect => {
                     self.inspect(&agent, matches!(caller, Caller::Terminal { .. }))
-                        .await?,
-                )),
+                        .await?
+                }
                 AgentAction::Remove => {
                     self.remove(&agent).await?;
                     CallResult::serialized(wire::RemoveResult {
@@ -1314,9 +1319,9 @@ impl Daemon {
         self: &Arc<Self>,
         agent: &AgentHandle,
         include_session_name: bool,
-    ) -> Result<wire::InspectResult, ErrorBody> {
+    ) -> Result<CallResult, ErrorBody> {
         if agent.is_guest() {
-            return Ok(wire::InspectResult {
+            let result = wire::InspectResult {
                 agent: self.public_agent(agent.info())?,
                 started_by: None,
                 rule: None,
@@ -1331,7 +1336,11 @@ impl Daemon {
                 attachments: Vec::new(),
                 launch_command: None,
                 session_name: None,
-            });
+            };
+            return Ok(CallResult::Inspected(
+                Box::new(result),
+                LaunchColors::default(),
+            ));
         }
         let (reply, inspected) = oneshot::channel();
         if !agent.send(AgentCommand::Inspect { reply }).await {
@@ -1353,7 +1362,7 @@ impl Daemon {
         };
         let mut info = self.public_agent(facts.agent)?;
         info.title = facts.title;
-        Ok(wire::InspectResult {
+        let result = wire::InspectResult {
             started_by: self.started_by(&info)?,
             agent: info,
             rule: agent.rule().map(str::to_owned),
@@ -1363,7 +1372,9 @@ impl Daemon {
             attachments: facts.attachments,
             launch_command: facts.launch_command,
             session_name,
-        })
+        };
+        let colors = crate::presence::launch_color_sample(facts.colors);
+        Ok(CallResult::Inspected(Box::new(result), colors))
     }
 
     async fn read_screen_of(

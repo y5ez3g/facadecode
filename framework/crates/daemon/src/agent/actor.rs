@@ -901,6 +901,7 @@ impl Actor {
                 let _ = reply.send(Inspection {
                     agent,
                     input: self.read_input_box(self.untouched_input).info,
+                    colors: self.screen().colors(),
                     session_tracking: self.captures && !self.ended(),
                     viewers: if self.ended() {
                         Vec::new()

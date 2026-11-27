@@ -138,6 +138,8 @@ wake it when needed.
   the foreground and with `-d`. The agent's screen answers the CLI's color queries with them from its first output, so
   a CLI picks the theme it picks when run alone. A terminal app answers within milliseconds. Facade waits up to one
   second for one that does not say it has finished. The CLI chooses its own theme for a color without an answer.
+- An agent started by a managed agent through MCP `start_agent` inherits the caller's terminal colors, including
+  across machines and through every generation. An agent started by a Guest uses the CLI's default theme.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.

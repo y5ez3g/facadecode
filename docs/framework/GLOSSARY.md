@@ -120,7 +120,7 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | query, reply | A terminal's question, such as a cursor position request or a color query (OSC 4, 10, 11 and 12), and the terminal's answer to it | answer (for this) |
 | terminal colors | The foreground, background and cursor colors and the ANSI palette that the agent's screen replies to color queries with. VS Code supplies the first three when attached. Shell supplies those the terminal app reports before a start or resume | theme, palette (for the whole) |
 | ANSI palette | The terminal's colors 0 to 15, which OSC 4 queries | palette (alone) |
-| launch colors | The terminal colors Shell reads from the terminal app before a start or resume, `LaunchColors` | — |
+| launch colors | The terminal colors passed to a run as `LaunchColors`. Shell reads them from the terminal app before a start or resume. A managed MCP start samples the current terminal colors from its caller's screen | — |
 | launch context | The private variable that carries the launch colors to the daemon, which takes it off the environment | — |
 | client | A program connected to the daemon, such as a `facade` command, the relay or the VS Code extension | — |
 | viewer | A client showing an agent's screen | subscriber, watcher |

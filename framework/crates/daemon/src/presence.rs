@@ -81,7 +81,7 @@ impl Daemon {
     }
 }
 
-/// The colors a foreground launch reported, as the agent's screen replies with them.
+/// Launch colors in the form the screen uses for its query replies.
 pub(crate) fn launch_colors(colors: LaunchColors) -> facade_screen::TerminalColors {
     let LaunchColors {
         foreground,
@@ -90,6 +90,22 @@ pub(crate) fn launch_colors(colors: LaunchColors) -> facade_screen::TerminalColo
         ansi,
     } = colors;
     facade_screen::TerminalColors {
+        foreground,
+        background,
+        cursor,
+        ansi,
+    }
+}
+
+/// The screen's current terminal colors as launch colors for a child agent.
+pub(crate) fn launch_color_sample(colors: facade_screen::TerminalColors) -> LaunchColors {
+    let facade_screen::TerminalColors {
+        foreground,
+        background,
+        cursor,
+        ansi,
+    } = colors;
+    LaunchColors {
         foreground,
         background,
         cursor,
