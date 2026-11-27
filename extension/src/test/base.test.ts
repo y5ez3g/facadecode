@@ -392,14 +392,18 @@ suite('Base: a lock windows take turns at', () => {
 		const other = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(lock)}, 'other', { flag: 'wx' }); console.log('took', Date.now()); setTimeout(() => { const letGo = Date.now(); fs.rmSync(${JSON.stringify(lock)}); setTimeout(() => console.log('let go', letGo), 50); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 		let said = '';
 		other.stdout.on('data', (chunk: Buffer) => said += chunk.toString('utf8'));
-		const exited = new Promise(resolve => other.on('exit', resolve));
+		const closed = once(other, 'close');
 		while (!said.includes('took')) {
 			await new Promise(resolve => setTimeout(resolve, 10));
 		}
 
 		const held = withFileLock(file, () => ({ at: Date.now(), mark: fs.readFileSync(lock, 'utf8') }));
-		await exited;
-		const letGo = Number(/let go (\d+)/.exec(said)?.[1]);
+		// The process can exit while its stdout still has bytes to deliver.
+		const [code] = await closed;
+		assert.strictEqual(code, 0);
+		const released = /let go (\d+)/.exec(said);
+		assert.ok(released, 'Expected the lock holder to report its release time');
+		const letGo = Number(released[1]);
 
 		assert.deepStrictEqual({ afterItLetGo: held.at >= letGo, mine: held.mark.startsWith(`${process.pid} `), gone: fs.existsSync(lock) }, { afterItLetGo: true, mine: true, gone: false });
 	});
@@ -413,13 +417,16 @@ suite('Base: a lock windows take turns at', () => {
 		const claude = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.mkdirSync(${JSON.stringify(lock)}); console.log('took', Date.now()); setTimeout(() => { const letGo = Date.now(); fs.rmdirSync(${JSON.stringify(lock)}); setTimeout(() => console.log('let go', letGo), 50); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 		let said = '';
 		claude.stdout.on('data', (chunk: Buffer) => said += chunk.toString('utf8'));
-		const exited = new Promise(resolve => claude.on('exit', resolve));
+		const closed = once(claude, 'close');
 		while (!said.includes('took')) {
 			await new Promise(resolve => setTimeout(resolve, 10));
 		}
 		const heldAt = withFileLock(file, () => Date.now());
-		await exited;
-		const letGo = Number(/let go (\d+)/.exec(said)?.[1]);
+		const [code] = await closed;
+		assert.strictEqual(code, 0);
+		const released = /let go (\d+)/.exec(said);
+		assert.ok(released, 'Expected the lock holder to report its release time');
+		const letGo = Number(released[1]);
 		// One a Claude Code killed as it saved left behind, untouched since.
 		fs.mkdirSync(lock);
 		const longAgo = new Date(Date.now() - 20_000);
