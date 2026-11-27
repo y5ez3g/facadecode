@@ -594,17 +594,42 @@ fn text_typed_while_a_message_goes_in_stays_the_person_s_own() {
     let keys = home.folder().join("keys");
     let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
     let mut wire = connect(&home);
+    let inspected = wire.call_ok("agent.inspect", json!({ "target": worker.id }));
+    let target = &inspected["agent"]["reference"];
+    let paused_at = std::time::Instant::now();
     pause_process(worker.pid);
     let send = begin_paste(&home, "worker", "hello", 1);
+    // Typing calls on one connection reach this target in order. Send the burst before
+    // polling for replies so the CLI can resume within the paste's bounded hold.
     // The CSI-u Escape stays a separate key even when the CLI reads it together with Enter.
-    for key in [
+    let requests = [
         "w", "r", "o", "n", "g", "\x03", "m", "i", "n", "e", "\x1b[27u",
-    ] {
-        type_raw(&mut wire, &worker.id, key);
+    ]
+    .map(|key| {
+        let raw = facade_base::base64::encode(key.as_bytes());
+        wire.send(
+            "call",
+            json!({ "op": "agent.type", "args": {
+                "target": target, "input": { "kind": "raw", "raw": raw }
+            } }),
+        )
+    });
+    for id in requests {
+        let typed = wire
+            .wait_for_response(id, LOADED_TIMEOUT)
+            .expect("the agent accepted a key");
+        assert!(typed["result"].is_object(), "{typed}");
     }
+    let paused_for = paused_at.elapsed();
     resume_process(worker.pid);
     let receipt = send.receipt();
-    assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
+    assert_eq!(
+        delivery_of(&receipt),
+        typed_in(),
+        "{receipt}\nCLI paused for {paused_for:?}, keys read: {:?}\n{}",
+        std::fs::read_to_string(&keys),
+        home.screen("worker")
+    );
     assert!(
         wait_for_screen_text(&home, "worker", "❯ mine"),
         "{}",
