@@ -123,11 +123,13 @@ pub(crate) struct Relay {
 struct Presence {
     initialized: Option<PresenceLease>,
     listed: Option<PresenceLease>,
+    catalog_seen: bool,
 }
 
 enum PresenceStage {
     Initialized,
     Listed,
+    Authenticated,
 }
 
 impl Relay {
@@ -221,8 +223,14 @@ impl Relay {
     /// Holds verified catalog presence until the relay's connection ends.
     pub(crate) async fn hold_verified_presence(&self, event: CatalogEvent) {
         {
-            let presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
-            if presence.as_ref().is_none_or(|open| open.listed.is_some()) {
+            let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(open) = presence.as_mut() else {
+                return;
+            };
+            if matches!(event, CatalogEvent::Listed) {
+                open.catalog_seen = true;
+            }
+            if open.listed.is_some() {
                 return;
             }
         }
@@ -239,6 +247,8 @@ impl Relay {
         let held = match stage {
             PresenceStage::Initialized => &mut open.initialized,
             PresenceStage::Listed => &mut open.listed,
+            PresenceStage::Authenticated if open.catalog_seen => &mut open.listed,
+            PresenceStage::Authenticated => return,
         };
         if held.is_none() {
             *held = acquire();
@@ -458,6 +468,28 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_later_verified_actor_can_hold_tools_after_the_relay_serves_its_catalog() {
+        let mut relay = Relay::for_test();
+        relay.verified.services.ready = Box::new(|_, _| Box::pin(async { Ok(None) }));
+        let lease = Arc::new(());
+        let acquire = || {
+            let lease = lease.clone();
+            Box::new(move || -> Option<PresenceLease> { Some(Box::new(lease)) })
+        };
+        relay.acquire_presence(PresenceStage::Authenticated, acquire());
+        assert_eq!(Arc::strong_count(&lease), 1);
+
+        relay.hold_verified_presence(CatalogEvent::Listed).await;
+        relay.acquire_presence(PresenceStage::Authenticated, acquire());
+        relay.acquire_presence(PresenceStage::Authenticated, acquire());
+        assert_eq!(Arc::strong_count(&lease), 2);
+
+        relay.close_presence();
+        relay.acquire_presence(PresenceStage::Authenticated, acquire());
+        assert_eq!(Arc::strong_count(&lease), 1);
+    }
 
     #[test]
     fn relay_v1_frames_are_separate_from_the_mcp_client_identity() {

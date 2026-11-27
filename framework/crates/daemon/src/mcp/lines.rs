@@ -384,7 +384,7 @@ mod tests {
     use facade_base::api_v1::daemon::AgentKind;
     use facade_base::model::agent::AgentRef;
 
-    use super::super::ActorIdentity;
+    use super::super::{ActorIdentity, verified::AuthenticatedActor};
     use super::*;
 
     fn answered(line: &str) -> Value {
@@ -400,13 +400,16 @@ mod tests {
         let services = &mut relay.verified.services;
         services.authenticate = Box::new(move |_, _, _| {
             Box::pin(async move {
-                Ok(ActorIdentity {
-                    reference: AgentRef {
-                        machine_id: "00000000-0000-4000-8000-000000000001".into(),
-                        agent_id: "a7".into(),
+                Ok(AuthenticatedActor {
+                    identity: ActorIdentity {
+                        reference: AgentRef {
+                            machine_id: "00000000-0000-4000-8000-000000000001".into(),
+                            agent_id: "a7".into(),
+                        },
+                        kind: AgentKind::Managed,
+                        receives_terminal_messages,
                     },
-                    kind: AgentKind::Managed,
-                    receives_terminal_messages,
+                    acquire: None,
                 })
             })
         });

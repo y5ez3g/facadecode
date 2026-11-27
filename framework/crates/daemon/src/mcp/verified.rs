@@ -13,7 +13,9 @@ use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{AcquirePresence, CatalogEvent, InboxAnswer, InboxOutput, Initialization, Relay};
+use super::{
+    AcquirePresence, CatalogEvent, InboxAnswer, InboxOutput, Initialization, PresenceStage, Relay,
+};
 use crate::{
     Cancel,
     delivery::SendControl,
@@ -28,6 +30,12 @@ pub(crate) struct ActorIdentity {
     pub(crate) receives_terminal_messages: bool,
 }
 
+pub(crate) struct AuthenticatedActor {
+    pub(crate) identity: ActorIdentity,
+    /// The live connection may hold this after it has served its catalog.
+    pub(crate) acquire: Option<AcquirePresence>,
+}
+
 pub(crate) type ActorFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub(crate) type Authenticate = Box<
@@ -35,7 +43,7 @@ pub(crate) type Authenticate = Box<
             Option<&'a str>,
             Option<&'a Value>,
             Option<&'a str>,
-        ) -> ActorFuture<'a, Result<ActorIdentity, ErrorBody>>
+        ) -> ActorFuture<'a, Result<AuthenticatedActor, ErrorBody>>
         + Send
         + Sync,
 >;
@@ -154,14 +162,17 @@ impl Verified {
         if let Some(actor) = &connection.actor {
             return Ok(actor.clone());
         }
-        let actor = (self.services.authenticate)(
+        let AuthenticatedActor { identity, acquire } = (self.services.authenticate)(
             credential(relay),
             meta,
             connection.client_name.as_deref(),
         )
         .await?;
-        connection.actor = Some(actor.clone());
-        Ok(actor)
+        if let Some(acquire) = acquire {
+            relay.acquire_presence(PresenceStage::Authenticated, acquire);
+        }
+        connection.actor = Some(identity.clone());
+        Ok(identity)
     }
 
     pub(super) async fn prepare_presence(

@@ -202,8 +202,14 @@ impl Daemon {
                         };
                         let current = actor.current(&daemon, &evidence.process)?;
                         let identity = actor.identity(&current.handle);
+                        let acquire = actor
+                            .run
+                            .filter(|_| !deferred_tool_list(&current.handle))
+                            .map(|(run, _)| {
+                                prepare_tool_presence(current.handle, run, ToolsStage::Listed)
+                            });
                         bound.set(actor).ok();
-                        Ok(identity)
+                        Ok(mcp::verified::AuthenticatedActor { identity, acquire })
                     })
                 },
             )

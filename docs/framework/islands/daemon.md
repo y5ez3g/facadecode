@@ -1051,6 +1051,8 @@ the available page. When a run ends, the daemon releases its tools readiness gua
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.
+If the catalog was already served when a tool call verifies the managed run, the same connection
+keeps that run's tools ready until the connection ends.
 When a CLI defers its tool catalog, the holder tracks a live, credentialed initializer independently of
 the verified catalog response. Both refer to the current installed run and end with their relay connection.
 A reconnect or a tool-call routing connection supplies no catalog evidence for that CLI. After Daemon
