@@ -3943,6 +3943,7 @@ mod tests {
             assert!(recovered.screen().is_full());
             // The CLI drew this frame before the recovery, and no daemon has read it yet.
             cli.write_output(draft.as_bytes()).unwrap();
+            recovered.terminal.wait_for_queued_output(draft.len()).await;
 
             let text = "a message";
             let typing = MessageTyping::new(
@@ -4043,7 +4044,9 @@ mod tests {
             assert!(!progress().writing);
 
             if buffered_output {
-                cli.write_output(b"\x1b]0;new title\x07").unwrap();
+                let title = b"\x1b]0;new title\x07";
+                cli.write_output(title).unwrap();
+                actor.terminal.wait_for_queued_output(title.len()).await;
                 let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
                 assert!(matches!(event, TerminalEvent::Read));
                 actor.take_terminal(event);
@@ -4219,6 +4222,10 @@ mod tests {
         assert_eq!(&input[..read], paste);
         if !before_enter.is_empty() {
             cli.write_output(before_enter.as_bytes()).unwrap();
+            actor
+                .terminal
+                .wait_for_queued_output(before_enter.len())
+                .await;
         }
         assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
         actor.take_keys(Instant::now(), vec![b'\r'], false);
@@ -4443,6 +4450,7 @@ mod tests {
             let end = start + (empty.len() + draft.len()) as u64;
             if already_ready && !before_first_read {
                 cli.write_output(draft.as_bytes()).unwrap();
+                actor.terminal.wait_for_queued_output(draft.len()).await;
             }
             let mut cli = Some(cli);
             if close_peer {
@@ -4849,6 +4857,10 @@ mod tests {
             cli.write_output(empty.as_bytes()).unwrap();
             if before_first_read {
                 cli.write_output(tail.as_bytes()).unwrap();
+                actor
+                    .terminal
+                    .wait_for_queued_output(empty.len() + tail.len())
+                    .await;
             }
             let mut cut = Some(actor.terminal.output_position() + empty.len() as u64);
             let first_frame = before_first_read.then_some(DeliveryInput {
@@ -4871,6 +4883,7 @@ mod tests {
             let end = actor.terminal.output_position() + tail.len() as u64;
             if already_ready && !before_first_read {
                 cli.write_output(tail.as_bytes()).unwrap();
+                actor.terminal.wait_for_queued_output(tail.len()).await;
             }
             actor.take_terminal(read);
             if !already_ready {
@@ -5292,6 +5305,10 @@ mod tests {
         let (mut actor, mut cli, settled) = enter_while_reads_are_paused(&home, &draft).await;
         if empty_before_edit {
             cli.write_output(empty.as_bytes()).unwrap();
+            actor
+                .terminal
+                .wait_for_queued_output(draft.len() + empty.len())
+                .await;
         }
         // At the paste's hold limit, the next key goes while reads are still paused.
         actor.take_keys(Instant::now(), vec![key], false);
@@ -5338,6 +5355,10 @@ mod tests {
         let empty = synchronized(&plain_claude_frame("", ""));
         let (mut actor, mut cli, settled) = enter_while_reads_are_paused(&home, &draft).await;
         cli.write_output(empty.as_bytes()).unwrap();
+        actor
+            .terminal
+            .wait_for_queued_output(draft.len() + empty.len())
+            .await;
         actor.take_keys(Instant::now(), vec![b'\r'], false);
         assert!(actor.held_enter.is_some());
         read_buffered_frames(&mut actor, draft.len() + empty.len()).await;
@@ -5351,6 +5372,7 @@ mod tests {
         let empty = synchronized(&plain_claude_frame("", ""));
         let (mut actor, mut cli, settled) = enter_while_reads_are_paused(&home, &draft).await;
         cli.write_output(draft.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(2 * draft.len()).await;
         actor.take_keys(Instant::now(), vec![b'\r'], false);
         actor.let_enter_go();
         write_input(&mut actor).await;
@@ -5820,6 +5842,10 @@ mod tests {
         write_person_bytes(&mut actor, &mut cli, b"\x1b").await;
         if empty_before_edit {
             cli.write_output(empty.as_bytes()).unwrap();
+            actor
+                .terminal
+                .wait_for_queued_output(draft.len() + empty.len())
+                .await;
         }
         // This terminal sends the rest of the report within the Escape interval.
         actor.person.goes_on(Instant::now());
@@ -6481,6 +6507,7 @@ mod tests {
         );
         let restored_at = actor.terminal.output_position();
         cli.write_output(restored.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(restored.len()).await;
         assert_eq!(
             actor.read_screen_input().info.state,
             InputState::Interaction
@@ -6554,6 +6581,7 @@ mod tests {
                 // Both reports are already in the pipe when Backspace reaches the new question.
                 let preceding = [unread, BLOCKED].concat();
                 cli.write_output(&preceding).unwrap();
+                actor.terminal.wait_for_queued_output(preceding.len()).await;
                 preceding.len()
             } else {
                 // The old withdrawal started before the key. Only its terminator comes later.
@@ -6667,6 +6695,7 @@ mod tests {
             let (mut actor, mut cli, settled) = waiting_for_the_person_s_enter(&home).await;
             draw_input(&mut actor, "a message");
             cli.write_output(wait).unwrap();
+            actor.terminal.wait_for_queued_output(wait.len()).await;
             write_input(&mut actor).await;
             actor.take_terminal(TerminalEvent::Wrote);
             let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
@@ -6827,6 +6856,7 @@ mod tests {
                 plain_claude_frame("", ""),
             );
             cli.write_output(output.as_bytes()).unwrap();
+            actor.terminal.wait_for_queued_output(output.len()).await;
             actor.take_keys(Instant::now(), b"\x03".to_vec(), false);
             if write_clear {
                 write_input(&mut actor).await;
@@ -6965,8 +6995,9 @@ mod tests {
         let (mut actor, mut cli, settled) = waiting_for_the_person_s_enter(&folder).await;
         draw_input(&mut actor, "a message");
         assert_eq!(actor.terminal.queued(), 1);
-        cli.write_output(plain_claude_frame("", "").as_bytes())
-            .unwrap();
+        let frame = plain_claude_frame("", "");
+        cli.write_output(frame.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(frame.len()).await;
 
         write_input(&mut actor).await;
         actor.take_terminal(TerminalEvent::Wrote);
@@ -7090,6 +7121,7 @@ mod tests {
             draw_input(&mut actor, "a message");
             let old = format!("\x1b[?2026h{}", plain_claude_frame("a message", ""));
             cli.write_output(old.as_bytes()).unwrap();
+            actor.terminal.wait_for_queued_output(old.len()).await;
 
             write_input(&mut actor).await;
             actor.take_terminal(TerminalEvent::Wrote);
@@ -7316,6 +7348,7 @@ mod tests {
 
         let menu = synchronized(&claude_trust_frame(false));
         cli.write_output(menu.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(menu.len()).await;
         assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"");
         assert_eq!(
             actor.read_screen_input().info.state,
@@ -7341,7 +7374,9 @@ mod tests {
         actor.type_next();
         assert_eq!(actor.terminal.queued(), 1);
 
-        cli.write_output(b"\x1b[?2026h").unwrap();
+        let opener = b"\x1b[?2026h";
+        cli.write_output(opener).unwrap();
+        actor.terminal.wait_for_queued_output(opener.len()).await;
         let keys = read_queued_probe_input(&mut actor, &mut cli).await;
         let screen = actor.screen().screen();
         assert!(screen.synchronized_update_deadline().is_some());
@@ -7715,6 +7750,7 @@ mod tests {
                 read_output(&mut actor, &mut cli, report).await;
             } else {
                 cli.write_output(report).unwrap();
+                actor.terminal.wait_for_queued_output(report.len()).await;
                 assert!(actor.terminal.queued_output_bytes().unwrap() >= report.len());
             }
 
@@ -7754,7 +7790,9 @@ mod tests {
         let (messages, _) = messages();
         let (mut actor, mut cli) = actor_readying_tools(&home, messages.delivery_handle()).await;
         echo_startup_command(&mut actor, &mut cli).await;
-        cli.write_output(b"\x1b]0;new title\x07").unwrap();
+        let title = b"\x1b]0;new title\x07";
+        cli.write_output(title).unwrap();
+        actor.terminal.wait_for_queued_output(title.len()).await;
         let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
         assert!(matches!(event, TerminalEvent::Read));
         actor.take_terminal(event);
@@ -7970,7 +8008,9 @@ mod tests {
             .unwrap();
 
         if with_query {
-            cli.write_output(b"\x1b[5n").unwrap();
+            let query = b"\x1b[5n";
+            cli.write_output(query).unwrap();
+            actor.terminal.wait_for_queued_output(query.len()).await;
             let read = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
             assert!(matches!(read, TerminalEvent::Read));
             actor.take_terminal(read);
@@ -8538,8 +8578,13 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(start_paused = true)]
     async fn a_lone_escape_voids_the_person_s_enter_without_more_keys() {
+        // The PTY still runs on the real clock. Hold Tokio's clock until the fixture advances it.
+        let (keep_clock, clock) = std::sync::mpsc::channel::<()>();
+        let blocked = tokio::task::spawn_blocking(move || {
+            let _ = clock.recv_timeout(Duration::from_secs(5));
+        });
         let home = crate::test_folder::TestFolder::new("actor-enter-lone-escape");
         let (mut actor, mut cli, settled) = waiting_for_the_person_s_enter(&home).await;
         write_input(&mut actor).await;
@@ -8552,12 +8597,15 @@ mod tests {
             settled.borrow().is_none(),
             "Escape could have cleared the draft"
         );
-        tokio::time::sleep_until(actor.enter_wake().expect("the Escape must be classified")).await;
+        let wake = actor.enter_wake().expect("the Escape must be classified");
+        tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
         actor.type_next();
         assert!(actor.enter_wake().is_some_and(|at| at <= Instant::now()));
         actor.follow_enter();
         assert!(actor.submitting.is_empty());
         actor.type_next();
         assert!(settled.borrow().is_none());
+        drop(keep_clock);
+        blocked.await.unwrap();
     }
 }

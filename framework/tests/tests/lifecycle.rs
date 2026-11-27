@@ -614,14 +614,15 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
         let attempt = facade_base::startup::Attempt::current(&framework).unwrap();
         assert!(wait_until(LOADED_TIMEOUT, || attempt.keeper_has_first_ping(&identity)));
         let connect = "startup-before-observing-daemon";
+        let probe = "startup-before-daemon-probe";
         let mut command = home.command(&test_binaries().facade);
         if observer {
             command.args(["daemon", "--await-startup"]);
         } else {
             command.arg("list");
         }
-        let command = command
-            .env("FACADE_TEST_GATES", connect)
+        let mut command = command
+            .env("FACADE_TEST_GATES", format!("{connect},{probe}"))
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -635,14 +636,18 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
             .open(framework.join("startup/order.lock"))
             .unwrap();
         ordering.lock().unwrap();
-        let at = backdate_startup(&home, 175, 0);
+        backdate_startup(&home, 175, 0);
         ordering.unlock().unwrap();
         home.release_gate(connect);
+        home.wait_for_gate(probe);
+        home.release_gate(probe);
         if late {
-            let release = at + Duration::from_millis(5_400);
-            std::thread::sleep(release.saturating_duration_since(Instant::now()));
-        } else {
-            std::thread::sleep(Duration::from_millis(300));
+            // Keep the synthetic window until the caller observes its deadline. The daemon
+            // still holds the real origin and publishes that origin's window when it serves.
+            assert!(
+                wait_until(LOADED_TIMEOUT, || command.try_wait().unwrap().is_some()),
+                "the caller did not expire while the daemon was held"
+            );
         }
         home.release_gate(accept);
         let output = command.wait_with_output().unwrap();
@@ -658,11 +663,10 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
     }
 }
 
-fn backdate_startup(home: &TestHome, elapsed_seconds: u64, progress_ago_seconds: u64) -> Instant {
+fn backdate_startup(home: &TestHome, elapsed_seconds: u64, progress_ago_seconds: u64) {
     let startup = home.path.join("framework/startup");
     let generation = std::fs::read_to_string(startup.join("current")).unwrap();
     let records = startup.join(generation);
-    let at = Instant::now();
     let now = facade_base::startup::now();
     let started = now - elapsed_seconds * 1_000_000_000;
     let advanced = now - progress_ago_seconds * 1_000_000_000;
@@ -678,7 +682,6 @@ fn backdate_startup(home: &TestHome, elapsed_seconds: u64, progress_ago_seconds:
     progress["hard"] = json!(started + 180_000_000_000u64);
     std::fs::write(origin, serde_json::to_vec(&beginning).unwrap()).unwrap();
     std::fs::write(window, serde_json::to_vec(&progress).unwrap()).unwrap();
-    at
 }
 
 #[test]
