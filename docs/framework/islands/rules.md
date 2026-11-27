@@ -619,7 +619,8 @@ session. It also defines the formats of Facade's hooks.
 Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
 Qoder takes a session MCP file and a settings overlay with `SessionStart` and `UserPromptSubmit` hooks.
 Qoder can fire `SessionStart` before a person trusts a new folder. The first prompt after trust reports the
-session in that case. Devin uses a private
+session in that case. A single `facade-mcp` entry named `facade` in the project's `.mcp.json`
+provides the path for a startup diagnostic if the managed relay is never verified. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
 other existing config entries are linked into that root. Devin loads a project's `.devin/` files,
 `.mcp.json` and `.cursor/mcp.json` ahead of that root, so a `facade` server in any of them leaves the
