@@ -205,6 +205,16 @@ LogLevel VERBOSE
     return server, client
 
 
+def wait_for_daemon_status(name, endpoint):
+    def status():
+        try:
+            return query(endpoint, 'daemon.status', {})
+        except (FileNotFoundError, ConnectionRefusedError, TimeoutError):
+            return None
+
+    return wait_for(f'the {name} daemon to answer daemon.status at {endpoint}', status)
+
+
 def exercise(scope, programs, sockets, children, evidence):
     source, source_work, source_settings = machine(scope, 'origin', programs, sockets)
     peer, peer_work, peer_settings = machine(scope, 'peer', programs, sockets)
@@ -261,9 +271,10 @@ def exercise(scope, programs, sockets, children, evidence):
     boot = run('launch the peer over OpenSSH', ['/usr/bin/ssh', '-F', client_config, 'fixture-peer', remote])
     assert boot.stdout.splitlines()[:2] == [peer['HOME'], peer['FACADE_HOME']], boot
     run('launch the origin', [facade, 'daemon', '--detach'])
+    # A detached launch can return before the daemon starts serving requests.
     ids = []
     for name, endpoint, env in (('origin', origin_socket, source), ('peer', peer_socket, peer)):
-        hello, _ = query(endpoint, 'daemon.status', {})
+        hello, _ = wait_for_daemon_status(name, endpoint)
         ids.append(hello['machine_id'])
         run(f'name the {name}', [facade, 'machine', 'rename', ids[-1].replace('-', ''), f'qa-{name}'], env)
     origin_id, peer_id = ids
