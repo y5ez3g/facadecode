@@ -1,6 +1,6 @@
 # Shared rules
 
-[Facade Code](../PRODUCT.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
+[the product guide](../PRODUCT.md) defines the product. Group 6 owns Facade Code Framework-backed VS Code entry point.
 Groups 1–5 describe the legacy implementation during the transition.
 
 | Group | Decides |
@@ -16,7 +16,7 @@ Groups 1–5 describe the legacy implementation during the transition.
 
 ### 1.1 One request identifies one delivery
 
-**A send has one sender, one recipient run, complete content and one Facade-assigned message ID.**
+**A send has one sender, one recipient run, complete content and one Facade Code Extension-assigned message ID.**
 
 There are no recipient arrays or aggregate sends. A caller sending to several agents calls the same tool separately.
 Resolve the target once under 2.3; keep that target and message ID through internal attempts. An optional reply-to ID
@@ -38,9 +38,9 @@ before writing.
 | Success | The message was delivered under 1.3. |
 | Failure | Delivery was refused or could not be confirmed within the thirty seconds; report the reason and actual or uncertain input effects. |
 
-The thirty seconds start when the complete request reaches the Facade MCP shim or equivalent direct ingress, and hold
+The thirty seconds start when the complete request reaches the Facade Code Extension MCP shim or equivalent direct ingress, and hold
 queueing, forwarding, the paste and its confirmation. A sender's next step depends on whether its message arrived, so
-its call answers that, and no Facade result follows the answer (1.7); no automatic input occurs after the original
+its call answers that, and no Facade Code Extension result follows the answer (1.7); no automatic input occurs after the original
 deadline. Where read_messages delivers the message during a paste already begun, only that unchanged own draft may
 finish its Enter, within the original thirty seconds (1.5). Internal
 forwarding, including forwarding to another window, consumes the same allowance; do not restart it at each hop. A send to
@@ -50,7 +50,7 @@ of its thirty seconds, never renewing them, and one already ended answers its re
 read_messages delivery included (COLLABORATION-3.1). A sender whose call was cut before its answer - its window reloaded
 meanwhile - asks again with its request ID where it gave one; without one, its outcome stays unknown to it (MCP-1.2's
 `inspect_effects`). A call its caller cancels does not stop its delivery, which goes on within the same thirty seconds:
-an MCP cancellation reaches no Facade window, and only a repeat with its request ID tells its outcome. Return earlier
+an MCP cancellation reaches no Facade Code Extension window, and only a repeat with its request ID tells its outcome. Return earlier
 when the result is known. A creation prompt a start sends after its process starts (COLLABORATION-2.2) is no send of the caller's: its
 outcome goes into the start's own result (MCP-2.3). B's answer is a separate ordinary message.
 
@@ -99,16 +99,16 @@ protection.
 
 | Value | Policy |
 | --- | --- |
-| Response | An ordinary message's within 30 seconds of Facade ingress, with its outcome (1.2) |
+| Response | An ordinary message's within 30 seconds of Facade Code Extension ingress, with its outcome (1.2) |
 | Attempts per stage | At stage start, then every 3 seconds |
-| Deadline per stage | 30 seconds from that stage's start; an ordinary message's stage starts at Facade ingress and ends half a second before its thirty seconds, kept for its answer's way back, routed or not |
+| Deadline per stage | 30 seconds from that stage's start; an ordinary message's stage starts at Facade Code Extension ingress and ends half a second before its thirty seconds, kept for its answer's way back, routed or not |
 | Input held by another draft, another delivery or a pending creation prompt (1.10), or a native menu or question | Waited for within the same 30 seconds; the deadline never moves |
 | Permanent obstacle | Finish immediately; do not wait out unused slots |
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
 missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for within the
-stage, so that the person can finish typing or answering: Facade never submits the person's text with the message. At the
+stage, so that the person can finish typing or answering: Facade Code Extension never submits the person's text with the message. At the
 deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage ends
 at its deadline, held or not: one deadline for every stage, because a sender waits on its send, and a
 message its recipient's input could not take in that time is better sent again, knowingly, than typed in unseen minutes
@@ -152,15 +152,15 @@ records may help explain what happened; they are not caller request keys or a re
 retry occurs after the budget ends.
 A message can still arrive twice where a person submits its pasted text themselves, so the injected skill tells the
 receiving model to recognize repeated message IDs and avoid repeating work for the same message; MCP-6.2 owns that
-instruction. Facade does not add an exactly-once execution or platform deduplication service.
+instruction. Facade Code Extension does not add an exactly-once execution or platform deduplication service.
 
 ### 1.7 Deliver the result back to A, then stop
 
 **Give an operation's result to its sender; an undeliverable system result ends quietly.**
 
 A returned immediate final result needs no second notification. An ordinary message's send answers with its outcome
-(1.2), so no Facade result follows it - also where its delivery went on after a reload, whose sender asks again with its
-request ID where it gave one (1.2). An accepted start or stop, and a start's post-start prompt (MCP-1.3, 2.3), give A a clearly labeled Facade
+(1.2), so no Facade Code Extension result follows it - also where its delivery went on after a reload, whose sender asks again with its
+request ID where it gave one (1.2). An accepted start or stop, and a start's post-start prompt (MCP-1.3, 2.3), give A a clearly labeled Facade Code Extension
 result with the original IDs, target and outcome - for a prompt: delivered, including delivery through read_messages, or
 not delivered - using the finite result budget if needed. The result is not authored by B and requests no response.
 Results for one terminal that join under 1.5's condition go in one paste, one turn of its model for them all; a result
@@ -170,7 +170,7 @@ gone or result delivery fails, finish the handoff; do not generate another error
 chooses to reply, B is that new send's caller: a closed A produces an error to B. If no agent can receive that error,
 drop the undeliverable report. There is no chain of receipts about receipts.
 
-### 1.8 When Facade notifies the person
+### 1.8 When Facade Code Extension notifies the person
 
 **An error belongs to the operation's initiator; agent-to-agent message failures never automatically notify a person.**
 
@@ -180,14 +180,14 @@ drop the undeliverable report. There is no chain of receipts about receipts.
 | Agent operation, including start, stop and input | Calling agent |
 | A sends to B | A |
 | B sends a reply to A | B |
-| Facade cannot return a message result | End the result handoff; no human fallback |
+| Facade Code Extension cannot return a message result | End the result handoff; no human fallback |
 | Known runtime/infrastructure failure requiring human handling, with no responsible agent | Person in the affected window |
 | Agent explicitly sends to `#human` | Person through the sender's window under COLLABORATION-2.3 |
 
 A retained red card is not permission to duplicate an agent's operation error as a human popup. Do not automatically
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
 to contact a person. One fact does go to an agent: a child whose CLI has waited twenty seconds on its own permission,
-question or sign-in is reported to its running creator in the same window once each time it starts waiting. The Facade result names
+question or sign-in is reported to its running creator in the same window once each time it starts waiting. The Facade Code Extension result names
 who can answer - the person's permission and sign-in are theirs - because a child waiting on an unseen question can
 stall its creator's work. A person is never told by it. The notice reports the blocker without asking its creator to
 contact the person, forward the notice or escalate it. Whether an agent contacts the person follows the person's task
@@ -300,7 +300,7 @@ Location loss requires confirmation in the owning execution environment.
 | Ordinary input | ready, draft, interaction, unknown or unavailable |
 | Retained error | reason and source when known |
 
-A live process can lack its Facade tools. A working CLI can accept a message. An idle CLI can contain a draft. An
+A live process can lack its Facade Code Extension tools. A working CLI can accept a message. An idle CLI can contain a draft. An
 unknown activity report does not prove unusable input. Process cleanup may still be under way, but explicit close
 removes UI immediately. A stale observation is labeled as such rather than treated as proof of exit.
 
@@ -312,11 +312,11 @@ missing source time stays absent. Lost execution connections mark retained activ
 
 **Busy is green and a problem is red; anything else shows no dot.**
 
-Green and breathing while the agent is busy: starting - until its CLI first shows its activity and its injected Facade
+Green and breathing while the agent is busy: starting - until its CLI first shows its activity and its injected Facade Code Extension
 tools connect, within CLIS-2.3's bound - or working. Red where something is wrong: a failed launch, an abnormal exit, a
-lost connection to its process, an error its CLI reported, Facade tools it cannot use - injected tools that failed or
+lost connection to its process, an error its CLI reported, Facade Code Extension tools it cannot use - injected tools that failed or
 went away - or a start not ready within its bound. Red comes before green. A native permission, answer or sign-in
-question waiting for the person shows no dot even where its Facade tools are unusable or its start was not ready in
+question waiting for the person shows no dot even where its Facade Code Extension tools are unusable or its start was not ready in
 time, as the second line says what it waits for (PANEL-1.4); an error or an ended run stays red. Idle, a reported
 blocker without a recognized kind and unknown activity show no dot either - a start whose CLI reports nothing within
 the bound is red, except a custom program's, which awaits no report (CONFIGURATION-2.3), while activity unknown later in a
@@ -383,10 +383,10 @@ verifies this policy.
 Until a person closes it, it ends normally or its location is removed (2.4), every owned agent stays shown
 by its card, with the terminal in an editor tab or hidden until the person opens it (LIFECYCLE-2.2),
 across a reload, an extension host restart, an update and a lost connection alike; an agent started before an update
-keeps working through the execution supervisor that holds it (ARCHITECTURE-2.4). Where Facade cannot reach an agent's
-process, the card is red and says why (3.2); unknown activity alone shows no dot. Facade never leaves the agent out. The
+keeps working through the execution supervisor that holds it (ARCHITECTURE-2.4). Where Facade Code Extension cannot reach an agent's
+process, the card is red and says why (3.2); unknown activity alone shows no dot. Facade Code Extension never leaves the agent out. The
 one exception is a window that cannot know its own identity, so cannot tell its agents from another window's: one whose
-identity record is damaged, where Facade does not start (ARCHITECTURE-2.2), and one without its window component, which
+identity record is damaged, where Facade Code Extension does not start (ARCHITECTURE-2.2), and one without its window component, which
 is what reads that identity. It shows and starts no agents. Its running agents go on for the grace period above (ARCHITECTURE-4.3).
 A window that takes over
 that workspace shows its agents in place of the old window.
@@ -396,7 +396,7 @@ that workspace shows its agents in place of the old window.
 **Resume and Pin restore the exact conversation in its original location.**
 
 Pin stores the conversation key, original location, name and order (LIFECYCLE-3.4). Keep the conversation/location
-association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
+association for non-pinned Facade Code Extension conversations too; short-lived message cleanup must not erase it. No copied account
 credentials. Keep the CLI entry name and type, and use its current settings and 4.3's current YOLO for the new run.
 Model and effort follow CONFIGURATION-3.3: this request, then the current entry, then the native saved session or
 configuration. Historical requests are diagnostic only. A missing, disabled or changed-type entry refuses restoration
@@ -405,8 +405,8 @@ Existing processes keep their actual plan.
 
 A person's close of an agent's editor tab showing its pin mark (LIFECYCLE-3.4) unpins it. Whole-window close and a tab
 hidden any other way preserve Pin. Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately
-unpinned conversation. If the exact conversation already runs in Facade, a second agent does not launch it.
-Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
+unpinned conversation. If the exact conversation already runs in Facade Code Extension, a second agent does not launch it.
+Facade Code Extension does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
 
 A Pin can initially have no conversation key (LIFECYCLE-3.4). Explicit agent close, normal exit or
 actual location removal unpins. Abnormal exit preserves Pin. Each activation,
@@ -421,7 +421,7 @@ background, and their tabs then open in front by LIFECYCLE-3.5's tab procedure.
 The tree includes ancestors, descendants, siblings and other branches under the same root. Unrelated roots are outside
 normal non-YOLO reach. The caller's own run YOLO decides reach.
 
-Every launch reads `yolo` from the destination execution environment's current Facade settings file (default true)
+Every launch reads `yolo` from the destination execution environment's current Facade Code Extension settings file (default true)
 when accepted and keeps that value for the run. This includes human starts, agent-created children, Resume and Pin
 restoration. Changing the file does not change existing runs. A file error refuses new starts under CONFIGURATION-4.1.
 Children keep their creator's tree, not their creator's YOLO value. There is no API choice of YOLO.
@@ -429,17 +429,17 @@ Children keep their creator's tree, not their creator's YOLO value. There is no 
 Window/location/CLI discovery includes valid startup destinations even with no agents. A new child there joins its
 creator's tree; tree membership alone grants no access to unrelated agents there. Each run's own YOLO still decides
 its reach. Tool-specific limits still apply: read_messages is only the caller's inbox even in YOLO. Enable the CLI's
-own sandbox in non-YOLO when supported; its own commands and edits keep its normal approvals. Calls to Facade's own
+own sandbox in non-YOLO when supported; its own commands and edits keep its normal approvals. Calls to Facade Code Extension's own
 tools are approved in advance in either mode wherever the CLI can approve one server's tools; Muse Code cannot, so with
-YOLO off its own approvals apply to them too (CLIS-2.2). Facade's tree rules are normal operating policy, not
+YOLO off its own approvals apply to them too (CLIS-2.2). Facade Code Extension's tree rules are normal operating policy, not
 authentication or a defense against deliberately spoofed IDs. Do not add credentials, scoped delegation or a new
 security service.
 
 ### 4.4 Configuration changes affect future runs
 
-**Built-in types always receive Facade integration; configuration changes apply to new processes.**
+**Built-in types always receive Facade Code Extension integration; configuration changes apply to new processes.**
 
-Every start using one of the six built-in types attempts to inject its Facade tools and skill. There is no tools or
+Every start using one of the six built-in types attempts to inject its Facade Code Extension tools and skill. There is no tools or
 collaboration switch. An actual injection failure follows CLIS-2.2: keep the CLI usable where it can start, report the
 tools unavailable and explain why. A `custom` program receives no integration (CONFIGURATION-2.3).
 
@@ -459,7 +459,7 @@ Accepted launches create their pair immediately: the card, and the terminal, who
 hidden (LIFECYCLE-2.2). Later failure does not erase already created files or claim nothing happened. Validate what is
 available before effects; CLIS-4.2 defines checks that require a newly created directory. MCP-1.1's optional request_id
 makes a repeated start or send reuse its first operation, including concurrent calls, lost cross-window replies and a
-run that has since ended. Without it, repeating a start may create another agent. Facade may keep internal IDs for its
+run that has since ended. Without it, repeating a start may create another agent. Facade Code Extension may keep internal IDs for its
 own operations without turning them into a public feature.
 
 ### 5.2 Cancellation preserves completed effects
@@ -468,13 +468,13 @@ own operations without turning them into a public feature.
 
 Canceling a picker has no effects. Stopping an accepted launch with Stop Agent or stop_agent
 (LIFECYCLE-3.1) prevents later spawn and ends its own pending input. Created worktrees and branches remain. Native
-post-create environment preparation is not a Facade-managed job. There is no message-recall tool, worktree-delete API or
+post-create environment preparation is not a Facade Code Extension-managed job. There is no message-recall tool, worktree-delete API or
 stop-with-delete option; a person deletes a clean linked worktree only by WORKTREES-3.2's confirmed picker action,
-otherwise with their usual Git tools. Facade observes actual location loss under 2.4.
+otherwise with their usual Git tools. Facade Code Extension observes actual location loss under 2.4.
 
 ### 5.3 Durable records have explicit retention and owners
 
-**Keep simple bounded runtime records and thirty-day Facade message records; vendor conversations are not deleted.**
+**Keep simple bounded runtime records and thirty-day Facade Code Extension message records; vendor conversations are not deleted.**
 
 The window components own routing; execution owners keep process/input facts; workspace storage keeps preferences; CLI
 stores own their conversations. No durable caller-key deduplication ledger or notification handover ledger is needed.
@@ -487,19 +487,19 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ### 6.1 Workspace presentation
 
-**The panel shows every running Managed Agent visible to this window's Orchestrator.**
+**The panel shows every running Managed Agent visible to this window's Facade Code Framework.**
 
 Agents started from Shell, other windows or other agents appear automatically. Opening a card opens its terminal.
 The workspace remembers the agents started or opened there, their descendants and its Pins across reloads and
 reopens. Those agents can keep cards after exit. Observing an unrelated live record leaves the saved roster alone
 until its card is opened or pinned. Keep a last observed card and mark it unavailable when the source is
-temporarily unreachable. The Orchestrator owns the records and processes. The extension owns presentation and
+temporarily unreachable. Facade Code Framework owns the records and processes. The extension owns presentation and
 Pins under ARCHITECTURE-6.2.
-A remote extension host connects to the Orchestrator on the machine where it runs.
+A remote extension host connects to Facade Code Framework on the machine where it runs.
 
 ### 6.2 References and results
 
-**The editor uses the Orchestrator's addresses, state, title and scoped query results.**
+**The editor uses Facade Code Framework's addresses, state, title and scoped query results.**
 
 An agent address is `a3@devbox` or `a3@9a0d44b2`; keep the full address for Copy Agent Reference. The panel follows
 the same active Managed Agents as Shell's `facade list`. Resume Agent uses the same scoped results
@@ -511,7 +511,7 @@ in use. PANEL-4.1 owns the card presentation. The editor uses the complete ident
 
 **Attach shows the running agent's shared terminal grid. Closing a tab detaches that view.**
 
-Each open view reports the rows and columns its pane can fit. The Orchestrator takes the smallest capacity in each
+Each open view reports the rows and columns its pane can fit. Facade Code Framework takes the smallest capacity in each
 dimension across live Attach viewers that have reported it. Each view draws at the confirmed grid size. Closing a tab
 recalculates the grid for the remaining views and leaves the agent running. Use VS Code for terminal colors.
 
@@ -523,7 +523,7 @@ workspace's card, Pin and view. Rename keeps the address. PANEL-4 owns the avail
 
 ### 6.4 Pin and reopening
 
-**Pin is available as soon as Framework accepts a managed agent's start, including agents on reachable remote machines.**
+**Pin is available as soon as Facade Code Framework accepts a managed agent's start, including agents on reachable remote machines.**
 
 When a workspace opens after its last window closed, make one recovery attempt per Pin. All windows share the
 result. Wake a sleeping machine for the stored reference and Attach to a running agent. For a stopped, crashed
@@ -544,13 +544,13 @@ the card and Pin and ends automatic recovery for it.
 On the editor's machine, show workspace folders and worktrees. For another machine, offer its login home, recent
 folders and direct path entry. Show the CLI choices and explain unavailable CLI entries using the selected
 machine's settings, chosen folder and environment (6.6). An ordinary folder works without Git. For a repository on either
-machine, Facade can create a worktree as part of a start under WORKTREES-5.1. Git owns deletion.
+machine, Facade Code Extension can create a worktree as part of a start under WORKTREES-5.1. Git owns deletion.
 When a folder is removed from the workspace or disappears on disk, the agent keeps running.
-A later start or resume follows the Orchestrator's path validation.
+A later start or resume follows Facade Code Framework's path validation.
 
 ### 6.6 Settings and permissions
 
-**The Orchestrator applies settings and permissions on the agent's machine.**
+**Facade Code Framework applies settings and permissions on the agent's machine.**
 
 Use that machine's `facade.json`. The editor resolves its execution home under CONFIGURATION-7.1. A local
 start uses the initiating Shell, editor, or agent environment, including a Guest's
@@ -559,7 +559,7 @@ location, model, effort and CLI arguments, and uses the machine's current settin
 
 YOLO defaults to on. A managed agent reads it at start or resume. A Guest reads it when it joins. With YOLO off,
 a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Every managed run
-gets the approvals for Facade's tools and its Codex hook. YOLO enables the CLI's native approval and sandbox bypass
+gets the approvals for Facade Code Extension's tools and its Codex hook. YOLO enables the CLI's native approval and sandbox bypass
 where available. Person starts keep the CLI's own startup prompts. Only MCP `start_agent` counts as an agent start.
 Shell, editor and resume use person policy. Agent starts disable native automatic updates. With YOLO on an agent
 start also clears supported startup prompts. Login remains a CLI interaction. See CLIS-6.3.
@@ -569,18 +569,18 @@ The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of dif
 
 **The editor entry point handles starts, opening terminals and recovery. Shell handles machines and sending messages.**
 
-The Orchestrator owns the common Shell and MCP contracts, including Guest identity, delivery outcomes and the eight
-tools. A failed background delivery or a watchdog incident produces a Facade notice (🔔). Startup trouble and
+Facade Code Framework owns the common Shell and MCP contracts, including Guest identity, delivery outcomes and the eight
+tools. A failed background delivery or a watchdog incident produces a Facade Code Extension notice (🔔). Startup trouble and
 the first prompt's failure share one notice. The [product guide](../PRODUCT.md#messages) defines the outcomes.
 The editor displays its own operation errors. Open the agent's terminal or inspect its state to see its work.
 WSL and Dev Containers reached as machines use SSH you configure and `facade machine add`. Remote-SSH itself opens
-an editor whose extension host uses that machine's Orchestrator.
+an editor whose extension host uses that machine's Facade Code Framework.
 
 ### 6.8 Window Component
 
 **The Window Component cleans up stale terminal tabs after reconnect or extension restart.**
 
-Its existing legacy implementation duties apply during the transition. In the VS Code entry point, the Orchestrator has no
+Its existing legacy implementation duties apply during the transition. In the VS Code entry point, Facade Code Framework has no
 window membership or automatic Remote-SSH registration. The extension reads persisted workspace visibility under
 6.1 and uses the Window Component's native key to locate saved Pins for a folderless window.
 
@@ -593,6 +593,6 @@ window membership or automatic Remote-SSH registration. The extension reads pers
 | 3.1–3.4 | Work green, errors red, no dot otherwise, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
-| 6.1–6.8 | Shared workspace list and upgrade, Orchestrator agent list and Resume, shared Attach grid and card actions, Pin recovery, SSH locations, settings and transition cleanup |
+| 6.1–6.8 | Shared workspace list and upgrade, Facade Code Framework agent list and Resume, shared Attach grid and card actions, Pin recovery, SSH locations, settings and transition cleanup |
 
 [Verification](engineering/VERIFICATION.md) owns actual evidence.

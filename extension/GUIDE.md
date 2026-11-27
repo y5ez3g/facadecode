@@ -1,6 +1,6 @@
 # Facade Code Extension guide
 
-Facade Code Extension is Facade Code's VS Code entry point. It starts and opens agents through the Orchestrator on the
+Facade Code Extension is the VS Code entry point for Facade Code Framework. It starts and opens agents through Facade Code Framework on the
 machine that hosts the workspace. The [product documentation](../docs/PRODUCT.md) covers the three entry points.
 
 ## Install for your workspace host
@@ -9,20 +9,20 @@ Choose the platform VSIX and matching Window Component from the same release or
 [source package build](../docs/framework/FEATURES.md#build-matching-packages-from-source) as your API v1 Shell.
 The platform VSIX has the target of the workspace host. In VS Code, use
 [Extensions: Install from VSIX](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace#_install-from-a-vsix)
-for the Facade Code package in the workspace window. Install the Window Component for the local VS Code UI.
-Set **Facade: Framework** to `auto` and reopen the workspace. In a remote window, confirm that Facade Code
+for the Facade Code Extension package in the workspace window. Install the Window Component for the local VS Code UI.
+Set **Facade: Framework** to `auto` and reopen the workspace. In a remote window, confirm that Facade Code Extension
 is installed on the remote workspace host. Use the same Facade home as your Shell on that host.
 
 ## One panel for your workspace
 
 Use **New Agent** to pick a CLI. Choose **Change Working Location** to pick a workspace folder or a Git worktree.
 To use a saved machine, pick it in the same step, then choose a recent directory or its login home, or enter a
-path. Facade wakes an asleep machine when you select it and shows that machine's CLI choices and availability.
+path. Facade Code Extension wakes an asleep machine when you select it and shows that machine's CLI choices and availability.
 To create a worktree while starting, choose a Git repository on either machine and enter a new branch name.
 Use your usual Git commands to remove a worktree.
 
 Use **Go to Agent** beside **Resume** on the Panel, or from the Command Palette, to search the running managed agents
-that your Orchestrator can reach. Select one to open its terminal. The workspace remembers that agent and its
+that your Facade Code Framework can reach. Select one to open its terminal. The workspace remembers that agent and its
 helpers, including helpers that were already running. Helper cards appear without opening tabs or moving focus.
 Windows of the same workspace share the list and Pins.
 
@@ -48,27 +48,27 @@ After a disconnect, Attach shows the current screen and reports any dropped inpu
 ## Resume and Pin
 
 **Resume Agent** shows ended agents with sessions and saved CLI sessions for the workspace. It uses the same
-Orchestrator results as `facade resume` for that scope. Resuming an ended agent uses its original address, folder,
+Facade Code Framework results as `facade resume` for that scope. Resuming an ended agent uses its original address, folder,
 session, model and effort. Choosing a saved session creates an agent at a new address. If the session is already
-in use, Facade identifies the agent that holds it.
+in use, Facade Code Extension identifies the agent that holds it.
 
-Pin an agent after its CLI creates a session. On reopen, a running pinned agent reattaches. Facade makes one
+Pin an agent after its CLI creates a session. On reopen, a running pinned agent reattaches. Facade Code Extension makes one
 Resume attempt for each stopped or crashed pinned agent, and a red card explains a failure. Use **Unpin** before
-**Stop** to leave that agent stopped across reopens. Editor tab pins and closes leave Facade's Pin as it was.
+**Stop** to leave that agent stopped across reopens. Editor tab pins and closes leave Facade Code Extension's Pin as it was.
 
 Ended records expire after 30 days. An unpinned card then disappears. After confirmed expiry, a pinned agent can
 continue from its saved session as a new agent. A machine that cannot be reached leaves a red card and its Pin.
 Choose **Remove** on the card to delete its record, clear the Pin and end automatic recovery. If the session is
-confirmed gone, Facade clears the Pin and tells you. Reopen the same workspace and Facade home to recover its
+confirmed gone, Facade Code Extension clears the Pin and tells you. Reopen the same workspace and Facade home to recover its
 saved roster and Pins. Restore an SSH route with `facade machine add` to refresh members already saved in that
 roster.
 See [workspace state and recovery](../docs/extension/engineering/ARCHITECTURE.md#62-workspace-state-and-upgrade).
 
 ## SSH and agent collaboration
 
-A Remote-SSH editor connects to its remote host's Orchestrator. To reach more machines from that host, use Shell
+A Remote-SSH editor connects to its remote host's Facade Code Framework. To reach more machines from that host, use Shell
 there to register them with `facade machine add`. WSL and Dev Containers that you want to reach as machines also use
-SSH configured inside those environments. You can use Facade directly inside either environment. See the
+SSH configured inside those environments. You can use Facade Code Extension directly inside either environment. See the
 [standalone Shell installation](../docs/framework/FEATURES.md#install-the-standalone-shell) and the
 [MCP entry point](../docs/PRODUCT.md#mcp).
 
@@ -90,7 +90,7 @@ environment. See the [settings example](README.md#settings) and the
 
 ## Legacy implementation transition
 
-Set **Facade: Framework** to `off` and reload to select the legacy implementation. Its **Facade: Home** setting and Window
+Set **Facade: Framework** to `off` and reload to select the legacy implementation. Its **Facade Code Extension: Home** setting and Window
 Component requirement still apply. During the transition, the legacy implementation retains its window grace periods and
 its own Stop, Dismiss and Pin behavior. The [legacy implementation lifetime rules](../docs/extension/RULES.md#41-ownership-reload-and-closure)
 describe those details.

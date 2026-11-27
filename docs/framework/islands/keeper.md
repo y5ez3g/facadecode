@@ -253,7 +253,7 @@ The same keeper, in `src/windows/`; the Unix modules are not built there.
 - **A start** (`console.rs`): the package's `conpty.dll` is loaded once, from
   `framework/bin/<build>/conpty/`, with its search limited to that folder and System32; without it a start
   fails with an error naming the folder. Then:
-  1. two named pipes, owner only: the pseudo console's end the server, synchronous; Facade's end the
+  1. two named pipes, owner only: the pseudo console's end the server, synchronous; Facade Code Framework's end the
      client, overlapped;
   2. a pseudo console on them (`CreatePseudoConsole`), and a copy of the signal pipe's write end,
      the first of the three handles behind the `HPCON`;

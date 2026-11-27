@@ -1,6 +1,6 @@
 # Locations and worktrees
 
-Group 5 covers worktrees in the Orchestrator-backed editor. Groups 1–4 cover the legacy implementation transition.
+Group 5 covers worktrees in Facade Code Framework-backed editor. Groups 1–4 cover the legacy implementation transition.
 
 Layer 3. Ordinary folders are the baseline; Git and worktrees are optional under PRODUCT-5.4. This document owns location
 catalogs, native creation, the confirmed deletion of a linked worktree and observation of external location removal.
@@ -42,7 +42,7 @@ using the anchor too; a `location_id` formerly issued for the cwd itself normali
 Resume and removal keep the exact cwd and its internal record. New Agent's remembered default for such a cwd likewise
 normalizes to its anchor (LIFECYCLE-1.2). An unavailable cwd is never registered. Confirmed deletion of that cwd's
 directory ends the agents working in it (3.3), without removing its anchor or touching the anchor's other agents;
-failed reads preserve its record. Discover worktrees made by any tool; no Facade-ownership gate applies. Related worktrees
+failed reads preserve its record. Discover worktrees made by any tool; no Facade Code Extension-ownership gate applies. Related worktrees
 outside the folder are normal. Deduplicate physical paths while preserving workspace associations. Paginate discovery
 if needed; no arbitrary catalog cutoff makes a valid known location permanently inaccessible. A checkout's root is
 labeled by its branch, else by its folder name; an opened subfolder is labeled by its folder name. Detached HEAD has no invented branch. Use environment and canonical paths for identity, never branch text.
@@ -127,7 +127,7 @@ failed after it, the reason without its closing period (PANEL-1.4).
 
 ### 2.3 No repository initialization
 
-**Facade does not initialize Git repositories or create initial commits.**
+**Facade Code Extension does not initialize Git repositories or create initial commits.**
 
 No initialization button, modal, onboarding advice or hidden startup fallback is provided. Missing Git, repository or
 commit is only the actual prerequisite error for the requested Git operation. Ordinary agents in the folder remain
@@ -139,13 +139,13 @@ confirmation; the native picker does not promise a per-item disabled/greyed styl
 
 ### 2.4 Copy, link and tasks
 
-**Native post-create copying, links and environment preparation do not gate Facade CLI startup.**
+**Native post-create copying, links and environment preparation do not gate Facade Code Extension CLI startup.**
 
 Use the selected source checkout and the editor's existing worktree preparation configuration where supported.
-Facade starts the CLI once the directory exists and Git recognizes the new worktree. It does not wait for subsequent
+Facade Code Extension starts the CLI once the directory exists and Git recognizes the new worktree. It does not wait for subsequent
 copy/link/worktreeCreated work to finish, enforce its success, track its jobs or rerun it.
 This accepts that the CLI can start before the environment is fully prepared. Such preparation belongs to the existing
-Git/editor workflow, not a new Facade task or orchestration concept. Do not implement a parallel copy-pattern engine
+Git/editor workflow, not a new Facade Code Extension task or orchestration concept. Do not implement a parallel copy-pattern engine
 or preparation-completion protocol to improve this edge case.
 
 ### 2.5 Close during creation
@@ -153,7 +153,7 @@ or preparation-completion protocol to improve this edge case.
 **Closing a launch removes its UI immediately and prevents its later CLI spawn, without deleting the worktree.**
 
 If native creation already made a directory/branch, leave it. If a native operation finishes after the launch was
-closed, do not start the canceled CLI. Do not adopt, cancel or reconcile native setup jobs as Facade-managed tasks.
+closed, do not start the canceled CLI. Do not adopt, cancel or reconcile native setup jobs as Facade Code Extension-managed tasks.
 
 ## 3 Names and external removal
 
@@ -162,15 +162,15 @@ closed, do not start the canceled CLI. Do not adopt, cancel or reconcile native 
 **Human location labels and navigation use this window's actual locations and their original environment.**
 
 Location labels follow 1.2 and preserve qualified location identity; labels do not change Git branches or paths.
-Facade adds no other location commands (UX-3.1): the person uses the editor's ordinary file, terminal and navigation
+Facade Code Extension adds no other location commands (UX-3.1): the person uses the editor's ordinary file, terminal and navigation
 controls. Reviews, merge/commit/push and worktree deletion other than 3.2's also belong to ordinary editor/Git tools.
 
 ### 3.2 Deleting a linked worktree
 
-**A person deletes a linked worktree only from Change Working Location, after confirming; Facade never deletes changes Git has not committed.**
+**A person deletes a linked worktree only from Change Working Location, after confirming; Facade Code Extension never deletes changes Git has not committed.**
 
 Only a registered linked worktree is offered: not the main checkout, a plain folder, a location a workspace folder
-opened, or one a workspace folder is in. LIFECYCLE-1.3 owns the confirmation. Facade then revalidates it with Git; one
+opened, or one a workspace folder is in. LIFECYCLE-1.3 owns the confirmation. Facade Code Extension then revalidates it with Git; one
 that is not such a worktree now is refused:
 `Cannot delete "{0}": only a linked worktree with no workspace folder in it can be deleted.`
 Where `git status --porcelain` in it lists anything - a change that is not committed or an untracked file - or a file
@@ -192,10 +192,10 @@ wait for confirmed stops or starts confirmed to have done nothing (LIFECYCLE-3.1
 It then checks for changes again - what the agents wrote as they ended - refusing as above, and runs
 `git worktree remove <path>` without `--force`, with 4.1's Git and execution environment; the branch is kept. Git's own
 refusal is reported as `Could not delete worktree "{0}": {1}` and nothing is retried. Where Git succeeds but leaves the
-folder - newer Git leaves a link inside it in place - Facade says
+folder - newer Git leaves a link inside it in place - Facade Code Extension says
 `Deleted worktree "{0}", but folder {1} was left behind.` and deletes nothing itself. The catalog is then read again,
 which confirms the deletion under 1.3 (3.3). There is no deletion command, MCP tool or other agent API, no
-stop-and-delete, branch deletion, `--force`, discard flow or recursive removal by Facade. Stopping an agent does not
+stop-and-delete, branch deletion, `--force`, discard flow or recursive removal by Facade Code Extension. Stopping an agent does not
 delete its directory or branch.
 
 ### 3.3 Observe external removal
@@ -217,10 +217,10 @@ windows or repair another tool's Git operation.
 **One location service in the execution environment supplies human flows and MCP startup.**
 
 The native creation interface is the VS Code Git extension API's repository worktree creation, feature-detected in
-each supported editor; where that extension has not opened the source's repository, Facade asks it to. Where the editor
+each supported editor; where that extension has not opened the source's repository, Facade Code Extension asks it to. Where the editor
 does not supply it, worktree creation reports unavailable with its reason and ordinary locations remain usable.
 Read-only discovery may use existing Git metadata and direct Git calls. Respect resource-scoped git.path and execution
-environment. Do not add an independent Facade setup subsystem to fill a native integration gap; Facade's one deletion
+environment. Do not add an independent Facade Code Extension setup subsystem to fill a native integration gap; Facade Code Extension's one deletion
 is 3.2's.
 
 ### 4.2 Git operations and recovery
@@ -234,7 +234,7 @@ Git at another repository (`GIT_DIR`, `GIT_WORK_TREE` and the like) or at a prom
 Git read times out after 10 s, which leaves its metadata stale. Creations into one `<main-folder>.worktrees` folder run
 one at a time across the environment's windows; a creation waits up to 120 s for another window's, then fails. Unknown
 results remain unknown; do not redo creation solely because a reply was lost. No destructive rollback, hard reset,
-force push or recursive deletion belongs to Facade worktree management; its one deletion is 3.2's, which may take
+force push or recursive deletion belongs to Facade Code Extension worktree management; its one deletion is 3.2's, which may take
 300 s and on Windows runs with long paths enabled (`-c core.longpaths=true`), as a deep folder otherwise fails
 partway. Background cleanup of an agent does not wait for native post-create preparation.
 
@@ -248,7 +248,7 @@ with the mouse - it opens 2.1's native picker flow. Its structured arguments are
 `{location_id: string, branch: string, base_ref?: string}`; invalid arguments fail without guessing. The result identifies
 the created location, destination and branch; failures report actual retained effects without claiming subsequent
 environment setup completed. New Agent's contextual creation keeps its launch service under LIFECYCLE-1.3 and 4.1.
-The Framework-backed extension uses the editor's Git creation service for this standalone command. Refresh the
+The Facade Code Framework-backed extension uses the editor's Git creation service for this standalone command. Refresh the
 location catalog after success so the worktree is selectable without reopening the workspace. The command
 does not start an agent. Existing locations remain usable without requesting a new worktree.
 
@@ -264,10 +264,10 @@ action are shared too. Each entry owns its surrounding steps and final creation 
 **During New Agent, the person can request a worktree from the selected repository's current HEAD on either machine.**
 
 Follow RULES-6.5. Offer New Worktree for a repository confirmed by the target machine, including a manually entered
-remote folder. Pass the chosen branch as part of the start. The Orchestrator creates the worktree and starts
+remote folder. Pass the chosen branch as part of the start. Facade Code Framework creates the worktree and starts
 the agent on that machine. Keep the branch path in the sibling `<repository>.worktrees/<branch>` folder.
 Report an existing branch, an occupied destination or a branch path the target system cannot represent. Use Git to
-delete a worktree. Workspace folder changes leave agent lifetimes to the Orchestrator.
+delete a worktree. Workspace folder changes leave agent lifetimes to Facade Code Framework.
 
 ## Checks
 

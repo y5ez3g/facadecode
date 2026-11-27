@@ -1,6 +1,6 @@
-# Jak współtworzyć Facade Code
+# Jak współtworzyć Facade Code Extension
 
-Dziękujemy za pomoc. Facade Code jest rozwijane otwarcie na [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Dziękujemy za pomoc. Facade Code Extension jest rozwijane otwarcie na [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Błędy i pomysły
 
@@ -18,7 +18,7 @@ Jak pracujemy w tym repozytorium, opisuje [`docs/ide/ENGINEERING.md`](../../ide/
 
 - Twórz gałąź od `main` jako `feature/<number>-<name>`.
 - Merge, nigdy rebase: funkcja trafia do `main` przez `--no-ff`, po przeglądzie kodu.
-- Trzymaj pliki Facade Code razem, a w plikach VS Code dodawaj opcjonalne hooki zamiast przepisywać ich logikę, żeby scalanie nowszych wersji VS Code wymagało mniej pracy.
+- Trzymaj pliki Facade Code Extension razem, a w plikach VS Code dodawaj opcjonalne hooki zamiast przepisywać ich logikę, żeby scalanie nowszych wersji VS Code wymagało mniej pracy.
 - Każda funkcja ma przełącznik; po jej wyłączeniu VS Code działa jak oryginał.
 - Do każdej zmiany dołącz testy.
 - Dokumentację, komentarze i opisy commitów pisz po angielsku.

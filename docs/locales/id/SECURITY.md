@@ -1,6 +1,6 @@
 # Keamanan
 
-Facade Code dikembangkan secara terbuka di [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Facade Code Extension dikembangkan secara terbuka di [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Melaporkan kerentanan
 

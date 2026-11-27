@@ -1,6 +1,6 @@
-# Đóng góp cho Facade Code
+# Đóng góp cho Facade Code Extension
 
-Cảm ơn bạn đã giúp đỡ. Facade Code được phát triển công khai tại [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Cảm ơn bạn đã giúp đỡ. Facade Code Extension được phát triển công khai tại [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Lỗi và ý tưởng
 
@@ -18,7 +18,7 @@ Cách làm việc trong repository này được mô tả trong [`docs/ide/ENGIN
 
 - Tạo nhánh từ `main` với tên `feature/<number>-<name>`.
 - Chỉ merge, không bao giờ rebase: một tính năng vào `main` bằng `--no-ff`, sau khi được review.
-- Giữ các tệp của Facade Code ở cùng một chỗ, và trong các tệp của VS Code, hãy thêm hook tùy chọn thay vì viết lại logic của chúng, để việc merge một phiên bản VS Code mới hơn vẫn ít tốn công.
+- Giữ các tệp của Facade Code Extension ở cùng một chỗ, và trong các tệp của VS Code, hãy thêm hook tùy chọn thay vì viết lại logic của chúng, để việc merge một phiên bản VS Code mới hơn vẫn ít tốn công.
 - Mỗi tính năng đều có công tắc; khi tắt tính năng, VS Code hoạt động như bản gốc.
 - Mỗi thay đổi đều phải kèm test.
 - Viết tài liệu, comment và commit message bằng tiếng Anh.

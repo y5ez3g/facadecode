@@ -185,7 +185,7 @@ Existing fixtures cover [development DB and WAL preservation](../../../framework
 [v4 saved routes, sessions and receipts](../../../framework/tests/tests/upgrade.rs#L2535),
 [send replay after restart](../../../framework/tests/tests/reliability.rs#L343) and
 [repeated starts](../../../framework/tests/tests/reliability.rs#L507). The pre-snapshot and v4
-scenarios open their fixture in the Framework directory with the current executable.
+scenarios open their fixture in the Facade Code Framework directory with the current executable.
 
 Changes to the stored contract follow the [compatibility review](../ENGINEERING.md#compatibility-contracts).
 
@@ -237,7 +237,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
   - Every screen change goes into the screen log before the screen takes it.
   - A question taller than the screen, such as Kiro's trust-all-tools warning, pushes its top into
-    the scrollback, where the CLI's redraw after the answer cannot reach. When the person or Facade
+    the scrollback, where the CLI's redraw after the answer cannot reach. When the person or Facade Code Framework
     answers a question of the CLI's own before anything was said in a new session, the actor erases
     the scrollback (`CSI 3 J`, logged and shown) if it holds at most a screenful.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
@@ -267,7 +267,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits; more is refused with the input given back.
   - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
-- **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade's.
+- **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade Code Framework's.
 - **Interface:**
   - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the
     record, `PtyMaster`, `ScreenStart`, rule name, `DeliveryHandle`, `StateStart` and initial colors.
@@ -318,7 +318,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 #### state
 
-`StateTracker`: which of the 8 states the agent is in, from what its CLI reports and shows and from Facade's own facts.
+`StateTracker`: which of the 8 states the agent is in, from what its CLI reports and shows and from Facade Code Framework's own facts.
 
 - **Owns:** what the CLI reported and its screen showed, the turn, a question the CLI asks, the tools' connection, how the run ended, what was last said to the agent, and the file `framework/screens/<id>/state`.
 - **Keeps:**
@@ -479,12 +479,12 @@ the private reply receipt. The persisted original remains identifiable after the
 
 ### runs
 
-Every run Facade starts, from its start or resume until its exit is saved: the keeper behind the
+Every run Facade Code Framework starts, from its start or resume until its exit is saved: the keeper behind the
 runs, each run's terminal and exit, its files and plugin, and the session its CLI reports.
 `framework/crates/daemon/src/runs/`.
 
 - **Owns:** the connection to the keeper; the registry of runs whose terminal the daemon holds;
-  starts not yet registered; each run's exit-saving task; run folders in `framework/runs/`; Facade's
+  starts not yet registered; each run's exit-saving task; run folders in `framework/runs/`; Facade Code Framework's
   plugin in project folders; session following.
 - **Keeps:** a run keeps only its first exit, and an exit carries its run number, so an old run's
   exit never reaches a new one. A run is registered before `start` returns, before the daemon
@@ -536,7 +536,7 @@ The keeper connection, the run registry, and starts not yet registered.
 - **Owns:** the keeper connection and its state (absent, connecting, ready); the client socket
   (base's `ClientSocket`) with its requests, pings and the terminals its lines carry (`LineSender`,
   `LineReceiver`); the registry: per run its process identity, a copy of
-  its terminal (`PtyMaster`), its first exit, its role (agent, unreadable record, cleanup), whether Facade is
+  its terminal (`PtyMaster`), its first exit, its role (agent, unreadable record, cleanup), whether Facade Code Framework is
   stopping it, its run number and `ExitSink`, and whether the daemon has committed it; the pending
   starts, which hold an exit that comes before registration.
 - **Keeps:** a keeper becomes ready only after `agent.sync` has given it every terminal the daemon
@@ -573,7 +573,7 @@ A run's command line, environment, folder, plugin, workspace configuration and s
   [`StartArgs`](../../../framework/protocol/DAEMON.md#startargs) and `FACADE_HOME`. It owns private
   run folders `framework/runs/<agent>/<random>/`, with the session file, the tool files, aliases to retained
   configuration entries, and a `plugin-folder` note naming the project whose plugin a start placed;
-  Facade's plugin in a project's `.agents/plugins/facade/`, the starts holding it and the runs
+  Facade Code Framework's plugin in a project's `.agents/plugins/facade/`, the starts holding it and the runs
   using it; one session follower per running run.
 - **Keeps:** an agent has at most one run folder, and a folder name is never used again; a resume
   removes the earlier folders before it creates its own. A plugin is written only where it is
@@ -716,7 +716,7 @@ trait and writes responses and watch changes back, without knowing what any oper
     terminal end release that viewer.
   - A machine hello or connect hands the same buffered reader and writer to the machine session
     after its response is flushed. The old connection releases its watches before the handoff.
-  - Once a newer Facade takes over, every connection past `hello` gets a `closing` notification;
+  - Once a newer Facade Code Framework takes over, every connection past `hello` gets a `closing` notification;
     what the client sent before its response, or within 0.2 seconds, still runs; then its reading
     ends.
   - While the daemon decides to exit, arriving connections are closed before `hello`.

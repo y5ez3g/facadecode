@@ -1,6 +1,6 @@
 # Security
 
-Facade Code is developed in the open at
+Facade Code Framework and Facade Code Extension are developed in the open at
 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Reporting a vulnerability

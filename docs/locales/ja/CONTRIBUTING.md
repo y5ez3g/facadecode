@@ -1,6 +1,6 @@
-# Facade Code へのコントリビュート
+# Facade Code Extension へのコントリビュート
 
-ご協力ありがとうございます。Facade Code は [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) でオープンに開発しています。
+ご協力ありがとうございます。Facade Code Extension は [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) でオープンに開発しています。
 
 ## バグやアイデア
 
@@ -18,7 +18,7 @@
 
 - `main` から `feature/<number>-<name>` という名前でブランチを切ります。
 - rebase はせず、必ず merge します。機能はレビューを経て、`--no-ff` で `main` に入ります。
-- Facade Code のファイルは一か所にまとめ、VS Code のファイルにはロジックを書き換えるのではなく、オプションのフックを追加します。新しい VS Code を取り込むコストを低く保つためです。
+- Facade Code Extension のファイルは一か所にまとめ、VS Code のファイルにはロジックを書き換えるのではなく、オプションのフックを追加します。新しい VS Code を取り込むコストを低く保つためです。
 - どの機能にもスイッチがあり、オフにすれば素の VS Code です。
 - 変更には必ずテストを添えます。
 - ドキュメント、コメント、コミット メッセージはすべて英語で書きます。

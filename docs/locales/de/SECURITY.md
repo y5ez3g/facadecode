@@ -1,6 +1,6 @@
 # Sicherheit
 
-Facade Code wird offen auf [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) entwickelt.
+Facade Code Extension wird offen auf [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) entwickelt.
 
 ## Eine Sicherheitslücke melden
 

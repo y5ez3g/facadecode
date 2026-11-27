@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/y5ez3g/facadecode/main/extension/media/icon.png" alt="Facade Code" width="128">
+<img src="https://raw.githubusercontent.com/y5ez3g/facadecode/main/extension/media/icon.png" alt="Facade Code Extension" width="128">
 
-# Facade Code
+# Facade Code Extension
 
-**The multi-agent orchestrator for VS Code.**
+**Run coding agents together in VS Code.**
 
 Run native agent CLIs, edit code, and review changes in the same IDE window. Use your own accounts and coding plans, and let agents collaborate across windows and machines.
 
@@ -21,18 +21,18 @@ Run native agent CLIs, edit code, and review changes in the same IDE window. Use
 
 ## Install
 
-Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). VS Code automatically installs the companion **Window Component** alongside it. The Window Component always runs on your local computer—even for remote windows—allowing Facade to recognize windows across reloads and connect them together.
+Install **Facade Code Extension** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). VS Code automatically installs the companion **Window Component** alongside it. The Window Component always runs on your local computer—even for remote windows—allowing Facade Code Extension to recognize windows across reloads and connect them together.
 
 Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and ARM64), and Windows (x64 and ARM64).
 
-**Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your local computer for local projects, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code does not launch 1.x (`opencode-ai`) and explains how to upgrade. Git is required if you use worktrees.
+**Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your local computer for local projects, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code Extension does not launch 1.x (`opencode-ai`) and explains how to upgrade. Git is required if you use worktrees.
 
-**Agents run without approval prompts by default.** By default, `yolo` is enabled in Facade's [settings](#settings), allowing agents to run commands and modify files without asking for confirmation. Turn it off to restore each CLI's standard approval prompts and supported sandbox; this change applies to agents started afterwards. Pi has no approvals or sandbox, so it runs without asking even with `yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. To open the settings, select **Open Settings** from the panel's `...` menu. Facade also trusts the folder an agent starts in, equivalent to accepting the CLI's own workspace trust prompt. With `yolo` on, agents can also stop, message, and type into every agent across your Facade windows. `custom` programs are the exception to launch mapping and folder trust: `yolo` does not alter how they start, and Facade grants them no folder trust.
+**Agents run without approval prompts by default.** By default, `yolo` is enabled in Facade Code Extension's [settings](#settings), allowing agents to run commands and modify files without asking for confirmation. Turn it off to restore each CLI's standard approval prompts and supported sandbox; this change applies to agents started afterwards. Pi has no approvals or sandbox, so it runs without asking even with `yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. To open the settings, select **Open Settings** from the panel's `...` menu. Facade Code Extension also trusts the folder an agent starts in, equivalent to accepting the CLI's own workspace trust prompt. With `yolo` on, agents can also stop, message, and type into every agent across your Facade Code Extension windows. `custom` programs are the exception to launch mapping and folder trust: `yolo` does not alter how they start, and Facade Code Extension grants them no folder trust.
 
 ## Quick Start
 
 1. **Open a folder**: Open your project directory via **File > Open Folder...**.
-2. **Start an agent**: Click **Facade Code** in the Activity Bar, select **New Agent...**, and choose an installed CLI. The agent opens in an editor terminal tab; type prompts as you would in any terminal.
+2. **Start an agent**: Click **Facade Code Extension** in the Activity Bar, select **New Agent...**, and choose an installed CLI. The agent opens in an editor terminal tab; type prompts as you would in any terminal.
 3. **Add more**: Launch additional agents the same way. Click any card in the panel to focus its terminal, or run **Go to Agent...** to search by name.
 4. **Let agents collaborate**: Instruct an agent in plain English, for example: "Start a Codex agent to write the tests, and have it message you when it is done."
 
@@ -40,7 +40,7 @@ Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and A
 
 **Your agents and your IDE, in the same window.**
 
-The **Facade Code** panel in the Activity Bar shows all agents in your window. Each card displays the agent's name, its CLI, and a status dot, with ⓘ details showing its title, folder, and creator.
+The **Facade Code Extension** panel in the Activity Bar shows all agents in your window. Each card displays the agent's name, its CLI, and a status dot, with ⓘ details showing its title, folder, and creator.
 
 - **Start and configure.** Click **New Agent...** to choose a CLI. In the picker, select **Change Name...** to name your session or **Change Working Location...** to pick a folder or create a Git worktree.
 - **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it. In the card's gear menu, **Stop Agent** stops the process and **Dismiss Agent** closes an ended card.
@@ -65,17 +65,17 @@ For details on cross-agent messaging, automatic retries, and workspace files, se
 
 **Connect agents across windows, machines, and locations.**
 
-Facade Code connects agents across your Facade windows on this computer. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
+Facade Code Extension connects agents across your Facade Code Extension windows on this computer. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
 
 - **Work across windows.** Open multiple project folders in separate VS Code windows. With `yolo` on, agents in one window can see, message, and direct agents in any other window on your computer; with it off, agents reach only their own group.
 - **Connect over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with its tools, files, and accounts, and can be started and directed by local agents.
-- **Check in from your phone.** In a Claude Code terminal, type `/remote-control` to enable [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control), then connect using the Claude app on iOS or Android. From your phone, ask for progress updates and let that session coordinate other agents through Facade.
+- **Check in from your phone.** In a Claude Code terminal, type `/remote-control` to enable [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control), then connect using the Claude app on iOS or Android. From your phone, ask for progress updates and let that session coordinate other agents through Facade Code Extension.
 
 <sub>Remote Control requires a supported Claude Code version, an eligible plan, and full-scope sign-in. See its [setup requirements](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
 ## Settings
 
-Facade's settings are in `facade.json` in the Facade home, by default `~/.facade/facade.json`. Choose **Open Settings** in the panel's `...` menu or Command Palette, then **Edit in facade.json** under **Facade: Home**. In a remote window whose Settings open as JSON, **Open Settings** opens `facade.json` directly. The link creates the file if needed; remote windows open the remote file. **Facade: Home** (`facade.home`) overrides `FACADE_HOME`, which overrides `~/.facade`. Changing the home requires a window reload. Windows reach each other's agents only when they use the same Facade home.
+Facade Code Extension's settings are in `facade.json` in the Facade home, by default `~/.facade/facade.json`. Choose **Open Settings** in the panel's `...` menu or Command Palette, then **Edit in facade.json** under **Facade Code Extension: Home**. In a remote window whose Settings open as JSON, **Open Settings** opens `facade.json` directly. The link creates the file if needed; remote windows open the remote file. **Facade Code Extension: Home** (`facade.home`) overrides `FACADE_HOME`, which overrides `~/.facade`. Changing the home requires a window reload. Windows reach each other's agents only when they use the same Facade home.
 
 Saved changes apply to agents started afterwards; running agents keep their settings. The file is JSON with comments, and top-level fields are optional:
 
@@ -96,17 +96,17 @@ Saved changes apply to agents started afterwards; running agents keep their sett
 
 | Setting | Default | What it does |
 |---|---|---|
-| `yolo` | `true` | Runs agents without approval prompts, and lets agents reach every agent in your Facade windows. Turn off to use each CLI's normal approvals and supported sandbox, with agents reaching only their own group. Applies to new agents only. |
+| `yolo` | `true` | Runs agents without approval prompts, and lets agents reach every agent in your Facade Code Extension windows. Turn off to use each CLI's normal approvals and supported sandbox, with agents reaching only their own group. Applies to new agents only. |
 | `names` | 140 built-in names | Names suggested at random, excluding names already used in this window. Blank names are filled the same way; an empty or exhausted list uses the agent ID. |
 | `clis.<name>.type` | The built-in's own | `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` for a built-in CLI under settings of its own, or `custom` for any other program. Required for a name of your own. |
 | `clis.<name>.icon` | The type's icon; `facade-pearl` for `custom` | A built-in logo (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) or one of the 16 `facade-` robots listed in the file. |
 | `clis.<name>.program` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
-| `clis.<name>.args` | `[]` | Arguments added to the command line, exactly as written. Facade refuses the options it sets itself, such as approvals, the model and the conversation. |
+| `clis.<name>.args` | `[]` | Arguments added to the command line, exactly as written. Facade Code Extension refuses the options it sets itself, such as approvals, the model and the conversation. |
 | `clis.<name>.env` | `{}` | Environment variables: a string sets one, `null` removes one, and `${env:NAME}` reads one from the editor's environment. |
 | `clis.<name>.model`, `clis.<name>.effort` | The CLI's own | The model and reasoning effort new agents start with, for the CLIs that take them; a start that chooses its own wins. |
 | `clis.<name>.enabled` | `true` | Whether **New Agent** offers it. Turning it off does not stop agents that are running. |
 
-The built-in CLIs' names are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`; leaving one out keeps its defaults. A name of your own adds a CLI that takes nothing from the built-in of its type. **New Agent** lists it after the built-in CLIs, and its icon defaults to its type's icon, or the pearl robot for `custom`. Set `icon` to choose a built-in logo or one of the 16 robots. A `custom` program starts exactly as written: Facade adds no approvals mapping, folder trust, tools or messages, and cannot resume its conversations. **Show Agent Launch...** shows what each agent starts with, and a mistake in the file says where it is. Settings saved in version 0.1.2 move into the file when it is first made. The file includes comments, all six built-ins and examples for another provider or a custom program.
+The built-in CLIs' names are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`; leaving one out keeps its defaults. A name of your own adds a CLI that takes nothing from the built-in of its type. **New Agent** lists it after the built-in CLIs, and its icon defaults to its type's icon, or the pearl robot for `custom`. Set `icon` to choose a built-in logo or one of the 16 robots. A `custom` program starts exactly as written: Facade Code Extension adds no approvals mapping, folder trust, tools or messages, and cannot resume its conversations. **Show Agent Launch...** shows what each agent starts with, and a mistake in the file says where it is. Settings saved in version 0.1.2 move into the file when it is first made. The file includes comments, all six built-ins and examples for another provider or a custom program.
 
 To run Claude Code on another Anthropic-compatible API, give an entry the variables Claude Code reads, its key read from your environment rather than written in the file:
 
@@ -157,7 +157,7 @@ npm run test:integration
 ```
 
 `npm run test:package` checks the VSIX that `npm run package` makes, so run that first. Integration tests use an isolated
-editor profile, a temporary Facade root, disposable repositories and a fake program for each built-in CLI, in an official VS Code: set
+editor profile, a temporary Facade Code Extension root, disposable repositories and a fake program for each built-in CLI, in an official VS Code: set
 `VSCODE_EXECUTABLE` to its executable (on macOS the standard `/Applications/Visual Studio Code.app` is used when it is there).
 On Linux run them under `xvfb-run -a`; on Windows run them in the signed-in desktop session. `npm run test:remote` runs
 them over Remote-SSH to the hosts of an SSH configuration; [AGENTS.md](AGENTS.md) lists its variables.
@@ -205,6 +205,6 @@ that version override and the original CI commit rather than claiming a newly re
 
 ## License
 
-MIT. See [`LICENSE.txt`](https://github.com/y5ez3g/facadecode/blob/main/extension/LICENSE.txt). Facade Code builds on Visual Studio Code; inherited source and bundled third-party materials retain their own notices in [`ThirdPartyNotices.txt`](https://github.com/y5ez3g/facadecode/blob/main/extension/ThirdPartyNotices.txt).
+MIT. See [`LICENSE.txt`](https://github.com/y5ez3g/facadecode/blob/main/extension/LICENSE.txt). Facade Code Extension builds on Visual Studio Code; inherited source and bundled third-party materials retain their own notices in [`ThirdPartyNotices.txt`](https://github.com/y5ez3g/facadecode/blob/main/extension/ThirdPartyNotices.txt).
 
-<sub>Facade Code is an independent product and is not affiliated with, endorsed by, or sponsored by the providers of the third-party tools shown. All third-party trademarks and logos belong to their respective owners.</sub>
+<sub>Facade Code Extension is an independent product and is not affiliated with, endorsed by, or sponsored by the providers of the third-party tools shown. All third-party trademarks and logos belong to their respective owners.</sub>

@@ -1,6 +1,6 @@
 # Bảo mật
 
-Facade Code được phát triển công khai tại [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Facade Code Extension được phát triển công khai tại [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Báo cáo lỗ hổng
 

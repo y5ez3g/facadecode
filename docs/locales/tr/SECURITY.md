@@ -1,6 +1,6 @@
 # Güvenlik
 
-Facade Code, [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) üzerinde açık olarak geliştirilir.
+Facade Code Extension, [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) üzerinde açık olarak geliştirilir.
 
 ## Güvenlik açığı bildirme
 

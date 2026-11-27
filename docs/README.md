@@ -1,4 +1,4 @@
-# Facade Code documentation
+# Documentation
 
 | Area | Documentation |
 | --- | --- |

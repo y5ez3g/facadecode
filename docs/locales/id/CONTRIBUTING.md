@@ -1,6 +1,6 @@
-# Berkontribusi ke Facade Code
+# Berkontribusi ke Facade Code Extension
 
-Terima kasih sudah membantu. Facade Code dikembangkan secara terbuka di [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Terima kasih sudah membantu. Facade Code Extension dikembangkan secara terbuka di [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Bug dan ide
 
@@ -18,7 +18,7 @@ Cara kerja repositori ini dijelaskan di [`docs/ide/ENGINEERING.md`](../../ide/EN
 
 - Buat branch dari `main` dengan nama `feature/<number>-<name>`.
 - Merge, jangan pernah rebase: sebuah fitur masuk ke `main` dengan `--no-ff`, setelah direview.
-- Kumpulkan file Facade Code di satu tempat, dan di file VS Code tambahkan hook opsional alih-alih menulis ulang logikanya, agar menggabungkan versi VS Code yang lebih baru tidak memerlukan banyak usaha.
+- Kumpulkan file Facade Code Extension di satu tempat, dan di file VS Code tambahkan hook opsional alih-alih menulis ulang logikanya, agar menggabungkan versi VS Code yang lebih baru tidak memerlukan banyak usaha.
 - Setiap fitur punya sakelar, dan kalau dimatikan hasilnya VS Code standar.
 - Setiap perubahan harus disertai tes.
 - Gunakan bahasa Inggris untuk dokumen, komentar, dan pesan commit.

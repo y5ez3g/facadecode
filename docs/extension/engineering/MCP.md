@@ -13,7 +13,7 @@ Layer 4. [Rules](../RULES.md) owns effects and
 | 4 Messages and history | One recipient, result reports and own inbox |
 | 5 Terminal operations | Screen, direct text and keys |
 | 6 Technical design | Run routing, injection, versioning and schema ownership |
-| 7 Orchestrator | Active tools and generated contracts |
+| 7 Facade Code Framework | Active tools and generated contracts |
 
 ## 1 Common contract
 
@@ -76,7 +76,7 @@ Common failure reasons:
 | `ended` | The target ended and cannot take the requested input |
 | `unsupported` | An unknown tool or a CLI without message input support |
 | `configuration_invalid` | Invalid settings or a server without a caller on the legacy implementation |
-| `unavailable` | Facade or a window cannot be reached, or the result is unknown |
+| `unavailable` | Facade Code Extension or a window cannot be reached, or the result is unknown |
 | `capacity_exceeded` | Input capacity is exhausted |
 | `partial_input` | Only part of the input reached the terminal |
 | `stop_unconfirmed` | A stop was requested but the process's end is not confirmed |
@@ -98,9 +98,9 @@ The examples use `<test>` for a fixture path and `<time>` for a fixture timestam
 **Return a start when its CLI runs, a stop when it ends, and a send within thirty seconds.**
 
 start_agent answers success once the new agent's CLI runs. A prompt continues separately and produces one later
-Facade result saying whether it reached the agent. stop_agent waits for the CLI to end; an unconfirmed stop fails with
+Facade Code Extension result saying whether it reached the agent. stop_agent waits for the CLI to end; an unconfirmed stop fails with
 `stop_unconfirmed`. Neither tool returns `accepted` or exposes `call_id` or `result_message_id`.
-A Facade result is a message with its own `id`, `from: "facade"` and plain `text` (4.2). It asks for no reply and is
+A Facade Code Extension result is a message with its own `id`, `from: "facade"` and plain `text` (4.2). It asks for no reply and is
 not the new agent's answer or proof that its task is complete. Use list_agents for current state; there is no operation
 query API. Idle, delivery and input writes never establish task completion.
 
@@ -126,7 +126,7 @@ and worktrees, and the CLIs each can start. An agent's startup context identifie
 does not return log paths or model histories. Existing window IDs and paths can be used without another discovery call.
 The execution-time checks of start_agent remain authoritative; a snapshot reserves nothing.
 
-CLIS-1.4 owns model/effort values. Facade logs requested settings and actual startup results under ARCHITECTURE-3.3;
+CLIS-1.4 owns model/effort values. Facade Code Extension logs requested settings and actual startup results under ARCHITECTURE-3.3;
 it does not aggregate model histories, count model successes or mirror native transcripts. The skill explains how to
 filter recent structured log events, when native history is useful, and how to inspect a CLI's own model/effort controls
 when a new choice is needed. Defaults and already specified values require no exploratory launch or history query.
@@ -146,7 +146,7 @@ when a new choice is needed. Defaults and already specified values require no ex
 | prompt | Optional nonblank initial message, checked as a message body (4.1) |
 | worktree | Optional nonempty branch name; reuse its worktree or create one from the repository's current HEAD |
 
-Without name, Facade gives the agent a default name. Without worktree, start directly in path, including an existing
+Without name, Facade Code Extension gives the agent a default name. Without worktree, start directly in path, including an existing
 worktree. An editor window requires a folder listed for it; `terminal` accepts any folder. The agent's display name
 is not its branch. There is no location_id, base_ref or request_id argument.
 A child joins the calling agent's creation tree, including across windows. Its run YOLO follows RULES-4.3;
@@ -195,7 +195,7 @@ A missing path answers:
 }
 ```
 
-A start with a prompt has the same result fields. Its later Facade message says whether the prompt reached the agent;
+A start with a prompt has the same result fields. Its later Facade Code Extension message says whether the prompt reached the agent;
 a prompt failure does not destroy a successfully started agent. The legacy implementation gives up a prompt its delivery window
 cannot accommodate. Tool unavailability leaves a usable CLI running.
 COLLABORATION-2.2 owns native/post-start prompt selection. A failure states any known or unknown startup effects in
@@ -315,7 +315,7 @@ no other message is. Reading cancels unstarted pastes; an already pasted owned d
 
 Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
 `reply_to` when given. `from` is the sender's
-`@name #aN`, its ID alone when unnamed, `#human` for the person, or `facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
+`@name #aN`, its ID alone when unnamed, `#human` for the person, or `facade` for a Facade Code Extension result. A Facade Code Extension result's text is plain English; there is no nested result object, kind, delivery
 record, call ID, window or environment. A system result is separate from the message it concerns.
 
 The golden inbox read of a message held back by a draft answers:
@@ -420,14 +420,14 @@ authenticated enrollment, source-binding proofs or scoped delegation. A delibera
 protection provided. Basic schema/routing validation remains.
 
 The relay keeps a connection to the daemon and says hello with its process identity, environment and folder.
-The run's MCP presence tells Facade that its tools are there (RULES-3.1). Each tool call opens a daemon connection of
+The run's MCP presence tells Facade Code Extension that its tools are there (RULES-3.1). Each tool call opens a daemon connection of
 its own (1.3). Failure to connect is `unavailable`, with a message saying that nothing was done.
 
-Calls to Facade's own tools are approved in advance, with YOLO on or off, for each CLI that can approve one server's
+Calls to Facade Code Extension's own tools are approved in advance, with YOLO on or off, for each CLI that can approve one server's
 tools (CLIS-2.2); Muse Code cannot, so with YOLO off its own approvals apply to them (RULES-4.3). The CLI's own commands
 and edits keep the approval mode that RULES-4.3 chose for the run. The server is never marked required, so a failure to
 start or connect it leaves a usable CLI with tools unavailable - except where Muse Code starts through cmd.exe,
-whose project entry cannot say `mode: optional`, so there a Facade server that fails can fail the run (CLIS-2.2). The
+whose project entry cannot say `mode: optional`, so there a Facade Code Extension server that fails can fail the run (CLIS-2.2). The
 six built-in types attempt injection on every start, with no MCP switch; custom programs have none (RULES-4.4).
 Existing connected runs keep their launch snapshot. Version/integration failure follows CLIS-2.2.
 
@@ -449,19 +449,19 @@ Parsing the text as JSON yields exactly the structured object. The tool interfac
 date versions in 6.1 and the internal relay contract. An incompatible relay contract fails as protocol_incompatible before
 effects and says to restart the CLI; there is no recovery object or automatic downgrade. Old argument names fail
 validation rather than being translated into another action.
-A system result is a plain-text Facade message under its own ID (4.2). It is not parsed or guessed into structured
+A system result is a plain-text Facade Code Extension message under its own ID (4.2). It is not parsed or guessed into structured
 operation state.
 Connection recovery reuses only actual surviving runs and unexpired work under RULES.
 It never replays messages from closed runs.
 The bundled skill teaches the eight tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
 normal creation trees, unique-name resolution, `#human`, own inbox, that read_messages without arguments returns the
 messages not yet received, after selects newer messages and last selects the newest ones, and finite delivery.
-It explicitly tells the model: “The same Facade message can arrive more than once.
+It explicitly tells the model: “The same Facade Code Extension message can arrive more than once.
 Use its message ID to recognize a repeat and do not redo work for that same message.
 A new send call has a new ID, even if its text matches.
-A Facade system result about a message is a separate kind of information,
+A Facade Code Extension system result about a message is a separate kind of information,
 not another copy of that message's instruction.”
-This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
+This is model-side handling of transport duplicates, not a Facade Code Extension deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
 Its frontmatter is valid YAML with string name/description fields. Quote descriptions so punctuation such as a colon
 cannot become YAML structure; verify native skill loading separately from an MCP connection or successful tool call.
@@ -470,7 +470,7 @@ own its use, effects and success/retry boundaries; the skill provides cross-tool
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
 lack of draft protection, and the consequences of unknown input. The skill does not duplicate the eight argument
 schemas.
-The published 0.1.5 tag contains the legacy tool definitions. The current editor uses the [Framework tool catalog](../../../framework/crates/base/src/texts/tools.json). The MCP annotations are:
+The published 0.1.5 tag contains the legacy tool definitions. The current editor uses the [Facade Code Framework tool catalog](../../../framework/crates/base/src/texts/tools.json). The MCP annotations are:
 
 | Tools | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
 | --- | --- | --- | --- | --- |
@@ -478,7 +478,7 @@ The published 0.1.5 tag contains the legacy tool definitions. The current editor
 | stop_agent | false | true | true | false |
 | start_agent, send_message, read_messages, type_text, press_keys | false | false | false | false |
 
-read_messages acknowledges delivery. All tools act within Facade. Annotations are hints, never permissions or a reason
+read_messages acknowledges delivery. All tools act within Facade Code Extension. Annotations are hints, never permissions or a reason
 to change native approval behavior.
 Per-run initialization instructions identify the agent, its creator (or person), its folder and window, and its reach
 under YOLO. A creator's short ID is a callable send_message address, never a reporting requirement. Personalized
@@ -499,21 +499,21 @@ A proven client limitation may use the same initial message as fallback, never a
 Missing facts stay absent, and launch context never claims to track shell cd.
 
 Task workflows, operation-query or deletion tools, input_policy and authentication instructions are absent. No
-migration guide for published skills is required: Facade brings its own skill files up to date (CLIS-2.2), and a call
+migration guide for published skills is required: Facade Code Extension brings its own skill files up to date (CLIS-2.2), and a call
 with incompatible arguments fails explicitly.
 
 
-## 7 MCP through the Orchestrator
+## 7 MCP through Facade Code Framework
 
-### 7.1 The Orchestrator serves the eight tools
+### 7.1 Facade Code Framework serves the eight tools
 
-**Agents and external applications use the Orchestrator's MCP tools through `facade-mcp`, the relay of Facade API
+**Agents and external applications use Facade Code Framework's MCP tools through `facade-mcp`, the relay of Facade API
 v1's MCP entry point.**
 
 The [product](../../PRODUCT.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
 The [generated tool descriptions](../../../framework/crates/base/src/texts/tools.json) define the tool arguments and
 results. The [daemon API](../../../framework/protocol/DAEMON.md) defines the wire contract. VS Code starts and attaches through
-its own Orchestrator client. Background delivery failures and creator watchdog notices use the recipient's Facade
+its own Facade Code Framework client. Background delivery failures and creator watchdog notices use the recipient's Facade Code Extension
 inbox. A startup incident and a failed initial prompt share one notice. See RULES-6.7.
 
 ### 7.2 Connection identity and inline results
@@ -565,12 +565,12 @@ the caller can choose from.
 
 **An automatic resend recovers the original delivery outcome.**
 
-Facade resends with the original caller, target and internal request identity. It reuses the outcome even when the
+Facade Code Extension resends with the original caller, target and internal request identity. It reuses the outcome even when the
 original attempt was withdrawn. Each new `send_message` call creates a message. By default, its receipt confirms
 inbox acceptance, and `read_messages` takes an immediate snapshot.
 
 Managed agents normally use inbox acceptance. Replies arrive in their terminals, and a failed background
-delivery earns a Facade notice. A guest can wait for a linked reply with `wait_for: "result"` and a positive
+delivery earns a Facade Code Extension notice. A guest can wait for a linked reply with `wait_for: "result"` and a positive
 `timeout_seconds`. A successful background delivery creates no notice. A repeat keeps the original delivery
 and its notice decision.
 

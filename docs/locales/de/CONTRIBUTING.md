@@ -1,6 +1,6 @@
-# Zu Facade Code beitragen
+# Zu Facade Code Extension beitragen
 
-Danke für deine Hilfe. Facade Code wird offen auf [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) entwickelt.
+Danke für deine Hilfe. Facade Code Extension wird offen auf [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) entwickelt.
 
 ## Fehler und Ideen
 
@@ -18,7 +18,7 @@ Wie dieses Repository funktioniert, steht in [`docs/ide/ENGINEERING.md`](../../i
 
 - Zweige von `main` als `feature/<number>-<name>` ab.
 - Mergen, nie rebasen: Ein Feature landet nach dem Review mit `--no-ff` auf `main`.
-- Halte die Dateien von Facade Code beisammen und füge in den Dateien von VS Code optionale Hooks hinzu, statt ihre Logik umzuschreiben, damit das Mergen neuerer VS-Code-Versionen wenig Aufwand macht.
+- Halte die Dateien von Facade Code Extension beisammen und füge in den Dateien von VS Code optionale Hooks hinzu, statt ihre Logik umzuschreiben, damit das Mergen neuerer VS-Code-Versionen wenig Aufwand macht.
 - Jedes Feature hat einen Schalter; ist er aus, verhält sich alles wie im unveränderten VS Code.
 - Jede Änderung muss Tests enthalten.
 - Schreib Dokumente, Kommentare und Commit-Nachrichten auf Englisch.

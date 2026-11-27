@@ -1,6 +1,6 @@
 # Architecture and engineering
 
-Group 6 describes the Orchestrator-backed editor. Sections on legacy implementation execution, window lifetime and storage
+Group 6 describes Facade Code Framework-backed editor. Sections on legacy implementation execution, window lifetime and storage
 apply to the transition. Groups 4 and 5 also specify shared packaging and engineering safeguards.
 
 Layer 4. The product and shared rules decide behavior; this document chooses the implementation structure and
@@ -15,20 +15,20 @@ evidence.
 | 3 Data and safety | Storage, paths, rendering, secrets and logs |
 | 4 Repository and delivery | Source layout, builds, compatibility, packaging and translations |
 | 5 Working safely | Tests, isolated editor/CLI runs and Git boundaries |
-| [6 Orchestrator-backed editor](#6-connecting-the-editor-to-the-orchestrator) | Host connection, workspace state, Attach and packages |
+| [6 Facade Code Framework-backed editor](#6-connecting-the-editor-to-facade-code-framework) | Host connection, workspace state, Attach and packages |
 
 ## 1 Components
 
 ### 1.1 Separate client routing from workspace execution
 
-**Use the Framework execution host and a local editor component.**
+**Use the Facade Code Framework execution host and a local editor component.**
 
-The workspace extension connects to Framework for its resolved execution home. Framework owns agent records, execution,
+The workspace extension connects to Facade Code Framework for its resolved execution home. Facade Code Framework owns agent records, execution,
 machine routing, input delivery and terminal streams. The local Window Component supplies identity and native terminal
 registration. The workspace extension owns the roster, Pins, launch selection and editor projections. A remote workspace selects
 its execution host's Facade home, and the local component uses its own editor storage.
 
-The editor sends exact machine-qualified references to Framework. Its machine routes and MCP tools use the same engine and
+The editor sends exact machine-qualified references to Facade Code Framework. Its machine routes and MCP tools use the same engine and
 identities as Shell. The published 0.1.5 client and supervisor records are inputs to the cutover in 1.4.
 
 ### 1.2 Public editor APIs and explicit dependencies
@@ -48,9 +48,9 @@ A workspace extension runs where its workspace is; extensionKind is placement pr
 simultaneous instances.
 [Official remote extension guidance](https://code.visualstudio.com/api/advanced-topics/remote-extensions).
 
-The execution component ships the two native Framework programs for its platform (4.3). The workspace host talks to
+The execution component ships the two native Facade Code Framework programs for its platform (4.3). The workspace host talks to
 the daemon, and the Keeper owns the agent terminals and processes across editor restarts. Activation selects the
-bundled programs without downloading or compiling them. A Framework startup failure leaves saved workspace records
+bundled programs without downloading or compiling them. A Facade Code Framework startup failure leaves saved workspace records
 in place and follows the existing notice in 1.4.
 
 ### 1.3 Boundaries and code structure
@@ -74,11 +74,11 @@ The source graph resolves type and runtime dependencies, directory entry points 
 imports and unowned files. The window and page entry points cannot reach the legacy supervisor. Package tests inspect all
 three bundle graphs and both VSIX contents. Only the entry points, host and UI import the editor API.
 
-### 1.4 Framework activation and legacy cutover
+### 1.4 Facade Code Framework activation and legacy cutover
 
-**Framework owns execution. Retire the published TypeScript implementation one verified workspace at a time.**
+**Facade Code Framework owns execution. Retire the published TypeScript implementation one verified workspace at a time.**
 
-A compatible Framework activation reconnects to existing agents. To upgrade a legacy workspace, resolve its
+A compatible Facade Code Framework activation reconnects to existing agents. To upgrade a legacy workspace, resolve its
 execution home and predecessor identity. When its legacy agents still run, show the existing confirmation with
 the counts of affected runs and saved Pins. Preserve the gate for known runs across a supervisor outage.
 Present and accept the offer when current inventory can verify the whole outstanding scope. Approval freezes
@@ -87,12 +87,12 @@ the saved Pins for those exact runs. Restore each Pin after confirmed exit of th
 An independent old workspace retains ownership of its agents and can upgrade later. Its processes do not hold
 the current workspace at the cutover screen. An old window can finish or stop its own agents. When the legacy
 workspace host disconnects, its supervisor ends disconnected local runs after its 90-second grace period,
-or after five minutes for a remote owner. The successor activates Framework after approval and defers the
+or after five minutes for a remote owner. The successor activates Facade Code Framework after approval and defers the
 affected recovery until it observes affirmative exit. Successors share the durable approval, exit evidence
-and one confirmed Framework reference for the same saved session. Keep uncertain outcomes fenced.
+and one confirmed Facade Code Framework reference for the same saved session. Keep uncertain outcomes fenced.
 When a prior cutover has already dispatched an authorized stop, wait for confirmed exit or process proof
-and reload into Framework once it arrives. Framework activation failure reports the error and offers a reload.
-Group 6 owns Framework connection and workspace recovery.
+and reload into Facade Code Framework once it arrives. Facade Code Framework activation failure reports the error and offers a reload.
+Group 6 owns Facade Code Framework connection and workspace recovery.
 
 The migration adapter uses read-only queries on the released supervisor. A native retirement record describes
 the terminal registry. The released protocol reports run attachment and leaves workspace socket custody unknown.
@@ -110,26 +110,26 @@ Any new start still requires current evidence that the saved session is free.
 
 ### 2.1 Routes without shared-remote-home assumptions
 
-**Use Framework's machine routes and the exact execution environment of each agent.**
+**Use Facade Code Framework's machine routes and the exact execution environment of each agent.**
 
-Framework discovers and routes agents independently of the editors that view them. The workspace hosts send machine-qualified
+Facade Code Framework discovers and routes agents independently of the editors that view them. The workspace hosts send machine-qualified
 references to their execution connection. The Window Component owns native identity and retirement of terminal handles.
 
 ### 2.2 Window lifetime is a proof obligation
 
-**Verify the native window identity and keep it separate from Framework process lifetime.**
+**Verify the native window identity and keep it separate from Facade Code Framework process lifetime.**
 
 The editor window obtains its existing token from the Window Component's native log directory. The component checks the
 current editor session before returning it. A workspace may recover its exact prior URI binding from the published ledger
 and handover records. A remembered workspace key by itself grants no custody.
 
-A reload reconciles the existing roster with Framework records. Hosts sharing a workspace share its locked roster and
+A reload reconciles the existing roster with Facade Code Framework records. Hosts sharing a workspace share its locked roster and
 recovery round. Closing a view releases its stream. An explicit Stop targets the selected managed process. The local
 terminal registry retires only verified predecessor handles (6.3). VERIFICATION-5 covers native window lifetime evidence.
 
 ### 2.3 Execution ownership and input deadlines
 
-**Framework owns process, input and deadline effects.**
+**Facade Code Framework owns process, input and deadline effects.**
 
 The workspace host uses the typed daemon protocol for exact starts, stops, resumes, subscriptions and terminal input.
 The owner of each operation projects an unavailable answer separately from a confirmed end. Terminal closure updates
@@ -139,27 +139,27 @@ the view and the roster manages membership, Pins and hiding. The adapter observe
 
 **Reconnect to compatible running agents and read the published legacy state for cutover.**
 
-Framework negotiates the editor connection and owns process lifetime, backpressure and reconnect across a compatible
+Facade Code Framework negotiates the editor connection and owns process lifetime, backpressure and reconnect across a compatible
 replacement. A compatible replacement preserves the process, exact session and terminal stream. An incompatible reply
 leaves its outcome uncertain and reports the connection failure (6.1).
 
 The migration adapter observes the published legacy supervisor registry and workspace records. It persists scoped
 consent and the frozen Pins, verifies run and process identity, and defers a Pin while its session may still be held.
-After confirmed exit, Pin recovery uses Framework (1.4, 6.2).
+After confirmed exit, Pin recovery uses Facade Code Framework (1.4, 6.2).
 
 ## 3 Data and safety
 
 ### 3.1 Storage owners
 
-**Data remains in its owning environment and belongs to the user; Facade uploads nothing and adds no telemetry.**
+**Data remains in its owning environment and belongs to the user; Facade Code Extension uploads nothing and adds no telemetry.**
 
 | Store | Contents |
 | --- | --- |
 | Execution settings file, `<Facade home>/facade.json` | User configuration, owned by CONFIGURATION; shared by windows in that execution environment |
-| Window Component global storage on the client computer, `home.json` | The resolved local Facade: Home, written by local windows and read by remote windows' local components; absent when no local setting is set |
-| Framework state | Process, session, machine, and delivery records under the Framework home. See [Framework architecture](../../framework/ARCHITECTURE.md). |
+| Window Component global storage on the client computer, `home.json` | The resolved local Facade Code Extension: Home, written by local windows and read by remote windows' local components; absent when no local setting is set |
+| Facade Code Framework state | Process, session, machine, and delivery records under the Facade Code Framework home. See [Facade Code Framework architecture](../../framework/ARCHITECTURE.md). |
 | Released TypeScript state | Supervisor registry and exact run inventory, URI ledger, native handover, old ownership generations and saved Pins under the execution home's extension directory. The old release owns its active records. |
-| Framework workspace roster | Roster and Pins owns v1 membership, Pins, hidden agents and import markers in orchestrator-workspace.json. All writes use the roster lock. Windows observe the file through a directory watch. If the watch is lost or unavailable, reread the file immediately and poll for the rest of that opening, including after a transient read failure. |
+| Facade Code Framework workspace roster | Roster and Pins owns v1 membership, Pins, hidden agents and import markers in orchestrator-workspace.json. All writes use the roster lock. Windows observe the file through a directory watch. If the watch is lost or unavailable, reread the file immediately and poll for the rest of that opening, including after a transient read failure. |
 | Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records exact consent, exit evidence and historical stop requests, and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The migration adapter holds scoped notice and shared recovery locks and keeps recovery attempts and confirmed references. Retain the snapshots for the legacy compatibility period. |
 | Workspace legacy Pin recovery, `<Facade home>/extension/workspaces/<key>/orchestrator-legacy-pins.json` | Roster and Pins owns the record. It holds unresolved saved sessions and preserves unrecognized input. Accept the confirmed Pin in the roster before consuming the corresponding recovery entry. Retain the import marker for the legacy compatibility period. |
 | Editor workspace storage | Workspace key (2.2), Panel preferences and launch location history. Earlier versions mirrored legacy workspace state here. |
@@ -168,7 +168,7 @@ After confirmed exit, Pin recovery uses Framework (1.4, 6.2).
 
 The legacy implementation's workspace claim guards its state writes. A superseded claim cannot commit.
 
-The Facade home is chosen as the window starts. An explicitly set **Facade: Home** (`facade.home`, machine scope)
+The Facade home is chosen as the window starts. An explicitly set **Facade Code Extension: Home** (`facade.home`, machine scope)
 wins, then `FACADE_HOME`, then `~/.facade`. Blank strings and `null` count as unset. The setting's box shows
 `~/.facade`; that default does not override the environment variable. A setting value must be absolute or start with `~/` (`~\` on Windows). An unusable setting
 stops every start with an error and an Open Settings button at `facade.home`, on the Remote tab in a remote window
@@ -179,7 +179,7 @@ or the User tab locally (`workbench.action.openRemoteSettings` or `workbench.act
 `FACADE_HOME` gets its existing absolute-folder error, and a saved home supplies no home, like an unreadable record.
 A number, list, object or boolean is set but unusable: it stops every start
 and leaves `home.json` unchanged. The error shows its JSON, for example
-`Facade: Home "42" must start with ~/ or be absolute. No agent can start until it is fixed.` Tests use temporary homes.
+`Facade Code Extension: Home "42" must start with ~/ or be absolute. No agent can start until it is fixed.` Tests use temporary homes.
 
 A change to the setting offers **The new Facade home applies only after the window reloads.** with **Reload Window**.
 Another spelling of the folder already in use offers nothing. This includes paths through links; comparisons
@@ -188,10 +188,10 @@ home. When no setting was set, setting it to the folder already supplied by `FAC
 nothing.
 This reload offer also applies after an unusable value stopped the window: the listener is registered before
 validation, so correcting the value offers the reload. A running window keeps its chosen home until then. When set,
-the resolved setting goes into the extension host's `FACADE_HOME`, used by the Framework connection and its agents, and into the window's terminals. Only windows with the same Facade home
+the resolved setting goes into the extension host's `FACADE_HOME`, used by the Facade Code Framework connection and its agents, and into the window's terminals. Only windows with the same Facade home
 reach each other's agents. Choosing Reload Window after the component has been disposed does nothing.
 
-A local window's Window Component writes its Facade: Home to `home.json` in its own global storage on this computer,
+A local window's Window Component writes its Facade Code Extension: Home to `home.json` in its own global storage on this computer,
 at start and whenever the setting changes. A set, usable value is written as the resolved absolute folder. With no
 setting, the file is removed. An unusable value leaves the record unchanged; a write failure is logged.
 
@@ -202,7 +202,7 @@ watch starts. A different home written between the first reading and the watch's
 the same reload notice. Later changes to a different folder do the same; the current home stays in use until reload.
 A record naming the folder already in use offers nothing; removing it also offers nothing when its `FACADE_HOME` or `~/.facade` fallback is that
 folder. A watch that fails later, such as when its folder is deleted, stops. With no watch, whether it failed to
-start or stopped later, the new home applies at the next reload. The remote execution component continues to use the remote machine's Facade: Home.
+start or stopped later, the new home applies at the next reload. The remote execution component continues to use the remote machine's Facade Code Extension: Home.
 
 The home is shared with the Facade Code IDE. Extension runtime data uses its `extension/` subfolder;
 configuration uses `facade.json` at the home level (CONFIGURATION-1.1). This does not integrate the IDE's old extension.
@@ -215,12 +215,12 @@ authorize recovery.
 **Preserve user files and exact paths; treat outside text as data rather than executable interface content.**
 
 Preserve URI authority and compare paths in the owning environment. No shell interpolation or blanket recursive
-deletion. Native Git owns worktree creation/preparation; Facade provides no discard/initialization subsystem; its one
-deletion of the person's work is WORKTREES-3.2's `git worktree remove` without `--force`. Otherwise Facade deletes only
+deletion. Native Git owns worktree creation/preparation; Facade Code Extension provides no discard/initialization subsystem; its one
+deletion of the person's work is WORKTREES-3.2's `git worktree remove` without `--force`. Otherwise Facade Code Extension deletes only
 content it injected into a folder (CLIS-2.2) and its own records.
 Webview rendering uses text nodes and the editor's normal resource constraints; messages do not execute command links.
 Validate protocol shape and bound each line read; a call beyond the bound is refused explicitly (2.1), never cut or
-silently dropped. Native editor trust and CLI sandbox/approval controls remain native; Facade adds no separate security
+silently dropped. Native editor trust and CLI sandbox/approval controls remain native; Facade Code Extension adds no separate security
 product or prompts.
 
 ### 3.3 Diagnostics
@@ -229,7 +229,7 @@ product or prompts.
 
 Use a read-only editor log with UTC time, safe name/reference, operation ID, phase, effects, route status and actual
 failure. Apply CONFIGURATION-4.2: hide the person's environment values, including values nested in generated
-configuration, and redact sensitive arguments before rendering them. Facade's constants are shown; generated per-run
+configuration, and redact sensitive arguments before rendering them. Facade Code Extension's constants are shown; generated per-run
 values keep their placeholders. Full message text belongs to deliberate message
 history, not routine transport logs. Correlation IDs connect UI/MCP/supervisor observations. The agents log,
 `workspaces/<key>/agents.log`, keeps 30 days, pruned as the window activates, with no size cap; ptyd's own log stays
@@ -281,7 +281,7 @@ replace the isolated test profiles in group 5. `docs/extension/` at the reposito
 documentation, including normative rules and audit data. `src/`: code/tests by layers; `l10n/`: all translations;
 `media/`: shipped assets; `scripts/`: build/audit tooling; `window/`: the window component's manifest and README.
 Generated code/package/test output goes under `build/`, never source folders. Component packaging uses
-`build/extension/` for the workspace host and Framework programs. The local Window Component stages in build/window/. Native artifacts have explicit platform ownership. The window component has no native backend and
+`build/extension/` for the workspace host and Facade Code Framework programs. The local Window Component stages in build/window/. Native artifacts have explicit platform ownership. The window component has no native backend and
 ships as a separate universal VSIX.
 
 Use Node 24 from `.nvmrc`. Clean checkout/CI dependency installation uses `npm ci` with the committed lockfile;
@@ -316,7 +316,7 @@ never rewritten by staging. This keeps repository setup instructions out of the 
 
 **Read the released state through its declared compatibility contract.**
 
-The released settings file and vendor CLI state stay in their execution home. Framework reads its documented settings
+The released settings file and vendor CLI state stay in their execution home. Facade Code Framework reads its documented settings
 schema and the cutover reads the released supervisor and saved Pin records described in 1.4. Ambiguous prior identities
 and unrecognized input stay pending. Development state and old IDE settings have no migration path.
 
@@ -325,12 +325,12 @@ and unrecognized input stay pending. Development state and old IDE settings have
 **Ship the runtime component with tested platform artifacts and an honest minimum-editor capability matrix.**
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
-feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components and the Framework carry one release version, 0.1.6, which the changelog's
-heading names; the build refuses a window component of another version, packaging refuses a Framework build of another version or a
-protocol copy (`src/base/frameworkProtocol.ts`) that differs from the Framework source, and `scripts/release.mjs version` raises all three.
-The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry the Framework's release programs, `bin/facade` and
-`bin/facade-mcp`, Linux's built with musl and static. The win32-x64 and win32-arm64 packages carry the Framework's release
+feature-detected or raises the declared minimum, never called unguarded. Facade Code Extension is published to the Marketplace and
+Open VSX only when the owner asks. Both components and the Facade Code Framework carry one release version, 0.1.6, which the changelog's
+heading names; the build refuses a window component of another version, packaging refuses a Facade Code Framework build of another version or a
+protocol copy (`src/base/frameworkProtocol.ts`) that differs from the Facade Code Framework source, and `scripts/release.mjs version` raises all three.
+The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry the Facade Code Framework's release programs, `bin/facade` and
+`bin/facade-mcp`, Linux's built with musl and static. The win32-x64 and win32-arm64 packages carry the Facade Code Framework's release
 programs, `bin/facade.exe` and `bin/facade-mcp.exe`, built for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`
 respectively, and ConPTY for the same architecture, `bin/conpty/conpty.dll` and `bin/conpty/OpenConsole.exe`. Packaging
 refuses a package where any of these four is missing or a binary is of another target; executable-mode and static-musl
@@ -338,9 +338,9 @@ checks apply only to Unix. A release signs the Windows packages' programs with t
 (Azure Artifact Signing, IDENTITY I6), each signature timestamped: packaging with `--sign` signs every program and library
 in `bin/` that has no trusted signature - ConPTY's come signed by Microsoft - and packages none that still has none.
 Unsigned, the 0.1.6 `facade.exe` was quarantined by Microsoft Defender as `Trojan:Win32/Bearfoos.A!ml`, which ended the
-running Framework and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
-package them unsigned. Third-party notices name the Framework's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
-required by Framework. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
+running Facade Code Framework and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
+package them unsigned. Third-party notices name the Facade Code Framework's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
+required by Facade Code Framework. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
 win32-arm64, together with the window component. Publication requires each platform's build and verification evidence
 from the release run. The version advances when preparing a release; already published versions retain their original
 artifacts. [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
@@ -353,7 +353,7 @@ The extension checks workflow builds candidate packages for darwin-x64, darwin-a
 win32-x64 and win32-arm64. It uses `macos-15-intel` for Intel Macs, `ubuntu-24.04-arm` for Linux ARM64 and
 `windows-11-arm` for Windows ARM64. Each job verifies its requested target against its native host before
 installation, passes that target to packaging, and runs the same unit, package-content and isolated editor suites,
-with the Framework built by its pinned toolchain on every target and the editor journeys use Framework. Linux x64 also tests the published 0.1.5 to 0.1.6 cutover with both VSIX pairs (1.4).
+with the Facade Code Framework built by its pinned toolchain on every target and the editor journeys use Facade Code Framework. Linux x64 also tests the published 0.1.5 to 0.1.6 cutover with both VSIX pairs (1.4).
 Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 
@@ -484,32 +484,32 @@ refactor. Remove only generated artifacts owned by this task. Logs and completio
 what was tested and what remains. Task assignments, pauses and discussion authority follow current user instructions.
 
 
-## 6 Connecting the editor to the Orchestrator
+## 6 Connecting the editor to Facade Code Framework
 
-### 6.1 One local Orchestrator connection per extension host
+### 6.1 One local Facade Code Framework connection per extension host
 
-**Connect to the Orchestrator in the host's Facade home using daemon API v1.**
+**Connect to Facade Code Framework in the host's Facade home using daemon API v1.**
 
 Use RULES-6.6 for home selection and RULES-6.7 for remote-host ownership. The editor sends operations through
-the same Orchestrator as Shell and MCP. Running agent records, session enumeration, process state, agent state and
-titles come from that Orchestrator. The workspace has no Orchestrator registration or routing role.
+the same Facade Code Framework as Shell and MCP. Running agent records, session enumeration, process state, agent state and
+titles come from Facade Code Framework. The workspace has no Facade Code Framework registration or routing role.
 
 Send `hello` with `kind:"ide"` and `api_versions:[1]`. Check the selected API version and machine identity before
 using that connection's advertised operations and topics. Send one `agent.start` after the editor's selection flow.
-The Orchestrator validates the request before creating a worktree or process. Stop uses one exact target and reports
+Facade Code Framework validates the request before creating a worktree or process. Stop uses one exact target and reports
 the result of that item. Resume passes the returned exact target from a local, folder-scoped query.
 
 The workspace host's [activation](../../../extension/src/extension.ts#L11) selects the implementation and starts the
-[Orchestrator connection](../../../extension/src/host/framework/index.ts#L77) for the resolved home. On activation
+[Facade Code Framework connection](../../../extension/src/host/framework/index.ts#L77) for the resolved home. On activation
 or a home switch, the extension offers its bundled program set for selection. The home keeps an equal or higher
 selection. A higher bundled build installs from the extension files and can take over after normal admission.
 Commands use the selected home launcher. After hello,
 it opens the workspace state, installs the machine and agent watches and connects them to the Panel. The
 [agent view](../../../extension/src/host/framework/agents.ts#L76) projects observed running Managed Agents and
 reconciles confirmed records with workspace members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/framework/index.ts#L215)
-releases the editor's subscriptions, terminal views and connection while the Orchestrator retains the agents.
+releases the editor's subscriptions, terminal views and connection while Facade Code Framework retains the agents.
 
-An incompatible hello makes Framework activation fail with a version error. During a compatible takeover the daemon
+An incompatible hello makes Facade Code Framework activation fail with a version error. During a compatible takeover the daemon
 sends `closing {build}`. The editor acknowledges on that connection and verifies a fresh hello.
 
 ### 6.2 Workspace state and upgrade
@@ -523,7 +523,7 @@ Preserve the saved import marker when legacy membership is still pending. Reconc
 confirmed agent records and retain entries when a remote machine has yet to supply its snapshot.
 Roster and Pins owns the optional startup settings and outstanding start request on a Pin in roster version 1.
 Older Pins can omit both. Resolve a successful start by replacing the reference and consuming the request in one
-roster write. Follow a known session and name as Framework reports them. Use the current CLI environment when
+roster write. Follow a known session and name as Facade Code Framework reports them. Use the current CLI environment when
 starting from a Pin.
 
 Read local `facade.pins` from a verified legacy workspace file or from the snapshot saved before an approved cutover.
@@ -536,7 +536,7 @@ Merge the confirmed Pins under the roster lock, retaining a person's current
 Pins and hidden entries. A new empty window stores its roster key in VS Code workspace state. Share the existing
 Pin restore round across windows and use the full persisted agent or session identity for recovery. Keep unfinished
 session recovery in its workspace record and fence a resume with an uncertain reply. For an earlier interrupted
-import, corroborate its pending Pin and exact saved session with a durable converted Pin and the matching Framework record
+import, corroborate its pending Pin and exact saved session with a durable converted Pin and the matching Facade Code Framework record
 before sharing that reference. A pending Pin without this evidence fences another launch.
 
 ### 6.3 Terminals and the Window Component
@@ -552,13 +552,13 @@ live registration and watch ID. Reconnecting verifies the new hello and takes a 
 The editor reads pane capacity from `Pseudoterminal.setDimensions`. Before drawing a snapshot or full redraw, it
 sets the renderer grid to the frame's dimensions through `Pseudoterminal.onDidOverrideDimensions`. Terminal
 creation and display remain workspace presentation. The Window Component can clean up stale terminal tabs under
-RULES-6.8. A missing component leaves the Orchestrator-backed editor usable and skips that cleanup.
+RULES-6.8. A missing component leaves Facade Code Framework-backed editor usable and skips that cleanup.
 
 ### 6.4 Distribution
 
-**The extension packages an Orchestrator for the target on which its workspace host runs.**
+**The extension packages Facade Code Framework for the target on which its workspace host runs.**
 
-The editor package carries the corresponding Framework programs and, on Windows, their required ConPTY files.
+The editor package carries the corresponding Facade Code Framework programs and, on Windows, their required ConPTY files.
 The extension selects the packaged build for the resolved home and connects through that home's launcher. The standalone archives reuse the same programs from the
 VSIX. The archives are `facade-framework-darwin-<arch>.tar.gz`, `facade-framework-linux-<arch>.tar.gz` and
 `facade-framework-win32-<arch>.zip`, with `x64` and `arm64` as architecture values. The release publishes these with

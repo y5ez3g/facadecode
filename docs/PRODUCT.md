@@ -1,46 +1,43 @@
-# Facade Code Product Guide
+# Facade Code Framework and Facade Code Extension
 
-Facade Code runs coding CLIs such as Claude Code and Codex across your machines. Agents can find one another, send
+Facade Code Framework runs coding CLIs such as Claude Code and Codex across your machines. Agents can find one another, send
 messages, read terminal output and enter text. You can start and work with them from Shell, VS Code or an application
 that supports MCP.
 
-Facade Code Framework provides Shell, the Orchestrator and the MCP relay. Install its `facade` and `facade-mcp`
+Facade Code Framework provides Shell and the MCP entry point. Install its `facade` and `facade-mcp`
 commands using the [standalone Shell installation](framework/FEATURES.md#install-the-standalone-shell).
-[Facade Code Extension](../extension/GUIDE.md#install-for-your-workspace-host) connects VS Code 1.105 or later to the
-Framework on the workspace host. To share an agent, point Shell and the editor at the same Facade home on the execution
-host. Install and sign in to your coding CLI on the machine where it will run.
+[Facade Code Extension](../extension/GUIDE.md#install-for-your-workspace-host) connects VS Code 1.105 or later to
+Facade Code Framework on the workspace host. To share an agent, point Shell and the editor at the same Facade home
+on the execution host. Install and sign in to your coding CLI on the machine where it will run.
 
-![Two Orchestrators connect over SSH. VS Code and Shell attach to agent terminals, and an external app joins as a Guest over MCP.](0-facade.svg)
+![Two instances of Facade Code Framework connect over SSH. VS Code and Shell attach to agent terminals, and an external app joins as a Guest over MCP.](0-facade.svg)
 
-## Orchestrator and Facade
+## How the products connect
 
-The **Orchestrator** manages agents on one machine. A machine is one Facade home, usually `~/.facade`. Separate
-`FACADE_HOME` folders on the same computer run independently and can connect through `facade machine add` just
-like separate computers.
+**Facade Code Framework** manages agents in one Facade home with a keeper and a daemon. A machine is one Facade
+home, usually `~/.facade`. Separate `FACADE_HOME` folders on the same computer run independently and can connect
+through `facade machine add` just like separate computers.
 
-Your Orchestrators form a peer network using the SSH connections you configure. They can forward work through
+Your Facade Code Framework instances form a peer network using the SSH connections you configure. They can forward work through
 intermediate machines. If your laptop is awake and connected to both devbox and gpu-box, devbox can reach gpu-box
 through the laptop.
 
-**Facade** provides three ways to use the Orchestrator.
+Use Facade Code Framework from Shell, the MCP entry point or VS Code.
 
 - **Shell** runs the `facade` command for people and scripts.
-- **MCP** uses `facade-mcp` to connect agents and external applications.
-- **VS Code** provides an extension for managing agents and working in their terminals.
+- **MCP entry point** uses `facade-mcp` to connect agents and external applications.
+- **VS Code** uses Facade Code Extension for managing agents and working in their terminals.
 
-Each entry point connects to its local Orchestrator. That Orchestrator forwards remote requests.
+Each entry point connects to Facade Code Framework in its local Facade home. Facade Code Framework forwards remote requests.
 
 ```text
-Facade Code
-├── Orchestrator (one per machine)
-│   ├── Agents       Roster and Guests
-│   ├── Running      Machines, runs, settings and CLI-specific behavior
-│   ├── Interaction  Messages and terminals
-│   └── Services     Installation, upgrades and service processes
-└── Facade
-    ├── Shell        facade (people and scripts)
-    ├── MCP          facade-mcp (agents and external apps)
-    └── VS Code      Extension (people)
+Facade Code Framework (one per Facade home)
+├── keeper and daemon   Agents, runs, settings, messages and terminals
+├── Shell               facade (people and scripts)
+└── MCP entry point     facade-mcp (agents and external apps)
+
+Facade Code Extension
+└── VS Code             Manages agents and opens their terminals
 ```
 
 | Responsibility | Who owns it |
@@ -49,7 +46,7 @@ Facade Code
 | Delegation, reporting, review and when to commit | Your prompts and skills |
 | CLI installation, accounts and project files | You |
 | An external application's processes and interface | The application |
-| Commits, merges, reviews and worktree removal | Your Git tools. Facade can create a worktree when starting an agent. |
+| Commits, merges, reviews and worktree removal | Your Git tools. Facade Code Framework can create a worktree when starting an agent. |
 | SSH configuration and account access | You. Connect the machines you control. |
 
 ## Product principles
@@ -62,7 +59,7 @@ Facade Code
 - **The watchdog reports one notice for each observed incident.** The serving daemon measures a continuous
   30-second wait or Error state and tells the live creator. A replacement daemon starts a fresh interval.
   The creator also receives an immediate notice when the agent ends without that creator stopping it.
-- **YOLO controls native work prompts.** Facade handles the prompts it causes in either mode. YOLO bypasses
+- **YOLO controls native work prompts.** Facade Code Framework handles the prompts it causes in either mode. YOLO bypasses
   native work approvals where supported, and clears supported startup prompts for agent starts. Person starts
   keep the CLI's native startup prompts.
 - **The initiating operation determines the start policy.** Only MCP `start_agent` is an agent start. Shell,
@@ -78,15 +75,15 @@ Facade Code
 
 ## Agents
 
-An agent is a named participant in Facade. A **managed agent** runs a CLI in a terminal held by the Orchestrator.
+An agent is a named participant in Facade Code Framework. A **managed agent** runs a CLI in a terminal held by Facade Code Framework.
 A **Guest** is an external application or CLI session that has joined through `facade-mcp`. Each Guest has an
 address and inbox.
 
 | | Managed agent | Guest |
 | --- | --- | --- |
-| Joins when | Started through Facade | An external MCP connection first calls a tool |
+| Joins when | Started through Facade Code Framework | An external MCP connection first calls a tool |
 | Sends messages | Yes, for supported CLIs | Yes |
-| Receives messages | Facade submits them in the CLI's terminal | The Guest takes them from its inbox with `read_messages` |
+| Receives messages | Facade Code Framework submits them in the CLI's terminal | The Guest takes them from its inbox with `read_messages` |
 | Screen, typing and Attach | Available | No terminal |
 | Stop, resume and remove | Available when the action applies to the agent | The external application owns its lifetime |
 | Rename | Yes | Yes |
@@ -97,10 +94,10 @@ Some managed CLIs have fewer capabilities. See [CLI differences](#cli-difference
 ### Numbers, names and addresses
 
 Each machine issues numbers such as `a1` and `a2` once. An agent keeps that identity across runs. Names are
-display names and can repeat. If you omit a name, Facade picks one from the machine's pool, preferring names
+display names and can repeat. If you omit a name, Facade Code Framework picks one from the machine's pool, preferring names
 that are free among listed agents. A Guest's CLI column shows the application it comes from, such as Cursor.
 
-Copy a reference such as `a3@devbox` directly from a Shell table or MCP result. Facade qualifies references
+Copy a reference such as `a3@devbox` directly from a Shell table or MCP result. Facade Code Framework qualifies references
 with a machine name when it resolves uniquely, then the first eight hexadecimal characters of the machine ID when needed, then
 the full ID if the short ID also collides.
 
@@ -113,9 +110,9 @@ with a machine scope follows the wake policy for that command.
   removal, screen reads and inspection can also target ended records.
 - A bare token matching `a` followed by digits is an agent number. Other tokens are names. When an action
   accepts ended records, a matching eligible running agent takes priority.
-- Facade interprets the part after `@` as either a machine name or an ID. It reports ambiguity if those select
+- Facade Code Framework interprets the part after `@` as either a machine name or an ID. It reports ambiguity if those select
   different machines. `a3@devbox` identifies a number on devbox. `Pixel@gpu` can mean Pixel on gpu or an
-  agent literally named `Pixel@gpu`. Facade checks both interpretations. It reports an ambiguity if both match
+  agent literally named `Pixel@gpu`. Facade Code Framework checks both interpretations. It reports an ambiguity if both match
   and reports a lookup failure if a required search could not complete.
 - Multiple eligible matches produce copyable addresses. Errors distinguish missing, ended and inaccessible
   targets. An inaccessible target's address is withheld.
@@ -131,7 +128,7 @@ Managed agent: start → starting → running → ended → record expires after
 Guest:         connect → online → disconnected
 ```
 
-A managed agent can end through a stop, a CLI exit, a crash or a machine reboot. While it runs, Facade reports
+A managed agent can end through a stop, a CLI exit, a crash or a machine reboot. While it runs, Facade Code Framework reports
 `working`, `waiting_for_you`, `just_done`, `idle`, `error` or `unknown`. `waiting_for_you` can indicate a
 question, permission prompt or sign-in. `just_done` means a turn finished and has yet to be viewed.
 
@@ -146,7 +143,7 @@ question, permission prompt or sign-in. `just_done` means a turn finished and ha
   managed agents on that machine. Copy a `REFERENCE` from the list. Resuming a managed agent keeps its reference,
   folder, session, model and effort and uses the machine's current settings. Resuming a saved session creates a
   new agent. If the session is in use, the error identifies the agent using it. Add `-d` to run in the background.
-- **Remove.** Use VS Code to remove a record, screen and inbox. Facade stops a running agent first.
+- **Remove.** Use VS Code to remove a record, screen and inbox. Facade Code Framework stops a running agent first.
 - **Rename.** Pass a nonempty name to `facade rename`. The reference stays the same.
 - **List.** `facade list` lists running managed agents and connected Guests, newest start or resume first.
   `STARTED` is measured from that start or resume. The default probes saved connections without waking
@@ -173,10 +170,10 @@ it from the machine it joins and keeps that value for the connection.
 
 | | YOLO on | YOLO off |
 | --- | --- | --- |
-| CLI permission prompts and folder trust | Facade bypasses or answers supported prompts according to the CLI's rules and who started the run | The CLI's normal behavior applies |
-| CLI sandbox | Facade disables it where supported | The CLI's normal behavior applies |
+| CLI permission prompts and folder trust | Facade Code Framework bypasses or answers supported prompts according to the CLI's rules and who started the run | The CLI's normal behavior applies |
+| CLI sandbox | Facade Code Framework disables it where supported | The CLI's normal behavior applies |
 | Questions the CLI asks the person | The person answers | The person answers |
-| Facade tool prompts | Waived | Waived |
+| Facade Code Framework tool prompts | Waived | Waived |
 | Agent reach for actions, messages and replies | Any reachable eligible agent | The caller's creation tree |
 
 A creation tree includes the first agent and all agents started within that tree, across machines. Each call uses
@@ -184,7 +181,7 @@ the calling agent's reach, including when one agent asks another to do work. For
 The external application owns its own permissions and sandbox.
 
 A `facade` command invoked inside an agent's terminal passes through that CLI's own permissions and sandbox.
-When the command runs, Facade treats it as a Shell invocation.
+When the command runs, Facade Code Framework treats it as a Shell invocation.
 
 ### Joining as a Guest
 
@@ -195,7 +192,7 @@ launcher path under `Guest MCP`. This configuration uses `mcpServers` and a laun
 {"mcpServers":{"facade":{"command":"facade-mcp"}}}
 ```
 
-An MCP connection from a managed CLI session belongs to that managed agent. Facade's run configuration carries
+An MCP connection from a managed CLI session belongs to that managed agent. Facade Code Framework's run configuration carries
 a private identity, and a user-configured entry can also be identified by its session. A separate CLI session
 started by an agent, such as a `claude -p` process with its own session, joins as a Guest. The first tool call
 fixes the identity for the connection. A Guest can be listed and receive messages from that point.
@@ -222,7 +219,7 @@ Choose the machine, folder and CLI for the run.
 
 ### Machines
 
-Facade uses your existing SSH setup. Put Facade options before the SSH arguments. The remaining arguments use
+Facade Code Framework uses your existing SSH setup. Put Facade Code Framework options before the SSH arguments. The remaining arguments use
 the same forms as your usual SSH command.
 
 ```text
@@ -239,8 +236,8 @@ facade machine list
 facade machine rename devbox build-box
 ```
 
-- **Add.** Facade saves the connection after verifying the peer. It reuses working noninteractive credentials.
-  If sign-in requires a password, Facade can enroll a dedicated SSH key and verify a separate login with that key
+- **Add.** Facade Code Framework saves the connection after verifying the peer. It reuses working noninteractive credentials.
+  If sign-in requires a password, Facade Code Framework can enroll a dedicated SSH key and verify a separate login with that key
   before saving the connection. With `--bidirectional`, the remote machine verifies a separate return
   connection using the source address it saw. It uses SSH port 22. A failed return leaves the verified forward
   connection saved and reports the reason.
@@ -250,7 +247,7 @@ facade machine rename devbox build-box
   connection warns that agents with YOLO on can act on agents on connected machines. When a saved machine needs
   a login, `machine list` provides the Add command. Add and Connect warn when the peer reports that its SSH
   login settings can terminate processes on logout.
-- **Remove.** `machine remove` deletes the saved outbound connection and revokes Facade-managed local
+- **Remove.** `machine remove` deletes the saved outbound connection and revokes Facade Code Framework-managed local
   authorization for the peer with zero SSH. With `--bidirectional`, it verifies the peer's identity and tries
   to remove the return connection and its authorization before completing local cleanup. Shell reports each
   side's outcome and returns 1 if either side could not be confirmed.
@@ -259,10 +256,10 @@ facade machine rename devbox build-box
   daemon handshake. If the remote build ranks higher, upgrade your local home first. Passive probes leave sleeping
   services and installations alone. See [Folders and machines](framework/FEATURES.md#folders-and-machines).
 - **Facade home.** Use `--home` to select a remote Facade home other than `~/.facade`.
-- **WSL and Dev Containers.** Each is a separate machine. Facade inside the environment uses its own local
-  Orchestrator. To connect from outside, configure SSH in that environment and add it from the other machine.
+- **WSL and Dev Containers.** Each is a separate machine. Facade Code Framework inside the environment uses its own local
+  Facade Code Framework. To connect from outside, configure SSH in that environment and add it from the other machine.
 - **Machine names and IDs.** The default name is the lowercased first part of the host name. Rename with
-  lowercase letters, digits and hyphens. Facade generates the stable machine ID on first run. For a selector,
+  lowercase letters, digits and hyphens. Facade Code Framework generates the stable machine ID on first run. For a selector,
   use the name, an unambiguous eight-character ID prefix or the full ID.
 - **On-demand connections.** A saved SSH session closes after 30 idle seconds. Foreground connections, active
   Attach views and requests in progress keep it active. A named start or exact remote resume can wake the
@@ -284,15 +281,15 @@ facade start -d -n Nova codex --model gpt-6.2-sol
 ```
 
 A Shell start receipt confirms the agent has started. Use `facade send` to send it a task and check the receipt.
-MCP `start_agent` returns once the launch is recorded. If an optional first prompt fails, Facade sends the
+MCP `start_agent` returns once the launch is recorded. If an optional first prompt fails, Facade Code Framework sends the
 creator a 🔔. A startup blockage and its first prompt failure share that notice.
 
 - **Defaults.** Shell uses this machine and the current folder. VS Code uses its extension host and a workspace
   folder. MCP uses the calling agent's machine and folder. A Guest starts from the machine it joined. When no
-  applicable folder is available, such as for a start on another machine, Facade uses the target user's login
+  applicable folder is available, such as for a start on another machine, Facade Code Framework uses the target user's login
   home.
 - **Folders and worktrees.** Use a normal folder, Git checkout or existing worktree. With `--worktree`,
-  Facade creates a branch from the selected repo's current `HEAD` and a worktree next to the repo at
+  Facade Code Framework creates a branch from the selected repo's current `HEAD` and a worktree next to the repo at
   `<repo>.worktrees/<branch>`. A branch that already exists causes a refusal. Use `git worktree remove`
   to remove a worktree.
 - **CLIs.** The built-in entries are Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`), Muse Code
@@ -306,7 +303,7 @@ creator a 🔔. A startup blockage and its first prompt failure share that notic
   settings can supply defaults. A managed resume reuses the recorded launch choices.
 - **Folder trust and setup.** Person starts and resumes keep the CLI's initial trust and risk prompts.
   An MCP start with YOLO on at the target home uses that CLI's supported startup trust and notice settings.
-  Facade configures its MCP tools and hooks per run, including their own approvals. The CLI handles login.
+  Facade Code Framework configures its MCP tools and hooks per run, including their own approvals. The CLI handles login.
 - **Ending and resuming.** A CLI exit, crash or machine reboot ends the run. Use `resume` to continue it.
   VS Code can resume pinned agents when their workspace reopens.
 - **Errors.** Start reports the failing step, such as a connection, folder, worktree, missing program or
@@ -320,17 +317,17 @@ the machine's current settings. Start reports invalid settings. See [Configurati
 
 ### CLI differences
 
-These details describe how Facade connects to each CLI. See the [CLI reference](extension/engineering/CLIS.md)
+These details describe how Facade Code Framework connects to each CLI. See the [CLI reference](extension/engineering/CLIS.md)
 for the full rules.
 
-| CLI | Facade behavior |
+| CLI | Facade Code Framework behavior |
 | --- | --- |
-| Claude Code | A person who starts the CLI answers its native folder trust question. For an agent-initiated start with YOLO on, Facade verifies the question and the selected trust option before confirming. |
-| Antigravity | Facade makes a project plugin available under `.agents/plugins/facade/` while needed. A second Antigravity process that reads the same run configuration can be identified as that run. On startup Facade checks that the `facade` MCP tools are ready before delivering a first prompt. |
-| Muse | When the CLI uses an existing `facade` MCP entry in place of the managed entry, Facade resolves identity from the CLI session. |
+| Claude Code | A person who starts the CLI answers its native folder trust question. For an agent-initiated start with YOLO on, Facade Code Framework verifies the question and the selected trust option before confirming. |
+| Antigravity | Facade Code Framework makes a project plugin available under `.agents/plugins/facade/` while needed. A second Antigravity process that reads the same run configuration can be identified as that run. On startup Facade Code Framework checks that the `facade` MCP tools are ready before delivering a first prompt. |
+| Muse | When the CLI uses an existing `facade` MCP entry in place of the managed entry, Facade Code Framework resolves identity from the CLI session. |
 | Pi | The managed entry carries the run identity because Pi does not pass a session ID to the MCP server. A manually configured Pi MCP entry joins as a Guest. |
-| OpenCode | Choose model and effort in OpenCode. Facade rejects its model and effort overrides for this entry. OpenCode subprocesses that inherit the per-run MCP environment can be identified as that run. |
-| Custom program | Facade can start it, read its screen, send input and Attach. A custom program has no integrated messaging, saved-session resume or Pin. |
+| OpenCode | Choose model and effort in OpenCode. Facade Code Framework rejects its model and effort overrides for this entry. OpenCode subprocesses that inherit the per-run MCP environment can be identified as that run. |
+| Custom program | Facade Code Framework can start it, read its screen, send input and Attach. A custom program has no integrated messaging, saved-session resume or Pin. |
 
 A different MCP server named `facade` occupies the name the managed tools need. Use a distinct name for that server.
 
@@ -352,13 +349,13 @@ from the receipt into `read_messages`.
 
 | Recipient | Delivery |
 | --- | --- |
-| Managed agent | Facade waits for an empty input box, pastes the text and submits it. Codex queues the message with Tab while Working. The receipt confirms delivery after the submit key reaches the terminal. |
+| Managed agent | Facade Code Framework waits for an empty input box, pastes the text and submits it. Codex queues the message with Tab while Working. The receipt confirms delivery after the submit key reaches the terminal. |
 | Guest | The Guest takes the message from its inbox with `read_messages`. The read confirms delivery. |
-| Ended agent | Facade reports that the agent has stopped. |
-| Agent outside the caller's reach | Facade reports a permissions error and withholds the target's identity. |
+| Ended agent | Facade Code Framework reports that the agent has stopped. |
+| Agent outside the caller's reach | Facade Code Framework reports a permissions error and withholds the target's identity. |
 
 Background delivery has a 30-second deadline. An explicit Shell wait uses the remaining command budget, set with
-`-t` from 1 to 300 seconds. Facade reports the delivery facts. An untouched, withdrawn message can be resent.
+`-t` from 1 to 300 seconds. Facade Code Framework reports the delivery facts. An untouched, withdrawn message can be resent.
 Check the recipient's screen before retrying partial or unconfirmed input.
 
 ```text
@@ -394,14 +391,14 @@ receipt. Automatic reconnect retries reuse the original request's outcome when i
 ## Services
 
 The **keeper** is the parent of the managed CLIs and holds their terminals. The **daemon** manages agents and
-serves Facade's clients. Each service retains access to the terminals while the other restarts. An API-compatible
-daemon takeover keeps the keeper and its CLIs running while clients reconnect. See [Framework architecture](framework/ARCHITECTURE.md).
+serves Facade Code Framework's clients. Each service retains access to the terminals while the other restarts. An API-compatible
+daemon takeover keeps the keeper and its CLIs running while clients reconnect. See [Facade Code Framework architecture](framework/ARCHITECTURE.md).
 
 - **Status.** `facade status` reports the local Facade home, settings file, version, service PIDs, managed
   agent count, connected machines and the fixed Guest MCP launcher. It queries sleeping services without
   starting them. The daemon and keeper each retain 30 days of logs.
 - **Installation.** Use the [standalone Shell installation](framework/FEATURES.md#install-the-standalone-shell).
-  The Orchestrator-backed extension ships the programs for its host and can install them into the selected
+  Facade Code Framework-backed extension ships the programs for its host and can install them into the selected
   Facade home offline. The selected home supplies the programs for the extension's commands. If another program
   is named `facade`, PATH determines which executable the shell starts.
 - **Lifetime.** Services start on demand and exit after 30 idle seconds. Running agents, foreground
@@ -466,30 +463,30 @@ Agents and external applications use these eight tools through `facade-mcp`.
 | `press_keys` | Presses keys in a running managed agent's terminal. |
 
 MCP returns the requested content inline so the client can use it from another machine. For terminal operations,
-MCP clients use screen reads and input tools. The [MCP contract](extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
+MCP clients use screen reads and input tools. The [MCP contract](extension/engineering/MCP.md#7-mcp-through-facade-code-framework)
 defines the tool arguments and results.
 
 ## VS Code extension
 
-Running Managed Agents visible to the Orchestrator appear in the panel, including starts from Shell and other windows.
+Running Managed Agents visible to Facade Code Framework appear in the panel, including starts from Shell and other windows.
 A workspace remembers agents started or opened there and shares its Pins across its windows.
 
 - **Panel.** A card shows the agent's name, CLI, state and recent input. Open details to see the session,
   reference, start time and folder. Click the card to open the terminal. Its tab can close while the agent runs.
 - **Card actions.** Pin a card, or use the menu to rename or move it. Use **Stop Agent…** to end a process.
 - **Find an agent.** Click a running agent's card to open its terminal. **Resume Agent…** lists
-  resumable agents and saved sessions from the Orchestrator.
+  resumable agents and saved sessions from Facade Code Framework.
 - **Start.** Change Location offers open folders, worktrees, recent locations and path entry on the selected
   machine. Use the panel's **New Worktree…** to create a worktree before starting an agent.
 - **Reopen.** The extension resumes pinned agents that are stopped, including after a crash. It tries once
   per reopen and shows a failure on the card. Unpin an agent before stopping it if you want it to stay
   stopped. An expired unpinned record drops its card. For an expired pinned record, the extension can create a
   new agent from the saved CLI session. If the session is gone, it removes the Pin and tells you.
-- **Remote windows.** In a Remote SSH window, the extension uses the Orchestrator on its extension host.
+- **Remote windows.** In a Remote SSH window, the extension uses Facade Code Framework on its extension host.
   Run `facade machine add` there to make other machines reachable from that window.
 - **Window Component.** The component supplied with the extension cleans up terminal tabs left by a previous
   extension host after a reconnect or restart.
-- **Extension implementation.** The [Extension product guide](extension/PRODUCT.md) describes Framework activation
+- **Extension implementation.** The [Extension product guide](extension/PRODUCT.md) describes Facade Code Framework activation
   and the transition of legacy Pins.
 - **Other actions.** Use Shell for machine administration and sending messages as a person. Use Git to remove
   a worktree.

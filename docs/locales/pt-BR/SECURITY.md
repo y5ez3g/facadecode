@@ -1,6 +1,6 @@
 # Segurança
 
-O Facade Code é desenvolvido abertamente em [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+O Facade Code Extension é desenvolvido abertamente em [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Como reportar uma vulnerabilidade
 

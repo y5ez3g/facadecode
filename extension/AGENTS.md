@@ -1,11 +1,11 @@
-# Facade Code extension
+# Facade Code Extension
 
-The Facade Code extension is a VS Code extension providing infrastructure for a person and their coding agents to work
+Facade Code Extension is a VS Code extension providing infrastructure for a person and their coding agents to work
 together. This file routes work on the extension in `extension/`; the repository-wide rules are in [../AGENTS.md](../AGENTS.md).
 
 ## 1 Start here
 
-1. Read [Facade Code](../docs/PRODUCT.md) for the product and its VS Code entry point. Use
+1. Read [Facade Code Extension](../docs/PRODUCT.md) for the product and its VS Code entry point. Use
    [the extension's specification index](../docs/extension/README.md) to find the editor's rules and engineering contracts.
 2. Read [RULES](../docs/extension/RULES.md), then the feature you are changing. UI work also reads [UX](../docs/extension/UX.md).
 3. Before implementation/testing, read [ARCHITECTURE](../docs/extension/engineering/ARCHITECTURE.md), especially group 5, and
@@ -15,8 +15,8 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 2 The specification
 
-**[Facade Code](../docs/PRODUCT.md) defines the product.** The extension's rules in `../docs/extension/` define the
-editor interaction, Framework integration and the published upgrade. Where code disagrees with a rule, fix the code or amend the owning rule
+**[Facade Code Extension](../docs/PRODUCT.md) defines the product.** The extension's rules in `../docs/extension/` define the
+editor interaction, Facade Code Framework integration and the published upgrade. Where code disagrees with a rule, fix the code or amend the owning rule
 first.
 
 The [specification index](../docs/extension/README.md) lists its layers and each document's responsibility. Product constrains
@@ -31,8 +31,8 @@ For island ownership and horizontal roles, use [ISLANDS](../docs/extension/engin
   Keep present tense. Use exact cases/values in lower layers; include a reason where it helps.
 - Separate the target from evidence: “not run,” “historical claim,” “failed” and “passed” have different meanings.
   Never make a document match a code defect just to call the work complete.
-- For Framework integration, start with [ARCHITECTURE-6](../docs/extension/engineering/ARCHITECTURE.md#6-connecting-the-editor-to-the-orchestrator).
-  Read [Framework compatibility review](../docs/framework/ENGINEERING.md#compatibility-contracts) before changing API use
+- For Facade Code Framework integration, start with [ARCHITECTURE-6](../docs/extension/engineering/ARCHITECTURE.md#6-connecting-the-editor-to-facade-code-framework).
+  Read [Facade Code Framework compatibility review](../docs/framework/ENGINEERING.md#compatibility-contracts) before changing API use
   or the saved workspace roster, Pins or identity. The [verification cases](../docs/extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build)
   identify the required prior-build inputs.
 - Amend the owning rule first, with its reason in the rule where it helps, then dependent schemas/scenarios/references,
@@ -47,7 +47,7 @@ The full rules are [ARCHITECTURE-5](../docs/extension/engineering/ARCHITECTURE.m
 - Preserve unrelated edits; no reset/clean, staging, commits, push, publishing or release without an owner request.
 - Never drive/reload/close the owner's existing editor windows/agents as tests. Every test editor has isolated temporary
   `--user-data-dir` and `--extensions-dir`; even version probes must not launch the owner's editor profile.
-- Tests point Facade's root at a temporary folder with `FACADE_HOME`; the extension keeps its data in its `extension`
+- Tests point Facade Code Extension's root at a temporary folder with `FACADE_HOME`; the extension keeps its data in its `extension`
   subfolder (`~/.facade/extension` by default), beside the Facade Code IDE's own data. Do not override `HOME` for an editor
   process.
 - Real CLI probes use isolated state. Never run a real Qwen probe. Task-specific agent authorization does not permit
@@ -70,7 +70,7 @@ npm run test:integration
 ```
 
 `npm run test:package` checks the VSIX `npm run package` made. The integration suite runs the official VS Code with its own
-profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys`, `cross`, `conversion`, `reopen`, `expiry`, `pins` or `probe` runs one part of
+profile, a temporary Facade Code Extension root and fake CLIs only; `FACADE_IT_ONLY=journeys`, `cross`, `conversion`, `reopen`, `expiry`, `pins` or `probe` runs one part of
 it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run -a`; Windows runs it in the desktop session.
 
 `npm run test:remote` runs the journeys over Remote-SSH to a host: `FACADE_IT_SSH_CONFIG` and `FACADE_IT_SSH_HOST` name

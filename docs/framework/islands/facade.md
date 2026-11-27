@@ -1,7 +1,7 @@
 # facade
 
 The shell client, managed CLI hooks, and service entry points in `framework/crates/facade`. The `facade` program connects
-to the Orchestrator and presents its results. It owns the local terminal during an attachment and the foreground SSH
+to Facade Code Framework and presents its results. It owns the local terminal during an attachment and the foreground SSH
 session during a machine connection.
 
 ## Shell commands
@@ -18,11 +18,11 @@ command page. The root and `machine` show their help when called on their own. B
 also show help. Calls with options or operands use the command's normal argument validation. Bare `list`, `status`,
 `resume`, `upgrade` and `machine list` run their default actions.
 
-Put Facade startup options before the CLI name. Arguments after it go to the selected CLI. The Orchestrator validates
+Put Facade Code Framework startup options before the CLI name. Arguments after it go to the selected CLI. Facade Code Framework validates
 the CLI, target machine, working directory and worktree.
 
 Ordinary commands use a Terminal connection. A `facade` invocation from an agent's terminal has the same identity as
-any other invocation. The Orchestrator records the command line as the sender of `send`.
+any other invocation. The Facade Code Framework records the command line as the sender of `send`.
 
 Results and receipts go to stdout. Empty results, guidance, diagnostics, progress and attachment messages go to
 stderr. Command success is 0, an operation failure is 1, and invalid usage is 2. After a foreground `start`, `resume`
@@ -30,7 +30,7 @@ or `attach` opens the agent's terminal, Ctrl+] detaches and returns 0. When the 
 the agent's exit code or 128 plus its signal number. A closed stdout pipe ends the command quietly. The layer uses the
 platform's SIGPIPE behavior or handles a failed write.
 
-The Orchestrator supplies copyable agent references such as `a5@laptop` and message IDs such as `m42@laptop`.
+Facade Code Framework supplies copyable agent references such as `a5@laptop` and message IDs such as `m42@laptop`.
 An unqualified `list` queries reachable machines on demand and leaves sleeping machines idle. `list --machine`
 waits for the named machine and can wake it. `resume` shows ended agents with resumable sessions and lists
 independent CLI sessions from the current folder. A named `resume --machine` lists managed agents on that
@@ -45,7 +45,7 @@ shows the daemon's selector for resuming it from the current folder, or the full
 are exclusive alternatives. Scope stops skip connected Guests. A remote scope stop leaves sleeping machines
 idle. Shell prints confirmed stops before reporting failed items and machines. A partial failure returns 1.
 
-`send` confirms that Facade saved the message in the recipient's inbox. With `-w` or `--wait-delivery`, it
+`send` confirms that Facade Code Framework saved the message in the recipient's inbox. With `-w` or `--wait-delivery`, it
 confirms delivery to the managed terminal or a Guest's inbox read. With `-r` or `--wait-reply`, it writes
 the first linked reply from the original recipient, preserving the reply's text and line endings.
 `-t` or `--timeout` sets the total wait from 1 to 300 seconds, with a default of 30. The budget starts
@@ -66,22 +66,22 @@ that paste with Enter.
 `main.rs` parses arguments, opens a connection when the operation needs one, and passes it to the command handler.
 When `start` or `resume` returns an agent for a foreground command, the layer passes the connection and the agent's
 stable reference to Attach. `cli.rs` owns command parsing, `help.rs` owns the examples and groups, and `errors.rs`
-adds Shell guidance to the Orchestrator's diagnostics.
+adds Shell guidance to Facade Code Framework's diagnostics.
 
 The layers share the terminal formatters, the selected client's connection and the display name and address returned
-by the Orchestrator. Persistent Agent, machine and message records belong to the Orchestrator.
+by Facade Code Framework. Persistent Agent, machine and message records belong to Facade Code Framework.
 
 `daemon_client.rs` opens the socket for the selected `FACADE_HOME`. For an ordinary command, it starts a keeper when
 neither service is running. The keeper starts the daemon. Local `status` probes without starting or upgrading
 services. When they sleep, local status and start help use the committed machine name through the daemon's offline
-reader. Agent status uses the normal connection and the Orchestrator routes that query. The caller can cancel an
-Attach reconnect while the socket opens or while the Orchestrator answers hello.
+reader. Agent status uses the normal connection and Facade Code Framework routes that query. The caller can cancel an
+Attach reconnect while the socket opens or while Facade Code Framework answers hello.
 
 The Terminal client offers its supported daemon API versions in `hello` and uses the selected version for
 that connection. A warm replacement sends `daemon.upgrade` with the new program's absolute path, build ID,
-and the independent daemon and keeper API version sets. The running Orchestrator checks the target daemon
+and the independent daemon and keeper API version sets. The running Facade Code Framework checks the target daemon
 set and the live keeper's negotiated version before replacement. A refusal can identify running agents that
-block replacement. After acceptance, Facade waits for the requested build to answer a fresh hello.
+block replacement. After acceptance, Facade Code Framework waits for the requested build to answer a fresh hello.
 
 `facade daemon --detach` is the background entry for an editor or relay. The caller confirms readiness with hello.
 The installer's `facade daemon --takeover` entry selects an eligible program set in a sleeping home and leaves
@@ -96,11 +96,11 @@ and report the selected build and launcher folder when available. An SSH install
 ### commands
 
 `commands.rs` runs the agent commands and status. It submits the configured CLI, working directory and native
-arguments to the Orchestrator. Each operation uses the common protocol for target resolution, permission checks
+arguments to Facade Code Framework. Each operation uses the common protocol for target resolution, permission checks
 and delivery. The module uses the resolved references and operation results for the Shell's tables, details and
 receipts. `status <AGENT>` uses `agent.inspect` for launch details and authenticated attachment facts.
 
-Start passes the current folder and environment as local defaults. The remote Orchestrator uses the
+Start passes the current folder and environment as local defaults. The remote Facade Code Framework uses the
 target machine's login environment and uses its login home when the command omits a folder. A resumed stored
 agent keeps its original folder. The start command keeps its business request ID and arguments across an
 eligible reconnect. The command-line reply uses the lifetime of the original bounded call. Shell reports
@@ -112,7 +112,7 @@ the facts the daemon supplies when the result cannot be confirmed.
 On every connection, the console chooses `watch attach.shell` if the Terminal hello advertises it, and
 `watch attach` otherwise. A foreground start or resume opens a fresh Terminal connection for the
 dedicated watch and keeps the launch connection when using ordinary Attach. The console sends capacity
-with the watch and sends `attach.resize` on the connection that owns it. The Orchestrator authorizes
+with the watch and sends `attach.resize` on the connection that owns it. Facade Code Framework authorizes
 the managed agent and supplies its name, public reference and stable identity. Foreground start and
 resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect watches that same
 stable identity and begins with a fresh redraw. Each watch requests the visible screen and up to
@@ -141,7 +141,7 @@ The console sends key and resize notifications through the current connection. I
 connection ends and counts keys typed while disconnected. It leaves keys already handed to that connection there.
 During a planned takeover, any write already in progress completes before Attach acknowledges `closing`. The
 reconnect shows the current screen before it resumes sending input. It shows a bottom-line notice on stderr when
-any bytes could not be sent. The same policy applies to a local or remote terminal. The Orchestrator chooses the
+any bytes could not be sent. The same policy applies to a local or remote terminal. Facade Code Framework chooses the
 smallest active viewer size in each dimension. Shell seeds a local `Screen` and its scrollback from each watch's
 snapshot. It feeds new output into that Screen and reflows its history at the confirmed shared size on redraws.
 An empty initial main viewport leaves the shell page visible, even if the snapshot contained history. Attach
@@ -223,21 +223,21 @@ and `title <file> [command]` write the session report only to the current run's 
 `session-start` accepts and ignores the old `--skill` flag. `title` also passes the same input to the
 configured title command. `instructions <cli>` uses
 the local run hint to read only the managed instructions file. `approve <cli>` uses the rule for approval of
-Facade tools. Rules owns the CLI-specific input and output.
+Facade Code Framework tools. Rules owns the CLI-specific input and output.
 
 Hooks read up to 1 MiB of input and wait up to one second for it. Hooks always exit 0. They read local run artifacts
-and write only the run's own session file. The inherited run hint is separate from the Orchestrator's MCP identity.
+and write only the run's own session file. The inherited run hint is separate from Facade Code Framework's MCP identity.
 
 ### machine
 
 `machine.rs` runs the machine commands. `add` and `connect` accept the person's login SSH arguments in order,
-with Facade options before the SSH arguments. SSH can ask for credentials or host keys in the person's console.
+with Facade Code Framework options before the SSH arguments. SSH can ask for credentials or host keys in the person's console.
 `machine list` reads the local machine table without opening SSH. A saved connection with no live session or
-observed error displays `Disconnected`. The Orchestrator reports a confirmed sleeping machine, a connection
+observed error displays `Disconnected`. Facade Code Framework reports a confirmed sleeping machine, a connection
 error or a need for SSH login as distinct states.
 
 `add` reuses working batch credentials. If password login is needed, it uses the authenticated login to confirm
-the remote Facade identity and install the local dedicated public key. It verifies that key on an independent,
+the remote Facade Code Framework identity and install the local dedicated public key. It verifies that key on an independent,
 noninteractive SSH connection, confirms the same machine ID and only then saves the verified connection. A
 second add for the same machine ID can update its credentials. Explicit `add --bidirectional` also verifies and
 saves a return connection using the source address seen by the remote SSH service. It rolls back authorization
@@ -245,7 +245,7 @@ and host trust added for a return that fails, keeping the confirmed forward conn
 carries traffic in both directions for as long as the foreground command stays open. It also works where only
 one side can initiate SSH.
 
-`remove` deletes the local saved connection and revokes Facade-marked local authorization for the other machine
+`remove` deletes the local saved connection and revokes Facade Code Framework-marked local authorization for the other machine
 with zero SSH. `remove --bidirectional` first uses the saved SSH login to confirm the remote machine ID and
 request reciprocal cleanup. The remote side checks authorization even when a saved return connection is absent.
 Shell performs local cleanup after the remote attempt, reports each side's outcome and returns 1 when it cannot
@@ -254,8 +254,8 @@ confirm both sides. Removal matches authorization to a machine ID so a machine r
 The hidden `machine serve` validates the first machine hello and its daemon API offer before opening the
 daemon socket. Invalid and incompatible offers receive a structured reply on the original request ID.
 A valid hello and its reply cross the relay byte for byte, and the session continues in both directions.
-A passive `machine serve --no-start` returns 3 when the Orchestrator is sleeping. The relay carries the
-authenticated peer's idle notification for the Orchestrator to handle.
+A passive `machine serve --no-start` returns 3 when Facade Code Framework is sleeping. The relay carries the
+authenticated peer's idle notification for Facade Code Framework to handle.
 
 SSH probes the program in the selected remote home. A missing or lower-ranked installation uses the pinned
 installer when that operation permits it. A higher-ranked installation asks the person to upgrade the local

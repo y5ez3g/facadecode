@@ -1,6 +1,6 @@
-# Facade Code extension specification
+# Facade Code Extension specification
 
-**Version 1. This specification is the authority for the Facade Code extension.**
+**Version 1. This specification is the authority for the Facade Code Extension.**
 It says what a person and their agents can do, how each feature behaves and how the extension is built and verified.
 Where the code disagrees with it, the code is fixed, or the owning rule is amended first.
 
@@ -18,7 +18,7 @@ Where the code disagrees with it, the code is fixed, or the owning rule is amend
 | 3 Features | [COLLABORATION](features/COLLABORATION.md) | Cross-window agent operations, messages, human contact and message records |
 | 3 Features | [CONFIGURATION](features/CONFIGURATION.md) | `facade.json`, agent names, named CLI entries and icons, errors, native API setup and migration |
 | 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, window components, processes, data, packaging and working safeguards |
-| 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade tool files, conversations and trust |
+| 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade Code Extension tool files, conversations and trust |
 | 4 Engineering | [MCP](engineering/MCP.md) | The eight agent tools, results, waits, injection and protocol |
 | 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | Gates G1, G2, G3 and G5, required journeys and scale, and their status |
 

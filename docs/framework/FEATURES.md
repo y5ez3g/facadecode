@@ -1,12 +1,12 @@
 # Features
 
-Facade Code Framework supplies the Orchestrator, its Shell entry point and Facade API v1's MCP entry point.
-Facade Code Extension connects VS Code to that Orchestrator. The [product description](../PRODUCT.md) defines
+Facade Code Framework provides Shell and Facade API v1's MCP entry point.
+Facade Code Extension connects VS Code to Facade Code Framework. The [product description](../PRODUCT.md) defines
 the user experience. The
 [daemon API](../../framework/protocol/DAEMON.md) and [MCP contract](../extension/engineering/MCP.md) define the
 operations and their results.
 
-Framework supports macOS and Linux on x64 and arm64, Windows 11 and Windows Server 2022 or later on x64, and Windows 11 on
+Facade Code Framework supports macOS and Linux on x64 and arm64, Windows 11 and Windows Server 2022 or later on x64, and Windows 11 on
 arm64. On Windows it uses native pseudo consoles.
 
 ## Install the standalone Shell
@@ -30,7 +30,7 @@ invoke the home launcher by its full path.
 The installer, the extension and `facade upgrade` select a build by numeric version and then source commit time.
 A build with a higher rank can replace the selected build. Equal or lower ranks keep the selected version.
 
-The [VS Code extension](../../extension/GUIDE.md#install-for-your-workspace-host) ships Framework for its workspace host. When using it with Shell,
+The [VS Code extension](../../extension/GUIDE.md#install-for-your-workspace-host) ships Facade Code Framework for its workspace host. When using it with Shell,
 use compatible builds and the same Facade home. See [compatible takeover and planned restarts](#restarts-and-diagnostics)
 before replacing services in a home that already has agents.
 
@@ -61,14 +61,14 @@ artifacts. See the [editor setup](../../extension/GUIDE.md#install-for-your-work
 
 ## Agents
 
-A managed agent runs a CLI in a terminal the Orchestrator holds. A Guest is an external MCP client's connection and
+A managed agent runs a CLI in a terminal Facade Code Framework holds. A Guest is an external MCP client's connection and
 gets a name and inbox when it first calls a tool. From that point it can receive messages and appear in `list`.
 
 Start the built-in adapters with their native command names, including `facade start devin`,
 `facade start agent`, `facade start kiro-cli`, `facade start qoder`, `facade start omp` for Oh My Pi
 and `facade start copilot` for GitHub Copilot CLI. Kiro uses its V3 terminal.
-A Kiro session saved with a native profile retains that profile's tools when resumed. Facade's
-managed relay and session-start hook use a Facade profile.
+A Kiro session saved with a native profile retains that profile's tools when resumed. Facade Code Framework's
+managed relay and session-start hook use a Facade Code Framework profile.
 
 - `facade start [OPTIONS] <CLI> [CLI_ARGS]...` starts a built-in or configured CLI. Put `--name`, `--machine`,
   `--workdir`, `--worktree` and `-d` before the CLI name. Arguments after that name go to the CLI, including its own
@@ -95,7 +95,7 @@ managed relay and session-start hook use a Facade profile.
 - `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
   `Waiting for you` and `Error`. A CLI that shows a choice of its own in place of its input box, such as a Codex
   update or a Cursor tool approval, is `Waiting for you` until it gets an answer. An answer that ends in a question
-  is not. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`, `Ended (signal <SIGNAL>)`, or
+  is not. For an ended agent it shows `Ended (stopped by Facade Code Framework)`, `Ended (code N)`, `Ended (signal <SIGNAL>)`, or
   `Ended` when the way it ended is unknown. Its `Session` line shows the same native name or preview as `list`, and
   `Session ID` the CLI's full session ID.
 - Resuming an `Ended` agent keeps its reference, directory and session and starts with an empty terminal.
@@ -150,7 +150,7 @@ wake it when needed.
 
 ## Messages and tools
 
-`facade send <RECIPIENT> <TEXT>` sends as the command line and prints a receipt when Facade saves the message in the
+`facade send <RECIPIENT> <TEXT>` sends as the command line and prints a receipt when Facade Code Framework saves the message in the
 recipient's inbox. Add `-w` to wait for delivery or `-r` to print the first linked reply from the recipient. `-t` sets
 the total command budget from 1 to 300 seconds, with a default of 30. Each invocation takes a recipient and text.
 When a reply wait expires, the command reports the outcome and exits with status 1.
@@ -161,11 +161,11 @@ An answer appends ` · in reply to m17` to its own header and includes a machine
 To answer a message, use the sender address in `to` and the message number in `reply_to`. A waiting Shell request
 shows `from command line (#c17@devbox)`. The original recipient can send one linked reply while the command waits.
 
-For a managed agent, the Orchestrator waits for an empty input box and checks the pasted draft before submitting it.
+For a managed agent, Facade Code Framework waits for an empty input box and checks the pasted draft before submitting it.
 Codex queues an ordinary message with Tab while Working. Idle delivery, startup prompts and recovered in-flight
 drafts use Enter. A Guest takes messages with `read_messages`. Background delivery has a 30-second deadline.
 When Shell explicitly waits,
-delivery uses the remaining command budget. Facade withdraws undelivered messages at their deadline and retains
+delivery uses the remaining command budget. Facade Code Framework withdraws undelivered messages at their deadline and retains
 message history for 30 days.
 
 | MCP tool | What it does |
@@ -198,9 +198,9 @@ Its record number is available in the inbox. `start_agent` returns the agent's a
 A first prompt's failure and its startup problem share one notice in the live caller's inbox.
 The live agent creator also receives one notice per incident when its agent waits
 for permission, an answer or login for 30 seconds, stays in Error for 30 seconds, or ends without its request.
-See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
+See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-facade-code-framework).
 
-Facade supplies the same eight tool definitions to managed agents and Guests. The MCP client controls when it
+Facade Code Framework supplies the same eight tool definitions to managed agents and Guests. The MCP client controls when it
 exposes them to the model. Muse Code 1.4.25 includes all eight in its first request. Muse Code, Pi and Antigravity
 runs get their managed instructions from their run hook or extension.
 
@@ -208,7 +208,7 @@ runs get their managed instructions from their run hook or extension.
 
 `facade.json` in the Facade home holds YOLO, the name pool and CLI entries. Each managed agent reads its machine's
 settings at start or resume. A Guest reads YOLO from its machine's settings and appears in `list` at its first MCP
-tool call. With YOLO on, an agent can reach any agent the Orchestrator can reach. With YOLO off, it can act within
+tool call. With YOLO on, an agent can reach any agent Facade Code Framework can reach. With YOLO off, it can act within
 its creation tree. Shell and VS Code have full reach for the actions they offer. Each CLI's rules describe how it
 handles tool approval, trust and sandbox settings. See the [product description](../PRODUCT.md) and
 [configuration](../extension/features/CONFIGURATION.md).
@@ -222,8 +222,8 @@ handles tool approval, trust and sandbox settings. See the [product description]
   worktree. In VS Code, the local location picker shows workspace folders and worktrees. The picker for another
   machine offers its login home, recent folders and manual path entry.
 - `facade machine add [--home <PATH>] [--bidirectional] <SSH_ARGS>...` connects and saves the verified SSH
-  arguments. Facade options come before SSH arguments. If a password login is required, the command installs
-  and verifies a dedicated Facade SSH key for reconnects. `--bidirectional` also authorizes, verifies and saves
+  arguments. Facade Code Framework options come before SSH arguments. If a password login is required, the command installs
+  and verifies a dedicated Facade Code Framework SSH key for reconnects. `--bidirectional` also authorizes, verifies and saves
   a return connection when the remote machine can reach the source address on SSH port 22.
 - `facade machine connect [--home <PATH>] <SSH_ARGS>...` opens a two-way connection while the foreground command
   runs. SSH prompts appear in the command's terminal.
@@ -239,12 +239,12 @@ handles tool approval, trust and sandbox settings. See the [product description]
   connection, a confirmed sleeping machine, a connection failure and a machine that needs SSH login. Login
   guidance gives the saved `add` command. `facade machine rename` gives a machine a new name.
 - `facade machine remove [--bidirectional] <MACHINE>` removes the local saved connection and revokes local
-  Facade SSH authorization for the remote machine. The default is offline. `--bidirectional` also tries to
-  remove the return connection and revoke Facade authorization on the remote machine. A partial failure
+  Facade Code Framework SSH authorization for the remote machine. The default is offline. `--bidirectional` also tries to
+  remove the return connection and revoke Facade Code Framework authorization on the remote machine. A partial failure
   reports the completed removal and the side that still needs attention.
-- A Remote SSH VS Code window uses the Orchestrator on its extension host machine. Connect other machines through
+- A Remote SSH VS Code window uses Facade Code Framework on its extension host machine. Connect other machines through
   `facade machine add` on that host.
-- WSL and Dev Containers each act as machines. Inside them, Facade connects directly to the local Orchestrator. To
+- WSL and Dev Containers each act as machines. Inside them, Facade Code Framework connects directly to the local Facade Code Framework. To
   connect from another machine, start SSH inside the environment and add it from that machine.
 
 On Linux, systemd settings that end a login's processes can end the services with the SSH login. The connection warns
@@ -253,27 +253,27 @@ See [Machine sessions](../../framework/protocol/DAEMON.md#machine-sessions).
 
 ## Restarts and diagnostics
 
-- The Orchestrator starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
+- Facade Code Framework starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
   seconds, each on its own timer. A foreground machine connection, an active Attach or a call in progress keeps its
   session active. A query or a machine table sync that finishes over a session restarts that session's 30 seconds
-  and the Orchestrator's; keepalives do not.
+  and Facade Code Framework's; keepalives do not.
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
   An API-compatible takeover replaces the daemon. The live keeper retains its CLIs and terminals while clients
   reconnect. See [Daemon takeover](../../framework/protocol/DAEMON.md#daemon-takeover) for the compatibility checks.
-- If the installed and target Framework builds cannot take over, close the clients, let agents finish
+- If the installed and target Facade Code Framework builds cannot take over, close the clients, let agents finish
   and wait for both services to exit. Switch Shell, VS Code and the participating SSH hosts to
   compatible builds before reconnecting. Reuse the same Facade homes and editor profile and workspace
   storage. Check [storage compatibility](islands/daemon.md#storage-format-and-migrations).
-- Framework uses the existing home settings in `facade.json` and begins with a fresh runtime store in
+- Facade Code Framework uses the existing home settings in `facade.json` and begins with a fresh runtime store in
   `framework/`. The former runtime store stays in its original directory.
 - `facade upgrade` checks the stable build against the current home's selection before downloading the installer.
   `facade upgrade --version X.Y.Z` reads the BUILD marker of the `extension/X.Y.Z` release. Both forms pin the
-  exact build when installing. The installed build takes over a running Orchestrator when its compatibility
+  exact build when installing. The installed build takes over a running Facade Code Framework when its compatibility
   checks pass, keeping agents running.
 - `facade status` reports, in four parts, the state (versions and active agent count), the local home, settings
   file and daemon and keeper process IDs, the Guest MCP launcher, and last the CLIs each machine can start: this
   machine first, for the current directory, then each connected machine. A CLI is listed where it is installed and
-  its machine's `facade.json` does not turn it off. When the local Orchestrator is sleeping, status says so without
+  its machine's `facade.json` does not turn it off. When the local Facade Code Framework is sleeping, status says so without
   starting it and lists this machine alone. `facade start --help` points there.
 - The logs are `framework/logs/daemon.log` and `framework/logs/keeper.log` inside the home. Each service keeps 30 days. VS Code
   can read recent daemon log lines for diagnostics.

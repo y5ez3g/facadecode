@@ -1,6 +1,6 @@
 # Agent lifecycle
 
-Group 5 covers the Orchestrator-backed editor. Groups 1–4 retain the legacy implementation transition rules.
+Group 5 covers Facade Code Framework-backed editor. Groups 1–4 retain the legacy implementation transition rules.
 
 Layer 3. [Experience](../EXPERIENCE.md) explains use; [Rules](../RULES.md) owns identity, state and lifetime. This
 document owns starts, naming, terminal, finding, closing, Resume and Pin interactions.
@@ -18,7 +18,7 @@ document owns starts, naming, terminal, finding, closing, Resume and Pin interac
 
 **New Agent shows the working location, editable suggested name and CLI choices in one native picker.**
 
-New Agent opens the CLI picker for the current window's Facade machine (RULES-2.1). The Machine step belongs to
+New Agent opens the CLI picker for the current window's Facade Code Extension machine (RULES-2.1). The Machine step belongs to
 Change Working Location (1.3). After the person chooses a location on another machine, the CLI picker shows that
 machine and location in the title and lists the CLIs available in its login environment. On confirmation, preflight
 the remote location and CLI before starting. A preflight failure preserves the choices and shows its reason.
@@ -34,10 +34,10 @@ when 1.2 has fallen back to another location. Put the last successfully used CLI
 it without selection. The CLI step lists nothing until the CLIs are found, so an Enter while they load starts nothing:
 the editor keeps the focused position as items change. Other installed/enabled CLIs follow CLIS-1.1 order, then
 added entries (CONFIGURATION-2.1). All CLI icons follow CONFIGURATION-2.4. CLIs that cannot start here - a configuration
-error, a configured program that is not found, a version Facade does not start - follow under a separator labeled
+error, a configured program that is not found, a version Facade Code Extension does not start - follow under a separator labeled
 `Unavailable`, each with its reason as detail and a
 gear button labeled `Open Settings`; choosing the row also runs Open Settings. It follows CONFIGURATION-1.2:
-show Facade Code's Settings section on the Remote tab in a remote window, or User tab locally; its
+show Facade Code Extension's Settings section on the Remote tab in a remote window, or User tab locally; its
 Edit in facade.json link opens or creates the file. Remote windows whose Settings open as JSON open facade.json
 directly. On a migration conflict, that link shows the error and opens the old editor settings JSON (CONFIGURATION-6.2).
 There is no gear at the picker's upper right. File-level errors
@@ -142,9 +142,9 @@ owned by another window - creates no card and says why with WORKTREES-2.2's `Cou
 CLI's name standing for an empty name. Once accepted, keep one pair throughout `creating_worktree`, `launching_cli` and
 `running`; tool connection is independent. A person's launch opens the terminal's editor tab; an agent's start leaves it
 hidden until the person opens the agent (2.2). Do not create a second terminal at transition. An actual creation/process
-failure retains that pair red, its terminal stating the reason in a dim line of Facade's own, and reports the error to
+failure retains that pair red, its terminal stating the reason in a dim line of Facade Code Extension's own, and reports the error to
 its initiator; a process that ends leaves a dim line with its exit code or signal in the same way. A usable CLI whose
-Facade tools fail remains usable with the reason in the second line. Native Git post-create setup is not a required
+Facade Code Extension tools fail remains usable with the reason in the second line. Native Git post-create setup is not a required
 phase and does not gate CLI start. Native login/permission prompts stay in the terminal without a separate popup. An
 actual tool-connection failure is distinct from process launch failure and does not terminate a usable CLI.
 
@@ -188,11 +188,11 @@ editors, as it shows any editors: opening one hides no other, because a tab is a
 no other tab's opening closes it. Closing an agent's tab - its close button, Close Editor, Close All, Close Others, Close Editors and
 Group, Kill All Terminals - hides it, without a question: the agent runs on and its card opens it again. The card's Stop Agent and
 Dismiss Agent actions follow 3.1. The person's close of a tab showing its pin mark Unpins its agent as well (3.4). Hiding keeps
-the agent's screen, its draft and its Facade tools, and a starting agent hidden goes on starting. A hidden agent keeps
+the agent's screen, its draft and its Facade Code Extension tools, and a starting agent hidden goes on starting. A hidden agent keeps
 the size its tab last had, and one whose tab never opened has 120 columns and 30 rows. Tabs moved, dragged, joined into
-one group or restored there stay open as they are. Facade knows which agent a tab
+one group or restored there stay open as they are. Facade Code Extension knows which agent a tab
 shows from the editor's own reports - the tab that opens
-with a terminal Facade opened, the tab that becomes active with its terminal, and, where one tab closes while its
+with a terminal Facade Code Extension opened, the tab that becomes active with its terminal, and, where one tab closes while its
 terminal stays open and one opens, those two as one tab moved - never from Tab objects, which the editor may replace
 without a report. A tab those leave unknown, as several moved at once can, counts for no agent until it next becomes
 active with its terminal: a change of its mark acts once it is known (3.4), the person's close of it
@@ -202,12 +202,12 @@ Copy into New Window - the agent stays where it is. The editor reports a copy as
 a pseudoterminal of its own, under the name the copied tab was opened with - a terminal with either is never a copy.
 Each copy, one of several at once as Copy into New Window makes of a whole group included, becomes at once an ordinary
 terminal in its place - the editor's default terminal profile, its icon and title the editor's own - in the folder of
-the agent whose open tab Facade opened under that name: where several open tabs bear it, the folder their agents share,
+the agent whose open tab Facade Code Extension opened under that name: where several open tabs bear it, the folder their agents share,
 and where their folders differ the editor's default folder, as a name alone cannot tell which was copied and the editor
-tells an extension nothing more. That is what the editor's own split of a terminal tab gives. Facade starts no agent for it. A split is a layout gesture, and a new
+tells an extension nothing more. That is what the editor's own split of a terminal tab gives. Facade Code Extension starts no agent for it. A split is a layout gesture, and a new
 agent - a process, a card, a number and a conversation - is too lasting a thing for a gesture to leave behind; New Agent
 starts one beside on purpose. The copy, which has no process, closes as that terminal comes to the front, so that its
-group never goes empty; the editor draws the copy before Facade hears of it, so it shows for a moment, which no
+group never goes empty; the editor draws the copy before Facade Code Extension hears of it, so it shows for a moment, which no
 extension can prevent. The agent stays as it was throughout. A reload or an extension-host restart is the one exception to
 a tab staying open (3.5): every agent's process and card survive it, but only the pinned agents' tabs open again; every other agent's
 tab stays hidden until the person opens it from its card, and once the pinned tabs are open the last one opened
@@ -231,10 +231,10 @@ a name length limit or change the editor's tab-width settings. Native tab rename
 when valid, without removing text that resembles a CLI title, apart from the tab's own short ID: on `#a12`'s tab,
 `auditor` and `auditor #a12` both mean the name `auditor`, and `#a12` alone an empty name - at most one trailing
 occurrence of its own ID, whatever the duplicates are by then; no other `#aN` is touched. A name that is to end in that
-tab's own ID is given through Rename Agent, whose input holds the stored name alone. Facade's own title changes never
-become a rename. Match terminals by actual identity, never by a duplicate title. Facade never offers panel placement as
+tab's own ID is given through Rename Agent, whose input holds the stored name alone. Facade Code Extension's own title changes never
+become a rename. Match terminals by actual identity, never by a duplicate title. Facade Code Extension never offers panel placement as
 an alternative. An agent's terminal passes the person's input to its CLI as typed, except a mouse report the editor
-could not measure, and keys that reach it while Facade steps through groups to show a chosen tab or holds the focus
+could not measure, and keys that reach it while Facade Code Extension steps through groups to show a chosen tab or holds the focus
 there for a mark of its own (3.4). The editor reports a click's release after it opens a clicked link, and a link opened
 over an editor terminal takes the terminal out of the page first: the release then has no position (`ESC[<0;NaN;NaNm` in
 the SGR encoding), which a CLI shows as typed text. Such a report, in any mouse encoding, takes the position of the
@@ -243,7 +243,7 @@ writes as written, except mouse tracking and encoding settings (modes 9, 1000, 1
 that, taken with those written right beside them, leave the terminal's mouse as it was: set to a protocol that reports
 no drag, 1000's among them, the editor's terminal stops reporting the drag in progress, and 1002 or 1003 set right after
 does not take it up again. Claude Code sets 1000, 1002, 1003 and 1006 again with its first input after five seconds
-without any - often the press that starts a selection, which then never follows the pointer. Facade follows the
+without any - often the press that starts a selection, which then never follows the pointer. Facade Code Extension follows the
 terminal's mouse, as the editor's terminal reads them, from what it wrote there since the terminal opened, resets
 included; once it cannot, it leaves nothing out until the terminal is reset. An Enter the person types waits
 briefly for the CLI's input reader to read what it submits (CLIS-2.1, PANEL-1.4); a CLI without an input reader takes it
@@ -311,7 +311,7 @@ conversation store. There is no 30-day age cutoff. Deduplicate by environment/CL
 same single-line native presentation as Go to Agent: its entry's icon (CONFIGURATION-2.4) and prominent
 conversation title, then quieter
 activity time, original location - none for the window's one place to work itself (1.3), which search still matches, a
-subfolder of it still named - and saved Facade name, in that order. A session without a title is `Untitled session`.
+subfolder of it still named - and saved Facade Code Extension name, in that order. A session without a title is `Untitled session`.
 Omit a missing or empty name without generating one while browsing. Keep the saved name even when it equals the
 title. The icon names the CLI, so no CLI name is repeated as text; search covers title, saved name, CLI and
 location, including beyond the first page. Use the vendor's saved display title and conversation activity time,
@@ -322,11 +322,11 @@ window's state cannot be read, a notification says `Could not read the saved ses
 entry whose working directory is gone, whose CLI is turned off or unavailable in this environment, or whose
 conversation a running agent already holds (CLIS-2.4). Do not list unrelated projects, or
 provide delete, hide or show-hidden controls. The panel's display filter does not change this history scope. When a
-vendor records a set of workspace folders without identifying the original cwd, use Facade's recorded cwd if known.
+vendor records a set of workspace folders without identifying the original cwd, use Facade Code Extension's recorded cwd if known.
 Otherwise, choosing that conversation opens a native working-location picker for its folders in this window, each
 with its full path. Each choice must find the conversation's store with that folder's launch settings
 (CONFIGURATION-3.4). Do not infer the original cwd from directory order. Cancellation starts nothing. If that exact
-conversation already runs in Facade, do not start it again; reveal it only when it belongs to this window, otherwise say
+conversation already runs in Facade Code Extension, do not start it again; reveal it only when it belongs to this window, otherwise say
 `{0} is already running in another window.` External activity is not a gate: call vendor resume and return its result. No external-writer scan, lease or
 concurrency guarantee is required.
 
@@ -337,14 +337,14 @@ concurrency guarantee is required.
 Restore RULES-4.2's conversation context and CONFIGURATION-3.4's original entry name and type. Use current entry
 settings and RULES-4.3's current destination YOLO; model and effort follow CONFIGURATION-3.3. A removed, disabled or
 changed-type entry refuses restoration with the reason, without selecting a built-in instead.
-Continue Session keeps a nonempty saved Facade name. A missing or empty saved name uses New Agent's suggestions (2.1),
+Continue Session keeps a nonempty saved Facade Code Extension name. A missing or empty saved name uses New Agent's suggestions (2.1),
 or the new agent's ID when no name is free. Save the chosen name with the conversation, except when it equals the
 agent's ID. Never derive it from the conversation title or CLI ID. Existing saved names, including long ones, remain
 unchanged. An ordinary reload preserves the running agent's name. Automatic Pin restoration keeps a recorded
 nonempty name; a blank one follows 2.1.
 Missing original session, location or configuration fails with its actual reason. For a vendor's ambiguous workspace-folder
 set under 3.2, the person's explicit location choice supplies the missing cwd.
-Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and the Framework
+Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and the Facade Code Framework
 already reports the same member running, the window reattaches to it. A manual failure says
 `Could not resume {0}: {1}` with the saved title. Continue Session uses the session ID and starts a new agent even if
 an ended record has the same session. Its failure says `Could not continue {0}: {1}`. On the legacy implementation an accepted
@@ -354,10 +354,10 @@ On process start, register the successful cwd under WORKTREES-1.2 and update hum
 
 ### 3.4 Pin and native editor pins
 
-**Native terminal-tab Pin and Facade Pin express the same exact-conversation restoration intent in both directions.**
+**Native terminal-tab Pin and Facade Code Extension Pin express the same exact-conversation restoration intent in both directions.**
 
-Pin from either surface saves RULES-4.2's context and updates the other; Unpin synchronizes too. Native-to-Facade sync
-follows `tabGroups` pin changes on that agent's tab. Facade-to-native sync shows the change on the tab at once,
+Pin from either surface saves RULES-4.2's context and updates the other; Unpin synchronizes too. Sync from native sessions to Facade Code Extension
+follows `tabGroups` pin changes on that agent's tab. Facade Code Extension-to-native sync shows the change on the tab at once,
 wherever the tab is, because a Pin the person cannot see on the tab is not one they can trust, and a tab without its mark
 is closed by the editor's Close Others and Close All. The documented `workbench.action.pinEditor` and
 `workbench.action.unpinEditor` commands act on the active group's front tab alone (ARCHITECTURE-1.2). A Pin or Unpin the
@@ -370,7 +370,7 @@ it is: nothing is taken from the person, and keys pass to its CLI as typed. A pi
 opens - after a reload, an extension-host restart or Pin restoration - takes its mark as it opens, the newest tab in front of its group - that group made the active one through the
 editor's focus commands where the editor did not make it so, the keys its terminal receives meanwhile not passed to its
 CLI - and nothing is given back (3.5). Any other tab - such as one whose Pin another card's took, or another agent's whose
-mark a mark's command changed - Facade brings to the front of its group - that group made the active one through the
+mark a mark's command changed - Facade Code Extension brings to the front of its group - that group made the active one through the
 editor's focus commands,
 the first eight groups by their own and one past them from the eighth group by group, each step checked, the keyboard's
 focus there for a moment - applies the command and checks that the tab took it. It then gives back what the mark took:
@@ -381,11 +381,11 @@ or notebook diff by its two resources, a notebook or custom editor by its resour
 the active group, by its place; one that opened as another kind instead is closed again, never one with unsaved changes,
 and a front shown without the focus leaves the person's group the active one. A tab in a floating editor window, which
 no focus command reaches, takes its mark as it next becomes active. The editor tells an extension nothing of a focus
-outside its groups and Facade's panel, so such a focus comes back to the person's group. Keys its terminal receives
-while Facade holds the focus there are not passed to its CLI. Where the person brings another tab to the front while a
+outside its groups and Facade Code Extension's panel, so such a focus comes back to the person's group. Keys its terminal receives
+while Facade Code Extension holds the focus there are not passed to its CLI. Where the person brings another tab to the front while a
 mark goes on, theirs stands, and nothing is given back over it; a mark that the command put on another of their tabs is
 undone at once.
-Marks go on one tab at a time and only while no tab of Facade's is opening, as an opening tab takes the front a mark
+Marks go on one tab at a time and only while no tab of Facade Code Extension's is opening, as an opening tab takes the front a mark
 goes on - but for that of a pinned tab 3.5's procedure opens, which goes on as it opens; a mark that lands on
 another tab is undone and never taken for the person's Pin or Unpin, and one that does not go on is tried again only
 once its tab is known anew, its Pin or Unpin is asked again, or the person brings its tab to the front, where it goes on
@@ -400,16 +400,16 @@ be saved opens the tab again, pinned, and says `Could not unpin {0}: {1}`. A pin
 follow shows none, and its close hides it alone, keeping the Pin. Closing a floating editor window closes its tabs,
 marked ones included, as the person's closes do, so a marked one there Unpins as well. The editor's Close All and Close
 Others leave marked tabs open, and a tab gone with a reload, a move, the extensions' restart or the window's close
-changes no Pin. A tab Facade cannot tell (2.2) may be pinned or unpinned natively meanwhile: once the tab is known, a
-change of its mark that Facade saw after the agent's last Pin or Unpin from its card or Facade is the latest and wins,
-Pinning or Unpinning the agent; otherwise - no change seen, or a Pin or Unpin made after it - Facade's Pin stands and
+changes no Pin. A tab Facade Code Extension cannot tell (2.2) may be pinned or unpinned natively meanwhile: once the tab is known, a
+change of its mark that Facade Code Extension saw after the agent's last Pin or Unpin from its card or Facade Code Extension is the latest and wins,
+Pinning or Unpinning the agent; otherwise - no change seen, or a Pin or Unpin made after it - Facade Code Extension's Pin stands and
 the mark follows it. Match the terminal/run exactly without relying on names. A native Pin or Unpin that cannot be
 saved is undone on the tab, and the person is told `Could not pin {0}: {1}` or `Could not unpin {0}: {1}`; a native pin
 of an agent that cannot be pinned is undone. The adapter must identify and resume the exact session. Pin and Unpin are
 acknowledged only after durable storage succeeds.
 
 A run whose CLI can identify and resume an exact session can be pinned from its start and across
-a reload. A conversation Facade resumed is saved already, and a new one
+a reload. A conversation Facade Code Extension resumed is saved already, and a new one
 can be pinned before its CLI names it - before its first message for CLIs that name it then. Such a Pin takes the
 conversation the CLI names; a window opened before that starts a new conversation of the same CLI with the Pin's name
 and location in its place. If a CLI changes that session, update the Pin only after its new identity is known; never
@@ -428,7 +428,7 @@ activation's pinned tabs - the reattached ones' too - whatever starts at once. E
 when its turn comes drops out of that tab opening, its tab hidden, and then takes its own lifecycle's outcome: a failed
 start or an abnormal exit keeps its red card and its Pin; Dismiss Agent removes both (3.1); a normal exit removes both as
 RULES-3.3 and 4.2 say, a Pin it cannot remove keeping its ended card with the reason, as above. A session already
-running in Facade is skipped by later windows. A failure keeps its own red card, which holds its Pin and says why, without auto-looping;
+running in Facade Code Extension is skipped by later windows. A failure keeps its own red card, which holds its Pin and says why, without auto-looping;
 Dismiss Agent on it Unpins. One notification for the restoration says
 what failed, with Show: `Could not restore {0}: {1}` for one Pin,
 `Could not restore {0} pinned agents. Their cards show why.` for several. A Pin refused before any card - its window
@@ -443,7 +443,7 @@ Stop Agent, Dismiss Agent and a normal exit remove the Pin; whole-window close p
 **Reload and temporary disconnection reuse existing runs. Reopening can restore ended agents through saved Pins.**
 
 On the legacy implementation, RULES-4.1 keeps runs for its grace after disconnect. Reattach those runs before restoring Pins, never duplicating a
-conversation still held by Facade: Pins are restored only once the conversations every ptyd of the window holds are
+conversation still held by Facade Code Extension: Pins are restored only once the conversations every ptyd of the window holds are
 known, and one that does not answer yet delays them. A run that exits between the listing and its reattachment shows
 that exit. A failure to clean up a kept record never stops the window's agents from showing. A retained failed
 restoration is not retried on reload.
@@ -462,7 +462,7 @@ of these brought each run back:
    a retained failure's with a Pin, a restored Pin's once its process has started; a run no longer eligible when its turn
    comes drops out (3.4).
 3. Open and mark each in its group, one at a time: the group its record names - the last group where theirs is gone, so
-   that one of a floating editor window, which the editor opens again after Facade's tabs, comes back in the main
+   that one of a floating editor window, which the editor opens again after Facade Code Extension's tabs, comes back in the main
    window - else, hidden or from a build that kept no record, in the active group. It comes to the front of its group as it
    opens, the newest tab there, and its mark is put on there before the next opens (3.4); one whose terminal does not
    open within ARCHITECTURE-2.2's ten seconds is passed over.
@@ -474,7 +474,7 @@ of these brought each run back:
 
 Keep tab placement with the run (ARCHITECTURE-3.1).
 The record follows the person's changes, including for retained failures and starts waiting their turn.
-Facade's own showing of a tab for its mark leaves the recorded placement alone. A pinned agent's tab opens in its
+Facade Code Extension's own showing of a tab for its mark leaves the recorded placement alone. A pinned agent's tab opens in its
 remembered group on reload.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
@@ -493,7 +493,7 @@ folder or worktree removal closes and unpins affected agents, including when rem
 **UI uses one launch service and one run record for the accepted launch.**
 
 Record destination, name, CLI, run YOLO, current effective plan and process facts. Keep the same pair through startup;
-restore output by sequence on reload. There is no Facade-managed native Git setup transaction. Without a request_id
+restore output by sequence on reload. There is no Facade Code Extension-managed native Git setup transaction. Without a request_id
 (MCP-1.1), repeating a start is a new request. Keep sufficient facts to report actual effects. The modules are
 core/agents, ui/pickers, host/execution, host/locations (worktree creation), host/clis and clis (planning), and ptyd.
 
@@ -523,7 +523,7 @@ start, the new worktree is the recent location. Use the selected machine's CLI c
 
 ### 5.2 Open a running agent
 
-**A running Managed Agent appears as a card as soon as the Orchestrator reports it.**
+**A running Managed Agent appears as a card as soon as Facade Code Framework reports it.**
 
 Click its card or use Open Terminal on the selected card. Open or focus the terminal for the full agent
 reference. Keep one card and one editor terminal view for the reference in this window.
@@ -551,7 +551,7 @@ the agent if the session is already in use.
 
 Once a card appears for an accepted start, it can be pinned before the CLI reports a session ID. Keep the name,
 actual working directory, CLI and saved session in the Pin. When the editor has the accepted start request, also keep its
-explicit startup arguments and resolved model and effort. The Pin takes a session ID and name when Framework
+explicit startup arguments and resolved model and effort. The Pin takes a session ID and name when Facade Code Framework
 reports them. A sessionless restart uses the actual directory, including any existing worktree, and sends no
 initial prompt. Apply RULES-6.4 once on workspace reopen and keep a visible error on the card when recovery fails.
 Native tab operations leave the workspace Pin as it was.
@@ -562,7 +562,7 @@ Native tab operations leave the workspace Pin as it was.
 | --- | --- |
 | 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, workspace folder and location choices, Back and Escape, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
 | 2.1–2.3 | Configured/default names, trimming and case-insensitive exclusions, empty/exhausted lists, blank starts/renames, invalid names blocking starts, ID names omitted from Resume/Pin, duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
-| 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, the legacy implementation's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
+| 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade Code Extension could not tell winning once it is known only where no Pin or Unpin came after it, the legacy implementation's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 | 5.1–5.5 | Start by machine and folder, automatic Managed Agent cards, terminal view actions, unified Resume, early Pin, session recovery and sessionless restart |
 

@@ -1,6 +1,6 @@
 # VS Code product scope
 
-[Facade Code](../PRODUCT.md) defines the product and its Shell, MCP and VS Code entry points. This page describes
+[The product guide](../PRODUCT.md) defines the two products and their Shell, MCP and VS Code entry points. This page describes
 the editor's scope. [Experience](EXPERIENCE.md) follows the editor journeys and [Shared rules](RULES.md) owns their
 common behavior.
 
@@ -8,7 +8,7 @@ common behavior.
 
 ### 1.1 Working in the editor
 
-**Facade Code Extension is Facade Code's VS Code entry point.**
+**Facade Code Extension is the VS Code entry point for Facade Code Framework.**
 
 It lets the person start agents, see their state, open their terminals, and pick up their work later. The extension
 includes Facade Code Framework for the platform where its workspace host runs.
@@ -17,7 +17,7 @@ includes Facade Code Framework for the platform where its workspace host runs.
 
 **People keep their editor, project and CLI accounts.**
 
-They can use the editor with Shell and MCP against the same Orchestrator.
+They can use the editor with Shell and MCP against the same Facade Code Framework.
 
 ## 2 Ways of working
 
@@ -44,9 +44,9 @@ Machine connections and sending messages use Shell. Agent collaboration uses MCP
 
 ### 3.2 Execution
 
-**The Orchestrator owns agents and their terminals.**
+**Facade Code Framework owns agents and their terminals.**
 
-Each extension host connects to its machine's Orchestrator. The CLI owns its models, login and session contents.
+Each extension host connects to its machine's Facade Code Framework. The CLI owns its models, login and session contents.
 
 ## 4 Product principles
 
@@ -79,17 +79,17 @@ The [verification gates](engineering/VERIFICATION.md) describe evidence for inst
 
 ### 5.3 Remote editors
 
-**The VS Code extension uses the Orchestrator on its extension host's machine.**
+**The VS Code extension uses Facade Code Framework on its extension host's machine.**
 
 Remote-SSH uses the remote host. WSL and Dev Containers each count as a machine. To reach one from outside,
-configure SSH inside it and use `facade machine add`. Running Facade inside that environment uses its local
-Orchestrator.
+configure SSH inside it and use `facade machine add`. Running Facade Code Extension inside that environment uses its local
+Facade Code Framework.
 
 ### 5.4 Git is optional
 
 **A folder is sufficient to start an agent.**
 
-Facade can create a worktree when it starts an agent. Use Git for worktree deletion.
+Facade Code Extension can create a worktree when it starts an agent. Use Git for worktree deletion.
 
 ### 5.5 One folder or several
 
@@ -105,6 +105,6 @@ See RULES-6.1 for the first-open upgrade behavior.
 
 ### 5.7 Transition
 
-**New agents use Framework. A planned transition from the legacy implementation restores saved Pins.**
+**New agents use Facade Code Framework. A planned transition from the legacy implementation restores saved Pins.**
 
 ARCHITECTURE-1.4 owns the cutover. Compatible upgrades reconnect to the running agents.

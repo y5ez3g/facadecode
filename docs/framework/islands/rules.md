@@ -1,8 +1,8 @@
 # Rules
 
-What Facade knows about each CLI it starts by name: the program and its arguments, how the CLI
+What Facade Code Framework knows about each CLI it starts by name: the program and its arguments, how the CLI
 keeps, reports and resumes sessions, how it draws its input, how it shows or reports its state,
-and how Facade's tools and hooks enter it. The daemon and `facade` ask Rules for CLI-specific details. Crate
+and how Facade Code Framework's tools and hooks enter it. The daemon and `facade` ask Rules for CLI-specific details. Crate
 `facade-rules`, folder `framework/crates/rules/`, rule
 files in `framework/rules/`. It is a library; it starts no program.
 
@@ -11,7 +11,7 @@ files in `framework/rules/`. It is a library; it starts no program.
 - The rule files `framework/rules/<cli>.json`, built into the program with `include_str!` and read once,
   on first use, into a `LazyLock`. `fake.json`, the test CLI's rule, is built into debug builds
   only.
-- What each CLI's own files look like where Facade reads or writes them: its MCP settings,
+- What each CLI's own files look like where Facade Code Framework reads or writes them: its MCP settings,
   hook settings, plugin and extension files.
 - The variables in which each CLI names its session or marks its runs.
 - The format of a run's session file.
@@ -25,12 +25,12 @@ files in `framework/rules/`. It is a library; it starts no program.
   start selects a configured entry. An entry with the `custom` type supplies its own program.
 - No CLI name appears outside rules: what differs by CLI is in a rule file or behind a rules
   function that takes `cli`.
-- Facade only recognizes and changes entries it wrote itself, in any CLI's files.
+- Facade Code Framework only recognizes and changes entries it wrote itself, in any CLI's files.
 - No `cfg` by system. What differs by system is data, chosen by `facade_base::system::SYSTEM` at
   run time: each CLI's hook form, `${folder_toml}`, console typing and the wrappers. On Unix,
   every command line, hook command, file and path is as it was before Windows.
-- Copilot gets Facade's server through `--additional-mcp-config`, its highest-priority MCP source,
-  so Facade reads none of Copilot's other MCP sources.
+- Copilot gets Facade Code Framework's server through `--additional-mcp-config`, its highest-priority MCP source,
+  so Facade Code Framework reads none of Copilot's other MCP sources.
 - Every read of a variable of a CLI's environment goes through `facade_base::system::env_var`
   (names without case on Windows), and the home folder the CLIs use is
   `facade_base::system::home_folder_in` (Unix `HOME`, Windows `USERPROFILE`).
@@ -39,7 +39,7 @@ files in `framework/rules/`. It is a library; it starts no program.
 
 - Connects to the daemon or holds runtime state.
 - Starts a CLI, or decides when to type: it says what to type and what the screen shows.
-- Chooses Facade's own paths: the run's folder and its session file are given by the caller.
+- Chooses Facade Code Framework's own paths: the run's folder and its session file are given by the caller.
 
 ## Interface
 
@@ -54,7 +54,7 @@ files in `framework/rules/`. It is a library; it starts no program.
   entries when a CLI needs a separate configuration root.
   `resume_managed_launch_command(rule, id, words, session, server, environment, policy)` also
   names the session to resume and returns `None` for a CLI without session resume. `Tools` records
-  whether the CLI has Facade's tools or why they could not be given. `uses_run_credential` lets
+  whether the CLI has Facade Code Framework's tools or why they could not be given. `uses_run_credential` lets
   the daemon save the credential's digest when the resulting configuration carries it.
   Both use `wire_managed` to configure the CLI's connection to Facade API v1's MCP entry point.
   `LaunchPolicy` carries the authenticated launch origin and the folder when YOLO is on.
@@ -110,20 +110,20 @@ command line together. The children never use each other. They may use the layer
   channel its installer chose. A file that is not exactly that is base's to start.
 - `args.rs`: how a CLI reads its arguments, from the rule's `arguments` section. A `Reader` walks
   the words into pieces (option, override, positional, end of options). `problems` refuses
-  options and settings keys (Codex's config keys) Facade sets itself in an entry's `args`; `found`, `overrides`,
+  options and settings keys (Codex's config keys) Facade Code Framework sets itself in an entry's `args`; `found`, `overrides`,
   `holds` and `end_of_options` serve command_line and wiring. `problems_at` gives the setting reader
   the source index of each problem. `choice_value` finds the value of a model or effort option,
   including the short forms its CLI accepts.
   Cursor's `-H` and `-e` take the rest of their short-option run as the header or endpoint value.
 - `formats.rs`: the CLIs' own text formats in one place: JSON with comments, shell words, TOML
-  strings and inline values, and merging Facade's settings into the person's. Facade writes POSIX
+  strings and inline values, and merging Facade Code Framework's settings into the person's. Facade Code Framework writes POSIX
   hook commands on Unix and for Claude Code on Windows, whose Git Bash takes `'C:\…'` words as
-  they are. On Windows, Antigravity passes its hooks from `hooks.json` verbatim to cmd.exe. Facade
+  they are. On Windows, Antigravity passes its hooks from `hooks.json` verbatim to cmd.exe. Facade Code Framework
   writes them as `[set "NAME=value" && ]…@"<program>" <word> …`.
   On Windows, Muse Code's hooks, Codex's hooks, the test CLI's session hook and Antigravity's title
   command use encoded UTF-16LE PowerShell scripts. The outer command has no quotes and passes
   through the CLI's shell intact. The scripts quote each argument as a literal and preserve
-  Facade's exit code.
+  Facade Code Framework's exit code.
 - `compose.rs` builds the command line for a start or resume in this order.
   1. wiring gives the tools (`wire_managed`), and YOLO's run settings are merged into the wiring's;
   2. wiring has the CLI report its session, through its settings (`report_session`) or a hook,
@@ -141,22 +141,22 @@ Rust regular expressions.
 |---|---|
 | `cli`, `display_name`, `program` | the name (same as the file), the name people know, the program on `PATH` |
 | `launch.args` | literal arguments right after the program |
-| `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
+| `arguments` | how the CLI reads its arguments, and the options and keys Facade Code Framework sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
 | `paste` | the settle time, submission key policy, and visible controls for a pasted message |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
-| `status` | how Facade reads the CLI's state from its screen or a report's words |
+| `status` | how Facade Code Framework reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
-| `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
+| `ready_tools` | what to type so the CLI starts Facade Code Framework's tools before its first turn |
 | `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
 | `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, optional `off_args` for explicit consent mode, and the trust question to answer |
 | `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, and `records_above_bmp` |
 
 **Adding a CLI.** Write `framework/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
-is its place in `facade`'s lists. With a rule file alone, Facade starts the CLI and reads its
+is its place in `facade`'s lists. With a rule file alone, Facade Code Framework starts the CLI and reads its
 screen, but gives it no tools and cannot resume it: its `session.capture` must be `none`. To give
-it Facade's tools, have it report its session or answer hooks, add its case in wiring. The entry
+it Facade Code Framework's tools, have it report its session or answer hooks, add its case in wiring. The entry
 points are `wire_managed` and `reports_sessions` in `wiring/mod.rs`, its builder and `unwire` in
 `run_tools.rs`, `install_hook` in `session_report.rs`, and the functions of `hook`.
 Its session variables go in `SESSION_VARIABLES` in `sessions.rs`. The tests
@@ -191,7 +191,7 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
   - A built-in keeps its `type`. Added entries have names distinct from the built-in IDs and display
     names, ignoring case. An existing entry with a newly added provider's name keeps its explicitly
     selected earlier type, including `custom`.
-- **Never does:** touch Facade's tools or session reports (wiring's job), read the screen, or
+- **Never does:** touch Facade Code Framework's tools or session reports (wiring's job), read the screen, or
   write any file.
 - **Interface:**
   - To the rules layer: `YoloRule::check`, `args(folder)` and `settings(folder)`;
@@ -213,7 +213,7 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
 
     `Kind::rule()` gives the rule a built-in type runs by. `PROGRAM_TYPE` is `"custom"`.
   - To daemon (`agent/readiness.rs`): `TrustQuestion`, through `rule.yolo.question`. It is the
-    screen question that a CLI with no other way to trust the folder shows, and Facade answers it.
+    screen question that a CLI with no other way to trust the folder shows, and Facade Code Framework answers it.
 
 ### input
 
@@ -378,7 +378,7 @@ a folder (`sessions.rs` and `sessions/history/`).
   - On Windows a session variable's name is compared without case.
   - The run's folder is never created, so a late hook from a removed run writes nothing.
   - "Which CLI variables must not carry into a new agent" has no other owner in framework: these variables together with `Rule::remove_wiring_environment`.
-- **Never does:** create or remove run folders; handle Facade's own `FACADE_*` variables or terminal variables (the daemon owns those); decide when a session is resumed.
+- **Never does:** create or remove run folders; handle Facade Code Framework's own `FACADE_*` variables or terminal variables (the daemon owns those); decide when a session is resumed.
 - **Interface:**
   - `facade hook` (`hooks.rs`):
     - `session_from_hook(input) -> Option<Option<Reported>>` reads a `SessionStart` hook's `session_id` and `transcript_path`. `session_from_title(input)` reads the `conversation_id` in Antigravity's title input. For both, `Some(None)` means no session is selected and `None` means leave the file alone.
@@ -414,8 +414,8 @@ a folder (`sessions.rs` and `sessions/history/`).
 
 ### wiring
 
-`src/wiring/` builds the configuration a run's CLI uses to get Facade's tools and report its
-session. It also defines the formats of Facade's hooks.
+`src/wiring/` builds the configuration a run's CLI uses to get Facade Code Framework's tools and report its
+session. It also defines the formats of Facade Code Framework's hooks.
 
 - **Owns:** the knowledge of each CLI's entry points, chosen by rule name: how it takes an MCP server (a file or `-c`
   overrides for the run alone, inline settings, an extension, or for Antigravity a plugin in
@@ -432,14 +432,14 @@ session. It also defines the formats of Facade's hooks.
     its run extension, and Antigravity through its PreInvocation hook. Other managed clients
     receive instructions from the MCP server. The Pi run extension registers its tools with
     deferred exposure. The person's Pi configuration governs exposure for their own entries.
-  - Facade reads and changes only entries it wrote. A server is Facade's when its program is `facade-mcp`, whatever its
-    arguments; a hook when its command is `facade hook …` for that CLI; a whole file when it starts with Facade's
+  - Facade Code Framework reads and changes only entries it wrote. A server is Facade Code Framework's when its program is `facade-mcp`, whatever its
+    arguments; a hook when its command is `facade hook …` for that CLI; a whole file when it starts with Facade Code Framework's
     marker line; a plugin when its manifest's description names Facade Code Framework and a version (`plugin_version`).
   - A server named `facade` that runs a different program takes precedence, and the reason goes
     back as `Tools::NotGiven`. Antigravity calls the project plugin's server `facade_facade`, so it
     can load both servers. Muse Code uses a hand-configured `facade-mcp` server and can pass the
     CLI's session evidence. Pi prefers its `mcp.json` entries over extensions of the same name.
-    When a hand-configured Facade entry uses that name, the run's extension registers its
+    When a hand-configured Facade Code Framework entry uses that name, the run's extension registers its
     managed server under a different name and gives the model the managed tool names. The
     hand-configured Pi relay joins as a Guest.
   - OpenCode's `OPENCODE_CLI_CONFIG_CONTENT` for a managed run sets `tabs.enabled` to `false` so the
@@ -447,17 +447,17 @@ session. It also defines the formats of Facade's hooks.
     `cli.json`, or the `tui.json` used in its absence has a `tabs.mode` key. The overlay keeps the
     person's other inline settings and takes plugins in order from the inline settings, `cli.json`,
     or `tui.json`, then appends the run's session plugin. The CLI's child processes inherit this
-    overlay with the environment. Facade removes the run's session plugin when it uses that
+    overlay with the environment. Facade Code Framework removes the run's session plugin when it uses that
     environment to start another agent.
   - Antigravity keeps one plugin under the project for concurrent runs. A process that loads the
     plugin and inherits another run's credential can attach to that run. The older plugin's skill
     path remains in `PLUGIN_MEMBERS` so the daemon recognizes the whole plugin when replacing it.
-  - Settings of the person's that Facade cannot read stay as they are, for the CLI to report; Facade then adds nothing
+  - Settings of the person's that Facade Code Framework cannot read stay as they are, for the CLI to report; Facade Code Framework then adds nothing
     to them, and the run reports no session that way.
   - The daemon writes managed settings into the run's folder. Antigravity's shared plugin is
     written and cleaned up by the daemon under the project's plugin lock.
   - `remove_wiring_environment` takes the run's tools and session-reporting entries out of the
-    environment Facade uses to start another agent. It also removes Facade's old OpenCode skill
+    environment Facade Code Framework uses to start another agent. It also removes Facade Code Framework's old OpenCode skill
     path from inherited inline configuration.
   - Codex's session-start hook is trusted under its synthetic session-flags layer: `/<session-flags>/config.toml`
     on Unix and `C:\<session-flags>\config.toml` on Windows, with a literal `C:` regardless of the run's drive.
@@ -465,11 +465,11 @@ session. It also defines the formats of Facade's hooks.
   - Each hook command is written in a form its CLI hands intact to the program that runs it
     (`formats::facade_hook`). The supported forms include encoded PowerShell for Codex and
     Muse Code, POSIX and cmd.exe, with either `facade` or `facade.exe` as the program.
-  - Muse Code runs hooks without the run's environment. Facade includes the run's
+  - Muse Code runs hooks without the run's environment. Facade Code Framework includes the run's
     `FACADE_AGENT` and `FACADE_HOME` in its `instructions`, `session-start` and `approve` hooks.
-  - On Windows, the person's own Antigravity title command, when enabled, goes into Facade's
+  - On Windows, the person's own Antigravity title command, when enabled, goes into Facade Code Framework's
     encoded title command as one literal argument. A command with a double quote, CR or LF
-    stays as it is. As with settings Facade cannot read, Facade adds nothing to the run's settings
+    stays as it is. As with settings Facade Code Framework cannot read, Facade Code Framework adds nothing to the run's settings
     and the run reports no session that way. `facade hook title` runs a merged title command with
     Antigravity's title input through `/bin/sh -c` on Unix and `cmd.exe /d /s /c` on Windows.
   - On Windows Claude Code keys a project in `.claude.json` by its folder with forward slashes,
@@ -498,22 +498,22 @@ session. It also defines the formats of Facade's hooks.
     `BACKGROUND_JOB_VARIABLE`; and `integration::session_status_file`, `INSTRUCTIONS_FILE` and
     `session_ends_with_process`.
 
-Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
+Cursor loads its local plugin at startup. The plugin supplies Facade Code Framework's relay, instructions and session hook.
 Qoder takes a session MCP file and a settings overlay with `SessionStart` and `UserPromptSubmit` hooks.
 Qoder can fire `SessionStart` before a person trusts a new folder. The first prompt after trust reports the
 session in that case. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
 other existing config entries are linked into that root. Devin loads a project's `.devin/` files,
 `.mcp.json` and `.cursor/mcp.json` ahead of that root, so a `facade` server in any of them leaves the
-run without Facade's tools, and the daemon's log names the file. Devin 3000 keeps its sessions in
-`devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original
+run without Facade Code Framework's tools, and the daemon's log names the file. Devin 3000 keeps its sessions in
+`devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade Code Framework agent inherits the original
 configuration root. Oh My Pi takes a local plugin, a settings overlay for the managed tools' approvals,
 and an extension that reports session and turn changes. Oh My Pi announces the servers and tools it
-connects. The overlay and the extension leave Facade's own out of those notices, so its conversation
-opens as it does without Facade, and a failure to connect still shows. Oh My Pi selects its input layout
+connects. The overlay and the extension leave Facade Code Framework's own out of those notices, so its conversation
+opens as it does without Facade Code Framework, and a failure to connect still shows. Oh My Pi selects its input layout
 from its settings. Kiro starts as `kiro-cli chat --v3` and reads a projected workspace profile. Its
 private launcher holds the relay credential. A
-managed profile can be recreated under its saved name when another Facade agent resumes that session.
+managed profile can be recreated under its saved name when another Facade Code Framework agent resumes that session.
 A native profile selected at launch, in the workspace or user settings, or in a saved session
 keeps its own configuration and tools.
 

@@ -1,4 +1,4 @@
-# Facade Code
+# Repository instructions
 
 This repository contains Facade Code Extension, Facade Code Framework and the IDE source. Documentation lives under
 `docs/`.
@@ -12,10 +12,10 @@ This repository contains Facade Code Extension, Facade Code Framework and the ID
 - Translated repository documentation: `docs/locales/`. Runtime translations remain in `ide/locales/`.
 - Extension specification: `docs/extension/`.
 - Facade Code Framework lives in `framework/`. Read [framework/README.md](framework/README.md) and
-  [Framework engineering](docs/framework/ENGINEERING.md) before changing it. The
+  [Facade Code Framework engineering](docs/framework/ENGINEERING.md) before changing it. The
   [island index](docs/framework/ARCHITECTURE.md#islands) identifies owners, interfaces and checks.
-  Use [Framework features](docs/framework/FEATURES.md) for Shell commands
-  and [Framework engineering](docs/framework/ENGINEERING.md#tests) for test isolation and cleanup.
+  Use [Facade Code Framework features](docs/framework/FEATURES.md) for Shell commands
+  and [Facade Code Framework engineering](docs/framework/ENGINEERING.md#tests) for test isolation and cleanup.
   For published API and stored data changes, follow the
   [compatibility review](docs/framework/ENGINEERING.md#compatibility-contracts).
 

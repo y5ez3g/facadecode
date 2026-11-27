@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
+<img src="../../../extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**VS Code için çoklu aracı orkestratörü.**
+**Kodlama aracılarını VS Code’da birlikte çalıştırın.**
 
 Yerel aracı CLI'larını çalıştırın, kod düzenleyin ve değişiklikleri aynı IDE penceresinde inceleyin. Kendi hesaplarınızı ve aboneliklerinizi kullanın, aracıların pencereler ve makineler arasında iş birliği yapmasını sağlayın.
 
@@ -35,9 +35,9 @@ Yerel aracı CLI'larını çalıştırın, kod düzenleyin ve değişiklikleri a
 code --install-extension facade.facadecode
 ```
 
-Veya **Facade Code**'u [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ya da [Open VSX](https://open-vsx.org/extension/facade/facadecode) üzerinden yükleyin. macOS (Apple silicon), Linux (x64) ve Windows (x64) üzerinde çalışır.
+Veya **Facade Code Extension**'u [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ya da [Open VSX](https://open-vsx.org/extension/facade/facadecode) üzerinden yükleyin. macOS (Apple silicon), Linux (x64) ve Windows (x64) üzerinde çalışır.
 
-Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükleyin ve oturum açın: Claude Code, Codex, Antigravity, Muse Code, OpenCode veya Pi. Facade Code her CLI'yı kendi oturum açma bilgilerini ve aboneliklerini kullanarak başlatır.
+Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükleyin ve oturum açın: Claude Code, Codex, Antigravity, Muse Code, OpenCode veya Pi. Facade Code Extension her CLI'yı kendi oturum açma bilgilerini ve aboneliklerini kullanarak başlatır.
 
 > **Aracılar varsayılan olarak onay istemi olmadan çalışır.** `yolo` varsayılan olarak etkinken aracılar komutları çalıştırabilir ve dosyaları önceden sormadan değiştirebilir. Her CLI'nın standart onay istemlerini geri getirmek için bunu kapatın. [Uzantı README](../../../extension/README.md#install) dosyasına bakın.
 
@@ -45,7 +45,7 @@ Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükley
 
 **Aracılarınız ve IDE'niz aynı pencerede.**
 
-Facade Code, yerel aracı CLI'larını (Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi) dosyalarınızın yanında düzenleyici terminal sekmelerinde çalıştırır; her CLI'nın kendi komutlarını, araçlarını, hesaplarını ve aboneliklerini kullanır. Paneldeki bir kart her aracının durumunu izler.
+Facade Code Extension, yerel aracı CLI'larını (Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi) dosyalarınızın yanında düzenleyici terminal sekmelerinde çalıştırır; her CLI'nın kendi komutlarını, araçlarını, hesaplarını ve aboneliklerini kullanır. Paneldeki bir kart her aracının durumunu izler.
 
 - **Kodunuzun yanında çalışın.** Her aracı, düzenleyici alanında kendi terminal sekmesinde çalışır. Bir sekmeyi kapatmak, aracı çalışmaya devam ederken onu gizler; kartına tıklamak sekmeyi yeniden açar.
 - **Aracıların durumunu takip edin.** Kartlar her aracıya son olarak ne gönderildiğini ve çalışıyor mu, izin mi bekliyor yoksa bir hatayla mı karşılaştı gösterir; ayrıntılar ise başlığını, klasörünü ve onu kimin başlattığını gösterir. Aracılar pencere yeniden yüklemeleri ve uzantı yeniden başlatmaları boyunca çalışmaya devam eder.
@@ -57,19 +57,19 @@ Facade Code, yerel aracı CLI'larını (Claude Code, Codex, Antigravity, Muse Co
 
 MCP ve bir terminal protokolü aracılığıyla aracılar diğer aracıları başlatabilir, durdurabilir, bulabilir, onlara mesaj gönderebilir, terminal ekranlarını okuyabilir, metin yazabilir ve tuşlara basabilir.
 
-- **Aracıları başlatın ve durdurun.** Bir aracı, bu bilgisayardaki Facade pencerelerinizin herhangi bir klasöründe veya yeni çalışma ağacında altı CLI'dan herhangi biriyle başka aracılar başlatabilir ve onlara ilk görevlerini verebilir. Aynı istek kimliğiyle (request ID) yinelenen bir istek asla ikinci bir aracı başlatmaz.
-- **Mesaj gönderin.** Aracılar birbiriyle mesajlaşır ve size mesaj gönderebilir. Facade tüm mesajı tek seferde yapıştırır ve gönderir. Gönderilmemiş bir metin veya bir komut istemi sorusu aradaysa, teslimat girdi alanı temizlenene kadar bekler.
+- **Aracıları başlatın ve durdurun.** Bir aracı, bu bilgisayardaki Facade Code Extension pencerelerinizin herhangi bir klasöründe veya yeni çalışma ağacında altı CLI'dan herhangi biriyle başka aracılar başlatabilir ve onlara ilk görevlerini verebilir. Aynı istek kimliğiyle (request ID) yinelenen bir istek asla ikinci bir aracı başlatmaz.
+- **Mesaj gönderin.** Aracılar birbiriyle mesajlaşır ve size mesaj gönderebilir. Facade Code Extension tüm mesajı tek seferde yapıştırır ve gönderir. Gönderilmemiş bir metin veya bir komut istemi sorusu aradaysa, teslimat girdi alanı temizlenene kadar bekler.
 - **Terminal kontrolü.** Bir aracı, istemleri yanıtlamak veya takılan bir çalışma arkadaşına yardımcı olmak için başka bir aracının ekranını okuyabilir, komutlar yazabilir ve tuşlara basabilir. Bir alt aracı izin, yanıt veya oturum açma için 20 saniye beklediğinde, onu başlatan aracıya bildirim gönderilir.
 
 ## Agent Mesh
 
 **Aracıları pencereler, makineler ve konumlar arasında bağlayın.**
 
-Facade Code, bu bilgisayardaki Facade pencerelerinizdeki aracıları tek bir ağda birleştirir. Bu iş birliğini başka bir makineye genişletmek için bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresi açın.
+Facade Code Extension, bu bilgisayardaki Facade Code Extension pencerelerinizdeki aracıları tek bir ağda birleştirir. Bu iş birliğini başka bir makineye genişletmek için bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresi açın.
 
-- **Pencereler arasında.** `yolo` açıkken bir aracı, bu bilgisayardaki Facade pencerelerinizdeki yerel ve Remote - SSH dahil tüm aracılara ulaşır. Kapalıyken yalnızca kendi grubuna ulaşır: başlattığınız aracı ve ondan başlatılanlar.
+- **Pencereler arasında.** `yolo` açıkken bir aracı, bu bilgisayardaki Facade Code Extension pencerelerinizdeki yerel ve Remote - SSH dahil tüm aracılara ulaşır. Kapalıyken yalnızca kendi grubuna ulaşır: başlattığınız aracı ve ondan başlatılanlar.
 - **SSH üzerinden genişletin.** Bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresinde aracılar doğrudan uzak makinede oradaki araçlar, dosyalar ve hesaplarla çalışır. Yerel aracılar, Remote - SSH pencerelerindeki aracıları doğrudan başlatabilir ve onlara mesaj gönderebilir.
-- **Telefonunuzdan koordine edin.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) kullanarak Claude mobil uygulamasını bilgisayarınızdaki bir Claude Code oturumuna bağlayın. Bu oturum diğer aracıları Facade üzerinden koordine edebilir ve ilerlemeyi telefonunuza bildirebilir.
+- **Telefonunuzdan koordine edin.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) kullanarak Claude mobil uygulamasını bilgisayarınızdaki bir Claude Code oturumuna bağlayın. Bu oturum diğer aracıları Facade Code Extension üzerinden koordine edebilir ve ilerlemeyi telefonunuza bildirebilir.
 
 <sub>Remote Control desteklenen bir Claude Code sürümü, uygun bir abonelik ve tam kapsamlı oturum açma gerektirir. [Kurulum gereksinimlerine](https://code.claude.com/docs/en/remote-control#requirements) bakın.</sub>
 
@@ -97,6 +97,6 @@ Katkıda bulunma yönergeleri ve dal disiplini için [`CONTRIBUTING.md`](../../.
 
 ## Lisans
 
-Yukarı akış VS Code ile eşleşen MIT. Microsoft'un telif hakkı bildirimi ve Facade Code katkıda bulunanların bildirimleri için [`LICENSE.txt`](../../../LICENSE.txt) dosyasına bakın.
+Yukarı akış VS Code ile eşleşen MIT. Microsoft'un telif hakkı bildirimi ve Facade Code Extension katkıda bulunanların bildirimleri için [`LICENSE.txt`](../../../LICENSE.txt) dosyasına bakın.
 
-<sub>Facade Code bağımsız bir üründür ve gösterilen üçüncü taraf araçların sağlayıcılarına bağlı değildir, onlar tarafından onaylanmamıştır veya desteklenmemektedir. Tüm üçüncü taraf ticari markaları ve logoları ilgili sahiplerine aittir.</sub>
+<sub>Facade Code Extension bağımsız bir üründür ve gösterilen üçüncü taraf araçların sağlayıcılarına bağlı değildir, onlar tarafından onaylanmamıştır veya desteklenmemektedir. Tüm üçüncü taraf ticari markaları ve logoları ilgili sahiplerine aittir.</sub>

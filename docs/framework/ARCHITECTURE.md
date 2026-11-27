@@ -1,6 +1,6 @@
 # Architecture
 
-Facade Code Framework implements the Orchestrator, the Shell entry point and Facade API v1's MCP entry point in the
+Facade Code Framework manages agents in one Facade home and provides Shell and Facade API v1's MCP entry point in the
 [product description](../PRODUCT.md). [Islands](islands/) describes the parts of the Rust workspace, and the
 [glossary](GLOSSARY.md) defines their terms.
 
@@ -21,8 +21,8 @@ flowchart LR
     S <-->|original peer frames| Q["peer daemon"]
 ```
 
-Framework runs at most one keeper and one daemon per Facade home. Each service holds a lock file in the home's `framework/` folder.
-Shell, the VS Code extension host and the MCP relay connect to the Orchestrator for their home. Its daemon forwards
+Facade Code Framework runs at most one keeper and one daemon per Facade home. Each service holds a lock file in the home's `framework/` folder.
+Shell, the VS Code extension host and the MCP relay connect to Facade Code Framework for their home. Its daemon forwards
 requests over SSH when the target agent runs on another machine.
 
 | Process | Program | Lives | Threads |
@@ -32,7 +32,7 @@ requests over SSH when the target agent runs on another machine.
 | Keeper | `facade keeper` | While it holds a CLI or a daemon runs | One, around one `poll`, or on Windows one I/O completion port: no tokio, no locks |
 | Daemon | `facade daemon` | Until 30 seconds pass with no running agent, local client or unfinished work | A tokio runtime (below) |
 | Relay | `facade-mcp`, run by a CLI or an MCP client | As long as its MCP client runs | One, around one `poll`; on Windows the loop around an I/O completion port, and one thread that reads standard input |
-| Editor | VS Code workspace extension host | A workspace's connection and its terminal views | The host's Node event loop and asynchronous daemon connection. [Editor entry and Attach](../extension/engineering/ARCHITECTURE.md#61-one-local-orchestrator-connection-per-extension-host) |
+| Editor | VS Code workspace extension host | A workspace's connection and its terminal views | The host's Node event loop and asynchronous daemon connection. [Editor entry and Attach](../extension/engineering/ARCHITECTURE.md#61-one-local-facade-code-framework-connection-per-extension-host) |
 | Remote Shell | `facade machine serve`, run by SSH | The peer stream to the remote daemon | Blocking relay with a worker for the other direction. [Remote stdio bridge](../../framework/crates/facade/src/machine.rs#L239) |
 | CLI | `claude`, `codex`, … | Until it ends or is stopped | The CLI's own |
 
@@ -96,13 +96,13 @@ An idle saved session closes after 30 seconds. The machine table keeps the saved
 | A client and the daemon | Daemon API v1 uses one JSON-RPC 2.0 object per line on `/tmp/facade-framework-<uid>/daemon-<key>.sock` or Windows `\\.\pipe\facade-framework-daemon-<key>`. Clients negotiate `api_versions` in `hello`, then use `call`, `watch`, `unwatch` and `cancel`. The daemon sends `changed` and `closing`. | [Daemon API](../../framework/protocol/DAEMON.md) |
 | The daemon and the keeper | Keeper API v1 negotiates its own version on the keeper socket. The daemon calls `agent.start`, `agent.stop`, `agent.sync` and `daemon.ping`, and the keeper reports exits with `changed`. The associated terminal is a PTY master or, on Windows, handles duplicated into the receiving process and carried in the same line. | [KEEPER](../../framework/protocol/KEEPER.md) |
 | A relay and the daemon | The external connection starts with `hello` using `relay:1`, the relay's own handshake, then exchanges MCP lines. The daemon opens a separate authenticated API v1 session for its internal actor. `closing` lets the relay reconnect to the new daemon with its outstanding calls. | [The relay](../../framework/protocol/DAEMON.md#the-relay) |
-| A CLI and its relay | MCP over standard input and output, negotiated by its date-format `protocolVersion`. Facade API v1's MCP entry point supplies the instructions and catalog of eight tools. | [MCP](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator) |
+| A CLI and its relay | MCP over standard input and output, negotiated by its date-format `protocolVersion`. Facade API v1's MCP entry point supplies the instructions and catalog of eight tools. | [MCP](../extension/engineering/MCP.md#7-mcp-through-facade-code-framework) |
 | A CLI and its hooks | The CLI runs `facade hook <event> …` with its hook input. The hook saves the session the input reports in the run's session file, which the daemon follows, and prints, in the CLI's own format, the instructions the run's start wrote | [facade](islands/facade.md), [rules](islands/rules.md) |
 | Two daemons | Daemon API v1 with an authenticated `machine` hello, followed by calls, watches and changes in both directions. A machine session runs over SSH to the installed `facade machine serve` and can forward traffic along a route. The API version determines compatibility. | [Machine sessions](../../framework/protocol/DAEMON.md#machine-sessions) |
 | A CLI and the daemon | What the CLI draws in its terminal, and its own reports of what it does, the Program Status Protocol (OSC 7501) | [States](../../framework/protocol/DAEMON.md#states) |
 
 The protocols' types, framing and client live in [base](islands/base.md); `framework/protocol/` is generated from them. The
-relay depends on no other Facade crate, so it reckons the daemon's socket path itself, by the same rule as base;
+relay depends on no other Facade Code Framework crate, so it reckons the daemon's socket path itself, by the same rule as base;
 scenario tests that go through the relay keep the two the same.
 
 From `framework/` in an isolated checkout, build the programs and run the [relay scenario](../../framework/tests/tests/mcp.rs)
@@ -132,11 +132,11 @@ framework
 ├── base       shared conventions: identity, paths, time, log
 │   ├── model       shared agent, machine, message, terminal and error types
 │   ├── protocol    API v1 framing, separate daemon and Keeper registries, the daemon client
-│   ├── platform    what Facade asks of the operating system
+│   ├── platform    what Facade Code Framework asks of the operating system
 │   ├── settings    facade.json
 │   └── texts       what a model reads: instructions and tool definitions
 ├── screen     a headless terminal for one agent
-├── rules      what Facade knows of each CLI: rule files
+├── rules      what Facade Code Framework knows of each CLI: rule files
 │   ├── command_line  program, arguments, model, effort, YOLO
 │   ├── compose       the launch command of a start or resume, in order
 │   ├── input         the input box and pastes
@@ -166,7 +166,7 @@ framework
 │   ├── guests      external MCP connections and Guest records
 │   ├── lifecycle   the daemon's own life: idle exit, a newer build's takeover, its log
 │   ├── server      client connections
-│   └── mcp         Facade's MCP tools behind each relay
+│   └── mcp         Facade Code Framework's MCP tools behind each relay
 └── facade     the facade program
     ├── cli         command syntax and argument validation
     ├── daemon_client  bounded Shell startup, connect and upgrade waits
@@ -180,7 +180,7 @@ framework
 
 ### Crate index
 
-The dependency column lists direct Facade crate dependencies. Run the acceptance selectors from `framework/` with
+The dependency column lists direct Facade Code Framework crate dependencies. Run the acceptance selectors from `framework/` with
 `cargo test --locked` in an isolated checkout. See [test isolation](ENGINEERING.md#tests).
 
 | Island | Owns | Entry interface | Direct dependencies | Existing acceptance selector |

@@ -1,8 +1,8 @@
 # Extension islands
 
-This guide assigns engineering ownership within the current architecture. The extension owns VS Code interaction and workspace presentation. Framework owns agent processes and records.
+This guide assigns engineering ownership within the current architecture. The extension owns VS Code interaction and workspace presentation. Facade Code Framework owns agent processes and records.
 Each island owns its state and the operations that change it. The organization follows the
-[Framework island model](../../framework/ARCHITECTURE.md#islands) and its [engineering roles](../../framework/ENGINEERING.md#roles).
+[Facade Code Framework island model](../../framework/ARCHITECTURE.md#islands) and its [engineering roles](../../framework/ENGINEERING.md#roles).
 [Architecture](ARCHITECTURE.md) gives the current module layout and host contracts.
 
 ## Ownership
@@ -17,7 +17,7 @@ medium island each. Shared value types, presentation helpers and generated proto
 
 | Medium island | Small islands | Owns |
 | --- | --- | --- |
-| Framework connection | Connection and reconnect, Typed queries and subscriptions | The selected endpoint and live connection, capability negotiation, request outcomes and event delivery. Reports distinguish an unavailable source from a confirmed removal. |
+| Facade Code Framework connection | Connection and reconnect, Typed queries and subscriptions | The selected endpoint and live connection, capability negotiation, request outcomes and event delivery. Reports distinguish an unavailable source from a confirmed removal. |
 | Workspace agents | Roster and Pins, Agent operations, Pin recovery | Remembered agents, saved Pins and their recovery order, plus the observed records that supply running cards. One recovery round for the windows sharing a workspace. |
 | Terminal view | Editor tabs, Terminal data and input | A tab's view lifetime and the associated Attach subscription, frame, input and capacity. Closing a tab releases its view. |
 | Launch and locations | Directory catalog and history, Git worktrees, New Agent flow | The selected machine and directory, its catalog and history, standalone Git effects, and the launch selection up to the exact request. |
@@ -29,9 +29,9 @@ medium island each. Shared value types, presentation helpers and generated proto
 **An island changes its own state and asks the next owner for every other effect.**
 
 The Panel sends a selected target or view action to the workspace or launch owner. Launch resolves a destination
-through Framework queries and gives the workspace owner a confirmed launch request. Workspace operations use the
-typed Framework and terminal interfaces. An Attach or Resume result carries the full identity. A short token, UI
-index or name does not replace it. The terminal view obtains live IO through the Framework connection. Workspace
+through Facade Code Framework queries and gives the workspace owner a confirmed launch request. Workspace operations use the
+typed Facade Code Framework and terminal interfaces. An Attach or Resume result carries the full identity. A short token, UI
+index or name does not replace it. The terminal view obtains live IO through the Facade Code Framework connection. Workspace
 identity and terminal retirement may call the Local Window Component through its native command contract.
 
 Roster and Pins is the sole writer of the workspace roster. Its Pin-order input is a sequence of Pin IDs from
@@ -41,7 +41,7 @@ A workspace change synchronizes the roster and Pin intent. The root wires activa
 The adapter owns the read-only released supervisor queries and home-level cutover journal. Roster
 and Pins owns each workspace's migration sidecar and final roster write.
 A terminal view close leaves workspace membership and
-agent lifetime to their owners. Framework stop and resume results come from the exact target operation. An ordinary
+agent lifetime to their owners. Facade Code Framework stop and resume results come from the exact target operation. An ordinary
 compatible upgrade reconnects to the existing process. A planned cutover confirms the matching legacy exit before
 asking the Pin owner to recover its saved session. The worktree action hands the observed result to the location
 catalog after Git has created it.
@@ -72,14 +72,14 @@ entrypoint wiring as part of each delivery.
 | General TL | Work breakdown, parent-level interfaces and wiring, coordination, and the integrated result. |
 | Bar Raiser TL | Reviews new boundaries and the integrated diff for ownership, types, dependency direction, and changes to frozen interfaces. Reports must-fix violations before handoff. |
 | Review TL | Independently reviews the integrated behavior, correctness and maintainability, and returns actionable findings to the responsible owner. |
-| QA Lead | Owns verification scenarios and evidence. Uses isolated editor profiles, Facade state and fake CLIs, and distinguishes checks that pass from checks with missing inputs. |
+| QA Lead | Owns verification scenarios and evidence. Uses isolated editor profiles, Facade Code Extension state and fake CLIs, and distinguishes checks that pass from checks with missing inputs. |
 | Island owner | Implements its assigned behavior within owned paths and checks its public contract. Coordinates shared wiring or an interface change with the General TL and Bar Raiser. |
 
 ### Worktrees and handoff
 
 **Start only the affected owners and horizontal roles, with one integration base and independent worktrees.**
 
-The General TL records the affected paths, interface decisions and acceptance cases. Start workers through Facade
+The General TL records the affected paths, interface decisions and acceptance cases. Start workers through Facade Code Extension
 in their own numbered worktrees from the integration base. Keep writes and tests within the assigned scope.
 The Bar Raiser checks contracts ahead of integration. Integrate through the parent after review of each change.
 Use the repository's authorization rules for staging, commits, merges, pushes and releases.

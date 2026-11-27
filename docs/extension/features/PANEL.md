@@ -1,6 +1,6 @@
 # Panel
 
-Group 4 covers the Orchestrator-backed Panel. Groups 1–3 retain the legacy implementation transition rules and existing
+Group 4 covers Facade Code Framework-backed Panel. Groups 1–3 retain the legacy implementation transition rules and existing
 presentation and accessibility details where they apply.
 
 Layer 3. The panel displays this window's agents. [Rules](../RULES.md) owns meanings; [UX](../UX.md) owns common
@@ -16,20 +16,20 @@ interaction and tokens. This document owns the card, list, filter and webview co
 
 ### 1.1 One view of this window
 
-**Facade Code has one webview view in its own activity-bar container and shows only this window's agents.**
+**Facade Code Extension has one webview view in its own activity-bar container and shows only this window's agents.**
 
-Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
+Container `facade`, view `facade.agents`, title `Facade Code Extension`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
 card loading. Filter Agents (`filter`, filled when active), Resume Agent and New Agent appear in
-that order. New Agent's icon is Facade's own copy of the `new-session` codicon,
+that order. New Agent's icon is Facade Code Extension's own copy of the `new-session` codicon,
 shipped with the extension and shown in every editor: VS Code has that codicon only from 1.111, later than the
 supported minimum. The view's native `Views and More Actions...` (`…`) menu holds Add Folder to Workspace... (the
 editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
-group. Open Settings follows CONFIGURATION-1.2: Facade Code's Settings section and its Edit in facade.json link, or
+group. Open Settings follows CONFIGURATION-1.2: Facade Code Extension's Settings section and its Edit in facade.json link, or
 facade.json directly for a remote window whose Settings open as JSON, including file creation and migration conflicts.
 Show Agents Log is available from the Command Palette.
-Facade commands use the titles and flows in UX-3.1. The badge counts this window's cards, including starting,
+Facade Code Extension commands use the titles and flows in UX-3.1. The badge counts this window's cards, including starting,
 retained-error and temporarily disconnected records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does
 not change the underlying card count.
 
@@ -44,19 +44,19 @@ workspace.`; omitted when no other card exists), Clear Filter (primary) and New 
 filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
 welcome buttons do. Open Folder from this button or New Agent invokes the editor's `vscode.openFolder` command,
 matching the built-in Git view's entry. The editor owns folder selection, window opening and the resulting view;
-Facade does not switch the sidebar back once the folder opens, and the person returns through Facade Code's
+Facade Code Extension does not switch the sidebar back once the folder opens, and the person returns through Facade Code Extension's
 activity-bar icon. Do not display worktree tutorials when Git is absent or make an empty
 filter look like all agents ended. Paragraphs wrap; buttons are native-themed and keyboard accessible. There is no
 composer field.
 
-A window whose Facade could not start shows the reason in the panel, in place of its progress and cards, and Facade's
+A window whose Facade Code Extension could not start shows the reason in the panel, in place of its progress and cards, and Facade Code Extension's
 commands repeat that reason. A window without its window component shows ARCHITECTURE-4.3's explanation there, with a
 button that shows the component in the Extensions view, themed as the empty states' buttons are (UX-2.1).
 
 Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, with placeholder
 `Open a folder to continue` and the item `Open Folder...`, detail
 `A workspace folder is required to run agents.` The placeholder identifies the next action and the detail explains
-the prerequisite. LIFECYCLE-1.1 also offers Change Working Location here when another Facade machine is listed.
+the prerequisite. LIFECYCLE-1.1 also offers Change Working Location here when another Facade Code Extension machine is listed.
 Cancel changes nothing. Opening a folder uses the editor's normal behavior as above; it does not
 automatically launch an agent. This prerequisite step does not ask the person to select a CLI.
 
@@ -118,7 +118,7 @@ changes and rename. Avatar/dot do not shrink. The panel header is unchanged.
 The buttons show while the pointer is on the card - as far as the page can know where it is under the editor's menu
 (2.2) - or its menu or details are open. Each is a 14 px icon, the size
 chosen for them, with 2 px round it, in the manner of the editor's list-row actions without matching their dimensions.
-The icons are the editor's own codicons `info` and `gear`, and for the Pin the outlined contour Facade bundles as
+The icons are the editor's own codicons `info` and `gear`, and for the Pin the outlined contour Facade Code Extension bundles as
 `media/pinned.svg`, the filled Pin being that icon's outer contour alone. They are centered on the first line, the Pin
 button's where the Pin is, at least 4 px from the name and ID, and clear of the overlay scrollbar, which may cover the
 last button's hover background. At rest the icons are in the Pin's quieter color, with the Pin's selected and
@@ -138,7 +138,7 @@ agent with no tab open keeping it hidden, and a Pin that cannot be saved opening
 follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
 The icon's internal space keeps its visible shape smaller than the name's letters.
 
-For an agent whose running machine ID differs from the window's Facade machine ID, show VS Code's `globe` codicon at
+For an agent whose running machine ID differs from the window's Facade Code Extension machine ID, show VS Code's `globe` codicon at
 14 px in the Pin position and place the details and menu buttons to its left. The icon has no action or Tab stop and
 stays visible while the buttons show. Its tooltip and the card's accessible label say `Running on {0}`, using the
 running machine's name with its short ID when names repeat. Remote agents have no Pin. A loss of connection keeps
@@ -146,14 +146,14 @@ the card and shows the connection status until the running machine can be reache
 
 ### 1.4 Second line and dot
 
-**The second line says one of three kinds of thing: the person's input, another agent's message, or Facade's own.**
+**The second line says one of three kinds of thing: the person's input, another agent's message, or Facade Code Extension's own.**
 
 1. `🧑‍💻`: the person's text after a nonempty Enter, slash commands included, as the CLI's input reader read the draft
    that Enter submitted (CLIS-2.1). A CLI without an input reader has no typed text to show.
-2. `📨`: a message another agent sent that Facade typed into its input - the task an agent-started run was started with
+2. `📨`: a message another agent sent that Facade Code Extension typed into its input - the task an agent-started run was started with
    among them, its creation prompt's first line, whichever path it went in by - its own text, without the line that
    introduces it. A message the agent took through read_messages changes nothing.
-3. Facade's own, with no mark: a Facade result, without the `🔔` it is typed to its agent with (COLLABORATION-2.2); or a
+3. Facade Code Extension's own, with no mark: a Facade Code Extension result, without the `🔔` it is typed to its agent with (COLLABORATION-2.2); or a
    notable state while it lasts: its start - `Starting {CLI}…` or `Creating worktree…`; what its CLI waits for - `Permission needed`, `Sign-in needed` or `Answer needed`, then
    ` · ` and the CLI's original words when present, such as `Permission needed · Run npm test?`, and `Attention
    needed` with its original words for a blocker of no recognized kind; why its dot is red (RULES-3.2) - an error's
@@ -161,8 +161,8 @@ the card and shows the connection status until the running machine can be reache
    SIGKILL` or `Process lost · reason unknown`; a start that failed as `Start failed · {reason}` and a worktree that
    could not be made as `Worktree failed · {reason}`, the reason without its closing `.` or `。`, such as `Start failed ·
    claude was not found on PATH`, while their notifications keep their own sentences (UX-1.2, WORKTREES-2.2); an end
-   Facade could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade tools it cannot use; its
-   tools not connected past CLIS-2.3's bound, `Facade tools not connected yet`; or a start that did not become ready,
+   Facade Code Extension could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade Code Extension tools it cannot use; its
+   tools not connected past CLIS-2.3's bound, `Facade Code Extension tools not connected yet`; or a start that did not become ready,
    with why its activity is unknown, such as `No initial state · check terminal`. Before any message, with no notable
    state, it says the known opening: `New session started` for a new session, `Agent resumed` when the same numbered
    agent returns, or `Session continued` when a new agent starts a saved session. Pin restoration follows the same
@@ -172,22 +172,22 @@ What the second line says is the first of these that holds, in this order of pre
 
 1. a retained error's or an ended run's reason (RULES-3.2, 3.3);
 2. a native blocker: what its CLI waits for (RULES-3.2);
-3. another red condition: Facade tools it cannot use, its tools not connected past CLIS-2.3's bound, or a start not
+3. another red condition: Facade Code Extension tools it cannot use, its tools not connected past CLIS-2.3's bound, or a start not
    ready by it (RULES-3.2);
 4. its start's stage, while it starts (LIFECYCLE-1.5);
-5. the last item sent to it: the person's input, another agent's message or a Facade result;
+5. the last item sent to it: the person's input, another agent's message or a Facade Code Extension result;
 6. the run's known opening.
 
 The last item sent comes back as soon as none of 1-4 holds any longer; the words of each are those above.
 
 The `🧑‍💻` and the `📨` are the editor's color emoji, at the second line's size, one space before the text, so that what
-was sent to the agent, and by whom, shows at a glance; Facade's own words carry no emoji or other mark. The `📨` and the
+was sent to the agent, and by whom, shows at a glance; Facade Code Extension's own words carry no emoji or other mark. The `📨` and the
 `🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
 begins with. It says where that item came from, not what the agent works on now or
 whether it read it. The accessible label says `Last input: {0}` for the person's input. The card keeps the last item
 across a reload. The legacy implementation also restores the opening from its saved run metadata. When tool injection fails, the
-second line says why, such as `Facade tools unavailable · move or rename {0}`. A run that loses its tool connection
-says `Facade tools disconnected`. The second line never says a title - its conversation's is the details' (1.5),
+second line says why, such as `Facade Code Extension tools unavailable · move or rename {0}`. A run that loses its tool connection
+says `Facade Code Extension tools disconnected`. The second line never says a title - its conversation's is the details' (1.5),
 and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
 or, without a red dot, `State unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
 the dot's and the accessible label's, the label also saying why activity is unavailable. Idle alone proves neither an
@@ -195,13 +195,13 @@ empty composer nor usable input; there is no separate first-message readiness cl
 from a turn end. No popup solely for a native blocker.
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
-dot or notification rules. Tools injected but not yet connected say `Facade tools not connected yet` in the accessible
+dot or notification rules. Tools injected but not yet connected say `Facade Code Extension tools not connected yet` in the accessible
 label; startup waits for them, and once CLIS-2.3's bound passed without them the dot is red and the second line says so. An
 actual tool connection removes the message; known injection failures or a lost existing connection keep their specific
 explanation. Ended cards do not claim a pending tool connection. The green dot, starting or working, breathes every 1.8 s using
 opacity only (0–65% overlay of row background); reduced motion is static. The accessible label says the state in words: `Starting`,
 `Working`, `Idle`, the native blocker's kind, `Attention needed`, `Error · {reason}` or `State unavailable · check
-terminal`, and for a red dot without an error why it is red: the tools explanation, `Facade tools not connected yet` or why its
+terminal`, and for a red dot without an error why it is red: the tools explanation, `Facade Code Extension tools not connected yet` or why its
 activity is unavailable. No unread dot, completed check, bold-name state or extra error badge.
 
 ### 1.5 Details and accessible content
@@ -228,7 +228,7 @@ never cut:
 
 1. `comment-discussion`, as VS Code's chat marks a conversation: its conversation's complete title as its CLI
    stores it, the one Resume Agent lists (CLIS-2.4) - an actual stored title kept even where it equals its CLI's name or the agent's - else, after the same `Title: ` label, in the
-   quieter color, `No title yet` when Facade has no title from a CLI whose history it can read, or `Title unavailable` where Facade has no history
+   quieter color, `No title yet` when Facade Code Extension has no title from a CLI whose history it can read, or `Title unavailable` where Facade Code Extension has no history
    reader for its CLI - a custom program (CONFIGURATION-2.3) - so none can come. Never its terminal's title, nor its creation prompt.
 2. `tag`: who - its name, then in the quieter color its short run ID: `Hinge #a1`. An empty name is its `#aN` alone.
 3. `clockface`: when it started, in the text color, as Resume Agent says a time: `Started 5 mins ago`,
@@ -236,7 +236,7 @@ never cut:
    (LIFECYCLE-3.2, UX-2.4), `just now` below 30 seconds, its first letter in lower case within the sentence; a wrap
    never parts the time's words, nor the starter's name from its `#aN`. A start the source clock puts ahead of the
    host's says its date and time instead. The start is the run's own, else its creation's.
-4. Where it works, always, after the icon Facade's location pickers give it: `repo` for a main checkout, `worktree` for
+4. Where it works, always, after the icon Facade Code Extension's location pickers give it: `repo` for a main checkout, `worktree` for
    a worktree, `folder` for a folder, a workspace folder opened inside a checkout among them (WORKTREES-1.2) - its branch, else its folder's name, after its workspace folder's
    in a multi-folder window and before a non-local environment's. A folder inside one of them, which a resumed
    conversation works in, says the location it is inside.
@@ -255,8 +255,8 @@ A card the filter hides (2.3) has no details to open: Show Agent Details is offe
 it is shown (UX-3.1), and opens nothing for a card gone meanwhile.
 
 Accessible label: name, short run ID, `Pinned` for a pinned card, state, location, CLI, and the second line where it
-says what the state does not, its source said in words - a message from an agent, the person's input or a Facade
-result - rather than by its mark, and Facade's own words as the second line says them, unmarked. A red card's label says `Error · {reason}`
+says what the state does not, its source said in words - a message from an agent, the person's input or a Facade Code Extension
+result - rather than by its mark, and Facade Code Extension's own words as the second line says them, unmarked. A red card's label says `Error · {reason}`
 once, as its state, and not its reason again. The card's accessible description says what the
 details add to it, in their order: the title where the label does not say it already, when it started, the location
 where its environment is more than the label says, and the path. The details are in the accessibility tree while they
@@ -426,13 +426,13 @@ outside the view, canceled dragging and loss of window focus cannot leave it stu
 fully visible row count minus one (minimum one).
 
 
-## 4 Orchestrator-backed cards
+## 4 Facade Code Framework-backed cards
 
 ### 4.1 Card list and details
 
 **The Panel presents the workspace list defined by RULES-6.1.**
 
-The second line shows the most recent observed submission from Framework. Error and wait reasons take precedence.
+The second line shows the most recent observed submission from Facade Code Framework. Error and wait reasons take precedence.
 The status light breathes green while working. Show red for error, theme `charts.yellow` for just done, and no
 light for the other states. Keep reduced-motion support and expose the state in words.
 

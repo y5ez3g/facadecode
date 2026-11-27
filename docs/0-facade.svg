@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" font-family="'Segoe UI',Arial,sans-serif" role="img" aria-labelledby="overview-title overview-description">
-  <title id="overview-title">Facade Code across two machines</title>
-  <desc id="overview-description">A laptop and devbox run Orchestrators connected over SSH. VS Code and Shell attach to terminals. An external app joins as a Guest and exchanges messages through MCP.</desc>
+  <title id="overview-title">Facade Code Framework and Facade Code Extension across two machines</title>
+  <desc id="overview-description">A laptop and devbox each run Facade Code Framework and connect over SSH. Facade Code Extension and Shell attach to terminals. An external app joins as a Guest and exchanges messages through the MCP entry point.</desc>
   <defs>
     <marker id="gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
@@ -17,23 +17,23 @@
   <text x="126" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">External apps</text>
   <text x="126" y="86" text-anchor="middle" font-size="12" fill="#475569">Claude Desktop · Cursor</text>
 
-  <rect x="300" y="40" width="220" height="60" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
-  <text x="410" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#1e1b4b">Facade · VS Code</text>
+  <rect x="270" y="40" width="280" height="60" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="410" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#1e1b4b">Facade Code Extension · VS Code</text>
   <text x="410" y="86" text-anchor="middle" font-size="12" fill="#4338ca">tab · Panel · Pin</text>
 
-  <rect x="684" y="40" width="180" height="60" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
-  <text x="774" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#1e1b4b">Facade · Shell</text>
-  <text x="774" y="86" text-anchor="middle" font-size="12" fill="#4338ca">facade attach</text>
+  <rect x="612" y="40" width="252" height="60" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="738" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#1e1b4b">Facade Code Framework · Shell</text>
+  <text x="738" y="86" text-anchor="middle" font-size="12" fill="#4338ca">facade attach</text>
 
-  <!-- Orchestrator network -->
-  <rect x="16" y="150" width="868" height="186" rx="14" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
-  <text x="32" y="174" font-size="14" font-weight="600" fill="#166534">Orchestrator network · One Orchestrator per machine, connected as peers over SSH</text>
+  <!-- Facade Code Framework network -->
+  <rect x="16" y="150" width="868" height="196" rx="14" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="32" y="336" font-size="14" font-weight="600" fill="#166534">Facade Code Framework network · One instance per machine, connected as peers over SSH</text>
 
   <rect x="36" y="188" width="400" height="130" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.5"/>
-  <text x="52" y="210" font-size="13" font-weight="600" fill="#166534">Laptop · Orchestrator</text>
+  <text x="52" y="308" font-size="13" font-weight="600" fill="#166534">Laptop · Facade Code Framework</text>
 
   <rect x="464" y="188" width="400" height="130" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.5"/>
-  <text x="480" y="210" font-size="13" font-weight="600" fill="#166534">devbox · Orchestrator</text>
+  <text x="480" y="308" font-size="13" font-weight="600" fill="#166534">devbox · Facade Code Framework</text>
 
   <!-- Agent -->
   <rect x="56" y="224" width="140" height="66" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6 4"/>
@@ -59,8 +59,8 @@
   <line x1="480" y1="100" x2="662" y2="222" stroke="#64748b" stroke-width="1.5" marker-end="url(#gray)"/>
   <text x="556" y="132" font-size="12" fill="#475569">Attach</text>
 
-  <line x1="774" y1="100" x2="704" y2="222" stroke="#64748b" stroke-width="1.5" marker-end="url(#gray)"/>
-  <text x="764" y="140" font-size="12" fill="#475569">Attach</text>
+  <line x1="738" y1="100" x2="704" y2="222" stroke="#64748b" stroke-width="1.5" marker-end="url(#gray)"/>
+  <text x="741" y="140" font-size="12" fill="#475569">Attach</text>
 
   <!-- Messages -->
   <line x1="196" y1="257" x2="254" y2="257" stroke="#ea580c" stroke-width="1.5" marker-end="url(#orange)"/>
@@ -71,7 +71,7 @@
 
   <!-- Legend -->
   <rect x="24" y="356" width="28" height="18" rx="4" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
-  <text x="60" y="370" font-size="12" fill="#334155">Managed agent · The Orchestrator holds its terminal</text>
+  <text x="60" y="370" font-size="12" fill="#334155">Managed agent · Facade Code Framework holds its terminal</text>
   <rect x="456" y="356" width="28" height="18" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 3"/>
   <text x="492" y="370" font-size="12" fill="#334155">Guest · Joins through MCP and has an inbox</text>
   <line x1="24" y1="400" x2="52" y2="400" stroke="#64748b" stroke-width="1.5"/>

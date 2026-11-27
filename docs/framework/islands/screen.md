@@ -60,7 +60,7 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 
 ## Never does
 
-- Depend on another Facade crate, or know about agents, CLIs, runs, the screen log or the daemon's
+- Depend on another Facade Code Framework crate, or know about agents, CLIs, runs, the screen log or the daemon's
   states.
 - Touch the disk, start processes or threads, or read the clock. The only time it handles is the
   deadline alacritty puts on a synchronized update.
@@ -173,7 +173,7 @@ limits it sets.
   scrollback lets go of to a `HistoryKeeper` and take rows back, and erase a cleared main screen
   where it is (`vendor/README.md`). Scrolling back so shows no page that the CLI took off its screen.
 - `base64`, for the words in status reports.
-- No Facade crate.
+- No Facade Code Framework crate.
 
 ## Inside
 
