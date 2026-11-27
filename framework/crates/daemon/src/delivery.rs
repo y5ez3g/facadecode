@@ -87,6 +87,8 @@ pub(crate) struct SendControl {
     pub(crate) deadline: Option<std::time::Instant>,
     pub(crate) admission: Option<SendAdmission>,
     pub(crate) relay: Option<Arc<RelayLink>>,
+    /// A policy refusal for a new send. An accepted route keeps its original receipt.
+    pub(crate) refusal_if_new: Option<ErrorBody>,
 }
 
 async fn send_effect(
@@ -532,7 +534,14 @@ impl Daemon {
         {
             let _effect = send_effect(control.relay.as_deref(), due.instant, &mut cancel).await?;
             if let Some(result) = self
-                .send_command_reply(caller, &args, address, due.instant, cancel.clone())
+                .send_command_reply(
+                    caller,
+                    &args,
+                    address,
+                    due.instant,
+                    cancel.clone(),
+                    control.refusal_if_new.as_ref(),
+                )
                 .await?
             {
                 return Ok(Box::pin(async move { Ok(result) }));
@@ -585,6 +594,9 @@ impl Daemon {
             let (route, replay) = match retained {
                 Some(route) => (route, true),
                 None => {
+                    if let Some(refusal) = control.refusal_if_new {
+                        return Err(refusal);
+                    }
                     if control.deadline.is_some() {
                         if cancel.is_requested() {
                             return Err(send_cancelled_before_save());
@@ -855,6 +867,7 @@ impl Daemon {
         address: addresses::CommandReplyAddress<'_>,
         until: Instant,
         mut cancel: Cancel,
+        refusal_if_new: Option<&ErrorBody>,
     ) -> Result<Option<wire::SendResult>, ErrorBody> {
         let Caller::Agent { agent, .. } = caller else {
             return Ok(None);
@@ -871,7 +884,7 @@ impl Daemon {
             return Ok(None);
         };
         self.check_message_sender(caller)?;
-        if args.wait_for == Some(wire::SendWait::Result) {
+        if args.wait_for == Some(wire::SendWait::Result) && refusal_if_new.is_none() {
             return Err(ErrorBody::invalid_argument(
                 "a command-line reply cannot ask for another reply",
             ));
@@ -907,6 +920,9 @@ impl Daemon {
             )?
         {
             return self.command_reply_result(message, true).map(Some);
+        }
+        if let Some(refusal) = refusal_if_new {
+            return Err(refusal.clone());
         }
         send_time_left(until)?;
         if cancel.is_requested() {

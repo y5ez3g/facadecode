@@ -65,8 +65,17 @@ pub(super) async fn send_verified(
     call: &ToolCall,
     send_turn: Option<SendTurn>,
 ) -> ToolReply {
+    let requested_wait = arguments.get("wait_for").and_then(Value::as_str);
+    let refusal_if_new = (actor.receives_terminal_messages && requested_wait == Some("result"))
+        .then(|| {
+            ErrorBody::new(
+                Reason::Unsupported,
+                "send_message cannot wait for a reply in this managed run. Omit wait_for or set it \
+                 to delivery, then end your turn to receive the reply in your terminal.",
+            )
+        });
     let seconds = timeout_seconds(&arguments);
-    let (wait_for, budget) = match (seconds, arguments.get("wait_for").and_then(Value::as_str)) {
+    let (wait_for, budget) = match (seconds, requested_wait) {
         (0, _) => (SendWait::Inbox, SEND_TIMEOUT),
         (_, Some("delivery")) => (SendWait::Delivery, Duration::from_secs(seconds)),
         (_, Some("result")) => (SendWait::Result, Duration::from_secs(seconds)),
@@ -115,6 +124,7 @@ pub(super) async fn send_verified(
             deadline: Some(send_deadline),
             admission: turn.map(|turn| relay.send_order.admitted(turn)),
             relay: call.output.as_ref().map(|output| output.link.clone()),
+            refusal_if_new,
         },
         cancel.clone(),
     )

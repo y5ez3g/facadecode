@@ -43,6 +43,30 @@ fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
         assert!(refused["data"].get("id").is_none(), "{refused}");
         assert!(refused["data"].get("next").is_none(), "{refused}");
     }
+    for options in [
+        json!({}),
+        json!({ "timeout_seconds": 0 }),
+        json!({ "timeout_seconds": 1 }),
+    ] {
+        let mut send = json!({
+            "to": recipient.address, "text": "refuse this result wait", "wait_for": "result",
+        });
+        send.as_object_mut()
+            .unwrap()
+            .extend(options.as_object().unwrap().clone());
+        let refused = sender_mcp.call("send_message", send);
+        assert_eq!(refused["status"], "failure", "{refused}");
+        assert_eq!(refused["reason"], "unsupported", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .unwrap()
+                .contains("receive the reply in your terminal"),
+            "{refused}"
+        );
+        assert!(refused["data"].get("id").is_none(), "{refused}");
+    }
+    assert!(home.submitted_messages().is_empty());
     let removed = recipient_mcp.call("read_messages", json!({ "wait": true }));
     assert_eq!(removed["status"], "failure", "{removed}");
     assert_eq!(removed["reason"], "invalid_argument", "{removed}");
@@ -63,7 +87,6 @@ fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
         ("omitted", json!({})),
         ("zero", json!({ "timeout_seconds": 0 })),
         ("delivery alone", json!({ "wait_for": "delivery" })),
-        ("result alone", json!({ "wait_for": "result" })),
     ]
     .into_iter()
     .map(|(text, options)| {
@@ -101,15 +124,49 @@ fn a_matching_read_finds_a_reply_already_typed_into_a_managed_terminal() {
     let bob = home.start_named_fake("bob", &[]);
     let mut ada_mcp = McpTestClient::open_configured(&home, &ada.id);
     let mut bob_mcp = McpTestClient::open_configured(&home, &bob.id);
-    let sent = ada_mcp.call(
+    let request = "Please answer in a linked reply";
+    let refused = ada_mcp.call(
         "send_message",
         json!({
-            "to": bob.address, "text": "Please answer in a linked reply",
-            "wait_for": "delivery", "timeout_seconds": 30,
+            "to": bob.address, "text": request, "wait_for": "result", "timeout_seconds": 30,
         }),
     );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM send_routes", [], |row| row
+            .get::<_, u32>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM messages WHERE text = ?1",
+            [request],
+            |row| { row.get::<_, u32>(0) }
+        )
+        .unwrap(),
+        0
+    );
+    assert!(home.submitted_messages().is_empty());
+
+    let sent = ada_mcp.call(
+        "send_message",
+        json!({ "to": bob.address, "text": request }),
+    );
     assert_eq!(sent["status"], "success", "{sent}");
-    assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "waiting_in_inbox", "{sent}");
+    let pasted_request = format!("{request} ");
+    assert!(
+        wait_until(secs(10), || home
+            .submitted_messages()
+            .iter()
+            .filter(|message| message.lines().skip(1).eq([pasted_request.as_str()]))
+            .count()
+            == 1),
+        "the request did not reach the fake terminal once"
+    );
     let original = sent["data"]["id"].as_str().expect("full send ID");
     let (inbox_id, _) = original.split_once('@').unwrap();
     let text = "The linked reply is ready";

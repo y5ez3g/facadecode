@@ -197,7 +197,9 @@ defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requi
 or `result`. After `reply_timeout`, use the original full message address in `read_messages`' `reply_to` filter.
 A managed agent with terminal message delivery can read immediately or end its turn to receive messages in its input.
 A positive read timeout for that agent is refused before touching its inbox. Read pages with `after` or `last`.
-Tool results carry complete message text inline.
+For that agent, `send_message` refuses `wait_for: "result"` before saving the request. It can send without waiting
+and receive the reply in its terminal. Guests and managed runs without terminal message delivery can wait for a
+linked reply inline. Tool results carry complete message text.
 Managed agents receive replies and background failures in their terminals. A terminal notice begins with `🔔`.
 Its record number is available in the inbox. `start_agent` returns the agent's address, name, folder and machine ID.
 A first prompt's failure and its startup problem share one notice in the live caller's inbox.

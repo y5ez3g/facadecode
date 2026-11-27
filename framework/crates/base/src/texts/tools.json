@@ -127,7 +127,7 @@
             "delivery",
             "result"
           ],
-          "description": "What a positive timeout_seconds waits for. \"delivery\": until the message is typed in and submitted, read, or handed to a waiting command. \"result\": also until the recipient's first reply linked to it, returned in data.messages. A #c address takes no \"result\"."
+          "description": "What a positive timeout_seconds waits for. \"delivery\": until the message is typed in and submitted, read, or handed to a waiting command. \"result\": also until the recipient's first linked reply, returned in data.messages for Guests and managed runs without terminal message delivery. Managed runs with terminal message delivery receive replies in their input. A #c address takes no \"result\"."
         },
         "timeout_seconds": {
           "type": "integer",

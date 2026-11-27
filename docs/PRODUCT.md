@@ -461,7 +461,7 @@ Agents and external applications use these eight tools through `facade-mcp`.
 | `list_agents` | Lists running managed agents, connected Guests and available CLI names on reachable machines. |
 | `start_agent` | Starts a managed agent. Use `machine` to choose a machine and `folder` to choose the working folder. |
 | `stop_agent` | Stops one managed agent. Its helpers keep running. |
-| `send_message` | Saves a message and returns its full address. Set `wait_for` and a positive `timeout_seconds` to wait for delivery or a linked reply. |
+| `send_message` | Saves a message and returns its full address. Set `wait_for` and a positive `timeout_seconds` to wait for delivery. Guests and managed runs without terminal message delivery can also wait for a linked reply. |
 | `read_messages` | Reads the caller's inbox. Set a positive `timeout_seconds` to wait up to 30 seconds, optionally for one `reply_to`. |
 | `read_screen` | Reads screen text from a managed agent. |
 | `type_text` | Types text in a running managed agent's terminal. |
