@@ -756,7 +756,7 @@ pub fn remote_bootstrap_command(
         remote_home,
         build,
         BootstrapTarget::Serve { wake, may_install },
-        false,
+        None,
     )
 }
 
@@ -773,7 +773,7 @@ pub fn remote_login_bootstrap_command(
         remote_home,
         build,
         BootstrapTarget::Serve { wake, may_install },
-        true,
+        Some(shell),
     )?;
     Ok(login_command(shell, &command))
 }
@@ -790,7 +790,7 @@ pub fn remote_login_admin_command(
         remote_home,
         build,
         BootstrapTarget::Admin(mode),
-        true,
+        Some(shell),
     )?;
     Ok(login_command(shell, &command))
 }
@@ -808,7 +808,7 @@ fn bootstrap_command(
     remote_home: Option<&str>,
     build: &str,
     target: BootstrapTarget,
-    from_login: bool,
+    login_shell: Option<RemoteLoginShell>,
 ) -> Result<String, SshArgumentError> {
     let version = release_version(build)?;
     if let Some(home) = remote_home {
@@ -821,7 +821,7 @@ fn bootstrap_command(
     let admin = matches!(target, BootstrapTarget::Admin(_));
     Ok(match system {
         RemoteSystem::Unix => {
-            let begin = if from_login {
+            let begin = if login_shell.is_some() {
                 format!("printf '\\n%s\\n' {LOGIN_BEGIN} || exit 1\n")
             } else {
                 String::new()
@@ -884,7 +884,8 @@ fn bootstrap_command(
             }
         }
         RemoteSystem::Windows => {
-            let begin = if from_login {
+            let read_decision = include_str!("ssh/windows-bootstrap-input.ps1");
+            let begin = if login_shell.is_some() {
                 format!("[Console]::WriteLine(); [Console]::WriteLine('{LOGIN_BEGIN}'); ")
             } else {
                 String::new()
@@ -920,12 +921,12 @@ fn bootstrap_command(
             } else {
                 String::new()
             };
-            powershell_command(&format!(
+            let script = format!(
                 "{}{WINDOWS_PROGRAM}; {begin}\
                  $hex = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes($env:FACADE_HOME)); \
                  [Console]::WriteLine('home ' + $hex.Replace('-', '').ToLowerInvariant()); \
-                 {probe}; \
-                 $action = [Console]::ReadLine(); if ($null -eq $action) {{ exit 1 }}; \
+                 {probe};\n{read_decision}\n\
+                 $action = [FacadeBootstrapInput]::ReadDecision(); if ($null -eq $action) {{ exit 1 }}; \
                  switch -CaseSensitive ($action) {{ \
                      'serve' {{ }} \
                      'install' {{ {install} }} \
@@ -934,7 +935,12 @@ fn bootstrap_command(
                  {admin_probe}[Console]::WriteLine('{BOOTSTRAP_READY}'); \
                  & $program {arguments}; exit $LASTEXITCODE",
                 windows_home_script(remote_home),
-            ))
+            );
+            if login_shell == Some(RemoteLoginShell::Cmd) {
+                cmd_powershell_command(&script)
+            } else {
+                powershell_command(&script)
+            }
         }
     })
 }
@@ -959,14 +965,47 @@ fn sh_word(value: &str) -> String {
 }
 
 fn powershell_command(script: &str) -> String {
-    // CMD has a short command line limit. Use a UTF-8 payload and run it in the same scope
-    // so the bootstrap's exit status becomes the PowerShell process's exit status.
+    // Run the UTF-8 payload in the current scope so its exit status is the process's status.
     let payload = STANDARD.encode(script);
+    powershell_payload(&format!("'{payload}'"), "")
+}
+
+fn powershell_payload(payload: &str, setup: &str) -> String {
     format!(
         "powershell.exe {} -Command \
-         \". ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}'))))\"",
+         \"{setup}. ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String({payload}))))\"",
         install::POWERSHELL_OPTIONS.join(" "),
     )
+}
+
+/// CMD accepts at most 8,191 characters in one line, including the login's ` & exit`.
+/// Stage a bigger bootstrap in separate lines of the same login and clear its parts before use.
+fn cmd_powershell_command(script: &str) -> String {
+    const MAX_LINE: usize = 8_191;
+    const PART_BYTES: usize = 4_000;
+    let payload = STANDARD.encode(script);
+    let inline = powershell_payload(&format!("'{payload}'"), "");
+    if inline.len() + " & exit".len() <= MAX_LINE {
+        return inline;
+    }
+    let mut command = String::new();
+    let mut parts = Vec::new();
+    let mut names = Vec::new();
+    for (index, start) in (0..payload.len()).step_by(PART_BYTES).enumerate() {
+        let name = format!("FACADE_SSH_BOOTSTRAP_PART_{index}");
+        let part = &payload[start..(start + PART_BYTES).min(payload.len())];
+        // The Base64 alphabet permits CMD's plain set with extensions off.
+        command.push_str(&format!("set {name}={part}\n"));
+        parts.push(format!("$env:{name}"));
+        names.push(format!("Env:{name}"));
+    }
+    let setup = format!(
+        "$facadeBootstrapPayload = {}; Remove-Item {}; ",
+        parts.join(" + "),
+        names.join(", "),
+    );
+    command.push_str(&powershell_payload("$facadeBootstrapPayload", &setup));
+    command
 }
 
 fn check_home(home: &str) -> Result<(), SshArgumentError> {

@@ -180,6 +180,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   A higher remote build requires a local upgrade. The bootstrap writes `ready` before running
   machine serve on the same streams. The authenticated machine hello checks API compatibility
   and identity. A passive attempt uses `--no-start` and recognizes exit 3 as sleeping.
+  The Windows bootstrap waits for available input before reading the decision from an OpenSSH
+  pipe. The client sends the decision after seeing the version on that login. CMD receives a
+  bootstrap above its line limit in parts, which PowerShell joins and clears from its environment.
   On Windows, the foreground command keeps its output capture pipes private before starting the
   process that holds the saved SSH link.
   `system::hostname` and `system::login_environment` supply the host name and login environment.
