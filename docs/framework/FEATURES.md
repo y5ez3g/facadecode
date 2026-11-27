@@ -27,6 +27,8 @@ or `~/.facade` by default, and put that home's `framework/bin` on PATH. Open a n
 `facade --version` and `facade status` to confirm the executable and Facade home. If a program uses the same name,
 invoke the home launcher by its full path.
 
+Installed `facade` and `facade-mcp` use their own Facade home by default. Set `FACADE_HOME` to select another.
+
 The installer, the extension and `facade upgrade` select a build by numeric version and then source commit time.
 A build with a higher rank can replace the selected build. Equal or lower ranks keep the selected version.
 
@@ -193,7 +195,8 @@ this is the configuration when using `facade-mcp` on PATH.
 {"mcpServers": {"facade": {"command": "facade-mcp"}}}
 ```
 
-Pass `FACADE_HOME` in that server's environment to use a different home. For both message tools, `timeout_seconds`
+The launcher selects its installation's home. Pass `FACADE_HOME` in the server's environment to override it.
+For both message tools, `timeout_seconds`
 defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
 or `result`. After `reply_timeout`, use the original full message address in `read_messages`' `reply_to` filter.
 A managed agent with terminal message delivery can read immediately or end its turn to receive messages in its input.

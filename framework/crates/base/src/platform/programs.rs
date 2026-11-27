@@ -482,14 +482,7 @@ pub fn point_launchers_at(build: &str, running: &[String]) -> anyhow::Result<()>
 /// another home that supplied this shell's PATH.
 pub fn run_in_selected_home() -> anyhow::Result<Option<i32>> {
     let program = crate::this_program()?;
-    let Some(folder) = program.parent() else {
-        return Ok(None);
-    };
-    let installed_bin = [Some(folder), folder.parent()]
-        .into_iter()
-        .flatten()
-        .find(|folder| folder.ends_with(Path::new("framework").join("bin")));
-    let Some(installed_bin) = installed_bin else {
+    let Some(installed_bin) = crate::paths::installed_bin(&program) else {
         return Ok(None);
     };
     let bin = Bin::here()?;

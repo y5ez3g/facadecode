@@ -208,6 +208,15 @@ pub struct TestHome {
 
 impl TestHome {
     pub fn new(test: &str) -> TestHome {
+        Self::with_home_name(test, "home")
+    }
+
+    /// Its parent can be used as the login home to exercise the default Facade home.
+    pub fn new_default(test: &str) -> TestHome {
+        Self::with_home_name(test, ".facade")
+    }
+
+    fn with_home_name(test: &str, home_name: &str) -> TestHome {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
@@ -219,7 +228,7 @@ impl TestHome {
             .components()
             .collect::<std::path::PathBuf>()
             .join(format!("fcs-{test}-{}-{n}-{nanos:x}", std::process::id()));
-        let path = base.join("home");
+        let path = base.join(home_name);
         let project = base.join("project");
         facade_base::files::create_private_folder_all(&path)
             .expect("could not create the test Facade home");

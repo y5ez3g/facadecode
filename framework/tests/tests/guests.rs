@@ -1,10 +1,204 @@
 //! External relays join as Guests when they first call a tool. The scenarios exercise their
 //! identity, reach, reply waits and delivery through the Orchestrator.
 
+use std::path::Path;
 use std::process::Stdio;
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
+
+#[test]
+fn the_installed_shell_and_relay_select_their_own_facade_home() {
+    let installed = TestHome::new("installed-home");
+    let explicit = TestHome::new("explicit-home");
+    let default = TestHome::new_default("default-home");
+    let binaries = test_binaries();
+    let facade = format!("facade{}", std::env::consts::EXE_SUFFIX);
+    let relay = format!("facade-mcp{}", std::env::consts::EXE_SUFFIX);
+    let installed_bin = installed.path.join("framework/bin");
+    let default_bin = default.path.join("framework/bin");
+    for home in [&installed, &explicit, &default] {
+        std::fs::write(home.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    }
+    for home in [&installed, &default] {
+        let output = home
+            .command(&binaries.facade)
+            .env_remove("FACADE_TEST_LINK_PROGRAMS")
+            .args(["daemon", "--install-only"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+    explicit.start_fake("explicit-home");
+    default.start_fake("default-home");
+
+    let command = |program: &Path, selected: Option<&Path>| {
+        let mut command = default.command(program);
+        command
+            .env("HOME", default.folder())
+            .env("USERPROFILE", default.folder())
+            .env_remove("FACADE_HOME");
+        if let Some(home) = selected {
+            command.env("FACADE_HOME", home);
+        }
+        command
+    };
+    let mut external = McpTestClient::spawn(&installed, command(&installed_bin.join(&relay), None));
+    assert!(
+        installed.hello_result().is_some(),
+        "the installed relay wakes its own daemon"
+    );
+    installed.start_fake("installed-home");
+    let listed = |client: &mut McpTestClient| {
+        let response = client.call("list_agents", json!({}));
+        assert_eq!(response["status"], "success", "{response}");
+        response["data"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["type"] == "managed")
+            .map(|row| row["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(listed(&mut external), ["installed-home"]);
+    let mut overridden = McpTestClient::spawn(
+        &explicit,
+        command(&installed_bin.join(&relay), Some(&explicit.path)),
+    );
+    assert_eq!(listed(&mut overridden), ["explicit-home"]);
+    let mut development = McpTestClient::spawn(&default, command(&binaries.mcp, None));
+    assert_eq!(listed(&mut development), ["default-home"]);
+
+    for (program, selected, expected) in [
+        (installed_bin.join(&facade), None, "installed-home"),
+        (
+            installed_bin.join(&facade),
+            Some(explicit.path.as_path()),
+            "explicit-home",
+        ),
+        (std::path::PathBuf::from(&facade), None, "default-home"),
+        (binaries.facade.clone(), None, "default-home"),
+    ] {
+        let output = command(&program, selected)
+            .env(
+                "PATH",
+                format!(
+                    "{}{PATH_SEPARATOR}{}",
+                    default_bin.display(),
+                    default.test_path()
+                ),
+            )
+            .args(["list", "--local"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let table = Table::parse(&stdout(&output));
+        assert!(table.row("NAME", expected).is_some(), "{}", stdout(&output));
+    }
+
+    let uppercase = installed.path.join("Framework/BIN");
+    if uppercase.is_dir() {
+        let mut client = McpTestClient::spawn(&installed, command(&uppercase.join(&relay), None));
+        assert_eq!(listed(&mut client), ["installed-home"]);
+        let output = command(&uppercase.join(&facade), None)
+            .args(["list", "--local"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            Table::parse(&stdout(&output))
+                .row("NAME", "installed-home")
+                .is_some(),
+            "{}",
+            stdout(&output)
+        );
+    }
+    #[cfg(unix)]
+    {
+        let link = default.folder().join("linked-installation");
+        std::os::unix::fs::symlink(&installed.path, &link).unwrap();
+        let program = link.join("framework/bin").join(&relay);
+        let mut client = McpTestClient::spawn(&installed, command(&program, None));
+        assert_eq!(listed(&mut client), ["installed-home"]);
+        let program =
+            std::path::PathBuf::from(format!("{}/framework//bin/{relay}", default.path.display()));
+        let mut client = McpTestClient::spawn(&default, command(&program, None));
+        assert_eq!(listed(&mut client), ["default-home"]);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_installed_relay_reaches_an_existing_home_with_repeated_separators() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let mut home = TestHome::new("installed-home-spelling");
+    let physical = home.path.clone();
+    home.path = std::path::PathBuf::from(format!("{}//home", home.folder().display()));
+    assert_ne!(home.path.as_os_str(), physical.as_os_str());
+    let binaries = test_binaries();
+    let output = home
+        .command(&binaries.facade)
+        .env_remove("FACADE_TEST_LINK_PROGRAMS")
+        .args(["daemon", "--install-only"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    home.start_fake("spelled-home");
+    let live = home
+        .hello_result()
+        .expect("the explicitly addressed daemon");
+
+    let relay = physical.join("framework/bin/facade-mcp");
+    let mut command = home.command(&relay);
+    command.env_remove("FACADE_HOME");
+    let mut client = McpTestClient::spawn(&home, command);
+    let reply = client.call("list_agents", json!({}));
+    assert_eq!(reply["status"], "success", "{reply}");
+    assert!(
+        reply["data"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| { agent["type"] == "managed" && agent["name"] == "spelled-home" })
+    );
+    assert_eq!(home.hello_result().unwrap()["pid"], live["pid"]);
+    let resolved = facade_base::files::real_path(&physical).unwrap();
+    assert!(
+        !facade_base::paths::daemon_socket_for(&resolved)
+            .unwrap()
+            .exists()
+    );
+
+    // A previously published Shell exits successfully without reporting the running home key.
+    // Publishing its replacement must wake the same relay, with the same running daemon.
+    let bin = physical.join("framework/bin");
+    let staged = bin.join("publication-test");
+    std::fs::create_dir(&staged).unwrap();
+    let relay = staged.join("facade-mcp");
+    std::fs::copy(&binaries.mcp, &relay).unwrap();
+    let old_shell = staged.join("facade");
+    let called = home.folder().join("old-shell-called");
+    std::fs::write(&old_shell, "#!/bin/sh\n: > \"$PUBLICATION_TEST_CALLED\"\n").unwrap();
+    std::fs::set_permissions(&old_shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut command = home.command(&relay);
+    command
+        .env_remove("FACADE_HOME")
+        .env("PUBLICATION_TEST_CALLED", &called);
+    let scoped_home = &home;
+    let reply = std::thread::scope(|scope| {
+        let request = scope.spawn(move || {
+            McpTestClient::spawn(scoped_home, command).call("list_agents", json!({}))
+        });
+        assert!(wait_until(LOADED_TIMEOUT, || called.is_file()));
+        let published = staged.join("next-facade");
+        symlink(bin.join("facade"), &published).unwrap();
+        std::fs::rename(published, old_shell).unwrap();
+        request.join().unwrap()
+    });
+    assert_eq!(reply["status"], "success", "{reply}");
+    assert_eq!(home.hello_result().unwrap()["pid"], live["pid"]);
+}
 
 fn managed_relay(home: &TestHome, name: &str) -> (String, McpTestClient) {
     let started = home.run_facade_ok(&["start", "-d", "--name", name, "fake"]);

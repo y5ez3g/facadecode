@@ -255,6 +255,19 @@ pub fn live_holder(framework: &Path, service: Service) -> io::Result<Option<Proc
 /// Finds the socket named by a live daemon whose home has the same path components as `home`.
 /// The caller authenticates the connection against the returned lock holder before using it.
 pub fn alternate_daemon_socket(home: &Path) -> anyhow::Result<Option<(PathBuf, ProcessIdentity)>> {
+    let Some((running_home, holder)) = running_daemon_home(home)? else {
+        return Ok(None);
+    };
+    if running_home == home && running_home.as_os_str() != home.as_os_str() {
+        let socket = crate::paths::daemon_socket_for(&running_home)?;
+        Ok(Some((socket, holder)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// The home spelling in the environment of the identified daemon that holds this home's lock.
+pub(crate) fn running_daemon_home(home: &Path) -> io::Result<Option<(PathBuf, ProcessIdentity)>> {
     let Some(holder) = live_holder(&home.join("framework"), Service::Daemon)? else {
         return Ok(None);
     };
@@ -266,12 +279,7 @@ pub fn alternate_daemon_socket(home: &Path) -> anyhow::Result<Option<(PathBuf, P
     else {
         return Ok(None);
     };
-    if running_home == home && running_home.as_os_str() != home.as_os_str() {
-        let socket = crate::paths::daemon_socket_for(&running_home)?;
-        Ok(Some((socket, holder)))
-    } else {
-        Ok(None)
-    }
+    Ok(Some((running_home, holder)))
 }
 
 /// At the daemon's start, while the keeper's lock file names no keeper: the keeper's lock, where no

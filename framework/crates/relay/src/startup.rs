@@ -86,10 +86,12 @@ impl<T: Send + 'static> Task<T> {
 }
 
 fn text(path: &Path) -> Option<String> {
+    record_text(File::open(path).ok()?)
+}
+
+fn record_text(file: File) -> Option<String> {
     let mut contents = String::new();
-    File::open(path)
-        .ok()?
-        .take(MAX_RECORD + 1)
+    file.take(MAX_RECORD + 1)
         .read_to_string(&mut contents)
         .ok()?;
     (u64::try_from(contents.len()).ok()? <= MAX_RECORD).then_some(contents)
@@ -231,8 +233,31 @@ fn current_generation(framework: &Path) -> Option<String> {
     generation_is_valid(id).then(|| id.to_owned())
 }
 
-fn daemon_lock(framework: &Path) -> Option<(u32, String)> {
-    let contents = text(&framework.join("daemon.lock"))?;
+pub(crate) fn daemon_lock(framework: &Path) -> Option<(u32, String)> {
+    let path = framework.join("daemon.lock");
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    if !std::fs::symlink_metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let file = options.open(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = file.metadata().ok()?;
+        if !metadata.is_file() || metadata.uid() != nix::unistd::Uid::current().as_raw() {
+            return None;
+        }
+    }
+    let contents = record_text(file)?;
     let identity: Value = serde_json::from_str(&contents).ok()?;
     let pid = u32::try_from(identity.get("pid")?.as_u64()?).ok()?;
     let birth = identity.get("birth")?.as_str()?;

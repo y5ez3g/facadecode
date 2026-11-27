@@ -10,7 +10,10 @@ to speak of, so every other crate can depend on it and it depends on none of the
 - The daemon and keeper protocol types, operations, framing and error envelope. `framework/protocol/`
   contains the two generated guides and endpoint schemas. The generator writes `protocol.ts` and
   the extension's `src/base/frameworkProtocol.ts` together from the daemon registrations.
-- The Facade home's location (`FACADE_HOME`, else `~/.facade`) and the key that names its sockets.
+- The Facade home's location and the key that names its sockets. The Shell selects `FACADE_HOME` when set
+  to a nonempty value, then its installation home, then `~/.facade`. An implicit installation uses the
+  default spelling when it names that same directory. If it already has a daemon, the Shell can use the
+  v1 spelling supplied by the process named in that home's lock.
 - The services' sockets: on macOS and Linux the socket folder `/tmp/facade-framework-<uid>/` and
   `keeper-<key>.sock` and `daemon-<key>.sock` in it; on Windows the named pipes
   `\\.\pipe\facade-framework-keeper-<key>` and `\\.\pipe\facade-framework-daemon-<key>`, which let in

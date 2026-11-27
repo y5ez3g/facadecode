@@ -9,13 +9,30 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-pub use crate::platform::paths::*;
+mod installation;
 
-/// The Facade home. `FACADE_HOME` names it, as an absolute path; without it, it is `.facade` in
-/// the user's home folder, `HOME` or else `USERPROFILE`. A `FACADE_HOME` that is set but empty,
-/// as a CLI passes on a variable it refers to that is unset, counts as unset.
+pub use crate::platform::paths::*;
+pub(crate) use installation::installed_bin;
+
+/// The Facade home. `FACADE_HOME` names it as an absolute path. The installed Shell supplies
+/// its own home there when unset. Otherwise the default is `.facade` in `HOME` or `USERPROFILE`.
+/// An empty `FACADE_HOME` counts as unset.
 pub fn facade_home() -> anyhow::Result<PathBuf> {
     home_from(|name| std::env::var_os(name))
+}
+
+/// The Facade home that contains the running executable, for an installed Shell or service.
+pub fn installed_facade_home() -> Option<PathBuf> {
+    let home = installation::home(facade_home().ok().as_deref())?;
+    Some(active_installation_home(&home).unwrap_or(home))
+}
+
+/// The v1 spelling used by the daemon of this physical installation, if its lock proves one.
+pub fn active_installation_home(home: &Path) -> Option<PathBuf> {
+    let physical = home.canonicalize().ok()?;
+    let (running, _) = crate::service::running_daemon_home(home).ok().flatten()?;
+    (running.is_absolute() && running.canonicalize().ok().as_ref() == Some(&physical))
+        .then_some(running)
 }
 
 pub(crate) fn home_from(

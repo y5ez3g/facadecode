@@ -88,6 +88,9 @@ impl fmt::Display for ExitText<'_> {
 
 fn main() {
     facade_base::take_test_build();
+    if std::env::var_os("FACADE_HOME").is_none_or(|home| home.is_empty()) {
+        select_home(facade_base::paths::installed_facade_home());
+    }
     let arguments = match cli::parse() {
         Ok(arguments) => arguments,
         Err(ParseError::Usage(message)) => {
@@ -480,10 +483,10 @@ fn scope(local: bool, machine: Option<String>) -> Scope {
     }
 }
 
-fn select_machine_home(home: Option<PathBuf>) {
+fn select_home(home: Option<PathBuf>) {
     if let Some(home) = home {
-        // SAFETY: hidden SSH commands select the home before opening a socket or starting threads.
-        // Any service started below inherits this home.
+        // SAFETY: startup and the hidden SSH commands select the home before starting threads.
+        // The services they start inherit the selected home.
         unsafe { std::env::set_var("FACADE_HOME", home) };
     }
 }
@@ -509,7 +512,17 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Daemon {
             install_only: true, ..
         } => facade_base::programs::select_running().map(|_| 0),
-        Command::Daemon { detach: true, .. } => daemon_client::detach(),
+        Command::Daemon { detach: true, .. } => {
+            let installed_relay =
+                std::env::var_os("FACADE_STARTUP_SELECT_HOME").is_some_and(|value| value == "1");
+            if installed_relay {
+                let home = facade_base::paths::facade_home()?;
+                select_home(facade_base::paths::active_installation_home(&home));
+                // SAFETY: detecting the launcher home precedes starting any service.
+                unsafe { std::env::remove_var("FACADE_STARTUP_SELECT_HOME") };
+            }
+            daemon_client::detach(installed_relay)
+        }
         Command::Daemon {
             await_startup: Some(words),
             ..
@@ -522,7 +535,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             action,
             &connect_or_start,
             &daemon_client::machine_socket,
-            &select_machine_home,
+            &select_home,
         ),
         Command::Start { options, .. } if options.cli_and_args.is_empty() => {
             Ok(missing_cli(options))

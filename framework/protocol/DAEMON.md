@@ -13,8 +13,9 @@ The client checks the selection against its offer and uses the selected contract
 connection. The software build and keeper API have independent versioning.
 See [the keeper reference](KEEPER.md).
 
-`FACADE_HOME` selects the home. By default it is `.facade` in `HOME`, or `USERPROFILE`
-when `HOME` is unset. On macOS and Linux the socket is
+`FACADE_HOME` selects the home. When it is unset or empty, installed `facade` and `facade-mcp`
+use the home that contains them. The fallback is `.facade` in `HOME`, or `USERPROFILE` when
+`HOME` is unset. On macOS and Linux the socket is
 `/tmp/facade-framework-<uid>/daemon-<key>.sock`. On Windows use
 `\\.\pipe\facade-framework-daemon-<key>`. The endpoints admit the owning user. Framework's Windows
 clients also look up the server PID and check its user SID. The editor relies on the pipe DACL.

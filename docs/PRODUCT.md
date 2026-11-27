@@ -68,8 +68,8 @@ Facade Code
   `resume -d` run unattended. Facade disables updates for these launches where the CLI offers a per-run
   control. Foreground Shell and VS Code leave startup trust prompts and updates to the CLI. MCP
   `start_agent` has agent origin. Shell and VS Code have person origin, including Shell commands typed by agents.
-- **A Facade home is one installation.** Its programs, data and services belong to that home. Select a home with
-  `FACADE_HOME` and manage its installation independently.
+- **A Facade home is one installation.** Its programs, data and services belong to that home. Its installed
+  Shell and relay select that home by default. Set `FACADE_HOME` to select a different home.
 - **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
   Equal ranks keep the selected build. Install, upgrade, VS Code and SSH share this order. When the remote
   home ranks higher, SSH reports that the local installation needs an upgrade.

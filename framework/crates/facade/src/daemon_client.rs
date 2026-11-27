@@ -820,7 +820,7 @@ fn reach_daemon<T>(
 }
 
 /// Background startup succeeds as soon as there is a verified living daemon holding the lock.
-pub(super) fn detach() -> anyhow::Result<i32> {
+pub(super) fn detach(installed_relay: bool) -> anyhow::Result<i32> {
     programs::validate_running_build()?;
     let home = facade_base::paths::framework_dir()?;
     let accepted = reach_daemon(
@@ -838,7 +838,13 @@ pub(super) fn detach() -> anyhow::Result<i32> {
     if let Some(ticket) = accepted.ticket
         && std::env::var_os("FACADE_STARTUP_REPORT").as_deref() == Some(std::ffi::OsStr::new("1"))
     {
-        println!("facade-startup-locked {}", serde_json::to_string(&ticket)?);
+        println_or_end!("facade-startup-locked {}", serde_json::to_string(&ticket)?);
+    }
+    if installed_relay {
+        let selected = facade_base::paths::facade_home()?;
+        let active = facade_base::paths::active_installation_home(&selected);
+        let key = facade_base::paths::home_key(active.as_deref().unwrap_or(&selected));
+        println_or_end!("facade-startup-home-key {key}");
     }
     Ok(0)
 }

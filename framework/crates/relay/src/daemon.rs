@@ -4,7 +4,7 @@
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
@@ -15,7 +15,12 @@ use nix::unistd::Uid;
 
 use crate::jsonrpc::{self, Message};
 use crate::lines::Lines;
-use crate::startup::Ticket;
+use crate::startup::{self, Ticket};
+
+#[cfg(unix)]
+type OpeningStream = UnixStream;
+
+const HOME_KEY_REPORT: &str = "facade-startup-home-key ";
 
 /// The version of the relay contract, the part of the daemon protocol the relay speaks.
 const RELAY_CONTRACT: u32 = 1;
@@ -68,9 +73,6 @@ pub(crate) struct DaemonLink {
 }
 
 pub(crate) struct OpeningLink {
-    #[cfg(unix)]
-    stream: UnixStream,
-    #[cfg(windows)]
     stream: OpeningStream,
     lines: Lines,
     request_context: bool,
@@ -85,6 +87,7 @@ impl OpeningLink {
         socket: &Path,
         hello: &RelayHelloParams,
         startup: Option<(&Path, &Ticket)>,
+        installation: Option<&Path>,
         until: Option<Instant>,
     ) -> io::Result<OpeningLink> {
         let at = socket.display();
@@ -116,6 +119,18 @@ impl OpeningLink {
                 ));
             }
         }
+        let installation = installation
+            .map(|framework| {
+                #[cfg(unix)]
+                let pid = peer_pid(&stream)?;
+                #[cfg(windows)]
+                let pid = stream.peer_pid;
+                let holder = startup::daemon_lock(framework)
+                    .filter(|holder| holder.0 == pid)
+                    .ok_or_else(installation_changed)?;
+                Ok::<_, io::Error>((framework, holder))
+            })
+            .transpose()?;
         #[cfg(unix)]
         if let Some(until) = until {
             let left = until.saturating_duration_since(Instant::now());
@@ -127,25 +142,7 @@ impl OpeningLink {
         stream
             .write_all(&hello.to_line())
             .map_err(|err| fail(format!("cannot say hello to Facade at {at}: {err}")))?;
-        let mut lines = Lines::default();
-        let response = loop {
-            if let Some(line) = lines.next_line() {
-                break line;
-            }
-            if let Some(until) = until {
-                let left = until.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    return Err(io::ErrorKind::TimedOut.into());
-                }
-                #[cfg(unix)]
-                stream.set_read_timeout(Some(left))?;
-            }
-            match lines.fill(&mut stream) {
-                Ok(0) => return Err(fail(format!("Facade at {at} closed before it responded"))),
-                Ok(_) => {}
-                Err(err) => return Err(fail(format!("Facade at {at} did not respond: {err}"))),
-            }
-        };
+        let (lines, response) = read_hello_response(&mut stream, socket, until)?;
         if jsonrpc::read(&response)
             != (Message::Response {
                 id: b"1",
@@ -169,6 +166,11 @@ impl OpeningLink {
                     "the daemon changed while the relay was saying hello",
                 ));
             }
+        }
+        if let Some((framework, holder)) = installation
+            && startup::daemon_lock(framework).as_ref() != Some(&holder)
+        {
+            return Err(installation_changed());
         }
         #[cfg(unix)]
         if until.is_some() {
@@ -216,6 +218,41 @@ impl OpeningLink {
     }
 }
 
+fn read_hello_response(
+    stream: &mut OpeningStream,
+    socket: &Path,
+    until: Option<Instant>,
+) -> io::Result<(Lines, Vec<u8>)> {
+    let at = socket.display();
+    let mut lines = Lines::default();
+    loop {
+        if let Some(line) = lines.next_line() {
+            return Ok((lines, line));
+        }
+        if let Some(until) = until {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            #[cfg(unix)]
+            stream.set_read_timeout(Some(left))?;
+        }
+        match lines.fill(stream) {
+            Ok(0) => {
+                return Err(io::Error::other(format!(
+                    "Facade at {at} closed before it responded"
+                )));
+            }
+            Ok(_) => {}
+            Err(err) => {
+                return Err(io::Error::other(format!(
+                    "Facade at {at} did not respond: {err}"
+                )));
+            }
+        }
+    }
+}
+
 impl DaemonLink {
     /// Responds to the daemon's `closing`.
     pub(crate) fn respond_to_closing(&mut self) -> io::Result<()> {
@@ -223,18 +260,48 @@ impl DaemonLink {
     }
 }
 
-/// Runs the background entry from the relay's own folder, returning its lock ticket.
-pub(crate) fn start_facade() -> io::Result<Option<Ticket>> {
-    let program = std::env::current_exe()
-        .map_err(|err| io::Error::other(format!("cannot find facade-mcp's own folder: {err}")))?
-        .with_file_name(if cfg!(windows) {
-            "facade.exe"
-        } else {
-            "facade"
-        });
-    let mut command = Command::new(&program);
+fn installation_changed() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::ConnectionAborted,
+        "the daemon at the socket does not hold this installation's lock",
+    )
+}
+
+pub(crate) struct StartReport {
+    pub(crate) ticket: Option<Ticket>,
+    pub(crate) socket: Option<std::path::PathBuf>,
+}
+
+/// The Shell launcher beside this relay.
+pub(crate) fn facade_program() -> io::Result<PathBuf> {
+    std::env::current_exe()
+        .map_err(|err| io::Error::other(format!("cannot find facade-mcp's own folder: {err}")))
+        .map(|program| {
+            program.with_file_name(if cfg!(windows) {
+                "facade.exe"
+            } else {
+                "facade"
+            })
+        })
+}
+
+/// Runs the background entry from the relay's own folder and reads its startup report.
+pub(crate) fn start_facade(
+    program: &Path,
+    home: &Path,
+    installed: bool,
+) -> io::Result<StartReport> {
+    let mut command = Command::new(program);
     #[cfg(windows)]
     crate::windows::no_window(&mut command);
+    if home.is_absolute() {
+        command.env("FACADE_HOME", home);
+    }
+    if installed {
+        command.env("FACADE_STARTUP_SELECT_HOME", "1");
+    } else {
+        command.env_remove("FACADE_STARTUP_SELECT_HOME");
+    }
     let mut child = command
         .args(["daemon", "--detach"])
         .env("FACADE_STARTUP_REPORT", "1")
@@ -264,13 +331,34 @@ pub(crate) fn start_facade() -> io::Result<Option<Ticket>> {
             program.display()
         )));
     }
-    for line in stdout
-        .lines()
-        .filter(|line| !line.starts_with("facade-startup-locked "))
-    {
+    for line in stdout.lines().filter(|line| {
+        !line.starts_with("facade-startup-locked ") && !line.starts_with(HOME_KEY_REPORT)
+    }) {
         eprintln!("{line}");
     }
-    Ok(Ticket::from_stdout(&stdout))
+    let key = installed
+        .then(|| {
+            stdout
+                .lines()
+                .find_map(|line| line.strip_prefix(HOME_KEY_REPORT))
+        })
+        .flatten();
+    let socket = key
+        .map(|key| {
+            if key.len() != 10
+                || !key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(io::Error::other("invalid Facade startup home key"));
+            }
+            Ok(crate::socket::socket_for_key(key))
+        })
+        .transpose()?;
+    Ok(StartReport {
+        ticket: Ticket::from_stdout(&stdout),
+        socket,
+    })
 }
 
 #[cfg(unix)]
