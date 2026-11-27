@@ -116,8 +116,9 @@ wake it when needed.
   the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
   screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
   and prints one receipt.
-- In every terminal app, a CLI that tracks the mouse gets the wheel and clicks as when it runs alone, and handles its
-  own selection and copying. To select with the terminal app, hold its own selection key, such as Fn in macOS Terminal.
+- In every terminal app, a CLI that tracks the mouse gets the wheel, clicks and drags as when it runs alone, so its own
+  selection and copying work where it has them. To select with the terminal app, hold its own selection key, such as Fn
+  in macOS Terminal.
 - For a CLI that leaves the mouse alone, macOS Terminal, VS Code and the Facade Code editor on macOS and Windows, and
   Windows terminals keep their own selection, copying and right click. The wheel browses the CLI's scrollback without
   leaving the agent's screen. Scrolling back down or typing returns to the live screen.
