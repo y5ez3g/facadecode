@@ -189,6 +189,11 @@ impl SessionHook {
             let mut shell = shell_command(&command);
             #[cfg(windows)]
             let mut shell = match self.stand_in {
+                StandIn::Claude => {
+                    let mut shell = std::process::Command::new(facade_scenarios::shell());
+                    shell.arg("-c").arg(command);
+                    shell
+                }
                 StandIn::Codex => {
                     let mut shell = std::process::Command::new(facade_scenarios::powershell());
                     shell.args(["-NoProfile", "-Command", command]);
@@ -1175,11 +1180,12 @@ fn shell_command(command: &str) -> std::process::Command {
     }
 }
 
-/// The CLI a copy of the test CLI stands for on Windows, by its name.
+/// The CLI the fixture stands for on Windows, by its name or explicit look.
 #[cfg(windows)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StandIn {
     None,
+    Claude,
     Codex,
     Muse,
     Agy,
@@ -1205,7 +1211,7 @@ impl StandIn {
             StandIn::Codex => codex_session_hooks(arguments),
             StandIn::Muse => muse_session_hooks(arguments),
             StandIn::Agy => agy_title_command(arguments),
-            StandIn::None => None,
+            StandIn::Claude | StandIn::None => None,
         }
     }
 }
@@ -1731,9 +1737,14 @@ fn run() -> anyhow::Result<()> {
         .skip(1)
         .map(|word| word.to_string_lossy().into_owned())
         .collect();
-    #[cfg(windows)]
-    let stand_in = StandIn::of(&std::env::current_exe()?);
     let claude = std::env::var("FAKECLI_LOOK").as_deref() == Ok("claude");
+    #[cfg(windows)]
+    let stand_in = if claude {
+        // Claude receives POSIX-quoted hook commands on Windows too.
+        StandIn::Claude
+    } else {
+        StandIn::of(&std::env::current_exe()?)
+    };
     let native = std::env::var("FAKECLI_LOOK")
         .ok()
         .and_then(|look| Native::of(&look));
