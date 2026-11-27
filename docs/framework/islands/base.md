@@ -136,6 +136,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `boot_time`, `signal_number(name)`, `fork_lock()`. Unix only: process groups
   (`group_members`, `signal_group`), `reap_child`, `peer_pid(socket)`; Windows only: `WaitPacket`,
   and `AsHandle` and `exit` on `ProcessObservation`.
+  On macOS, an `EPERM` from a verified group signal can mean the group has already exited.
+  `signal_group` confirms the leader's identity and exit state, requires it in the kernel's group
+  listing and checks the exit of each remaining member. Inconclusive evidence preserves the
+  original signal error.
 - `terminal`: `PtyMaster`, the side of a terminal Facade holds (a PTY master on Unix; on Windows a
   pseudo console's input, output and signal pipe ends and the CLI's job); `PtyIo`, how the daemon
   reads and writes one, with `stop_reading` and `let_go_before_stop`. A caller can ask `write` for the
