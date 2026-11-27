@@ -11,6 +11,7 @@ use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::ProcessState;
 use facade_base::{system, unix_process};
 use serde_json::{Value, json};
+use tokio::sync::watch;
 
 use crate::agent::{AgentHandle, ToolsStage};
 use crate::delivery::missing_reply_inbox;
@@ -42,6 +43,8 @@ struct CurrentActor {
     handle: AgentHandle,
     info: ManagedAgent,
 }
+
+type VerifiedRelayRun = watch::Sender<Option<(AgentHandle, u64)>>;
 
 impl BoundActor {
     fn managed(run: RunIdentity, machine_id: &str) -> Self {
@@ -131,7 +134,8 @@ impl Daemon {
                 .windows(2)
                 .find_map(|pair| (pair[0] == "--guest").then(|| pair[1].clone())),
         });
-        let relay = Arc::new(self.relay(hello, evidence));
+        let (verified_run, mut run) = watch::channel(None);
+        let relay = Arc::new(self.relay(hello, evidence, verified_run));
         if relay.reconnect() {
             let relay = relay.clone();
             tokio::spawn(async move {
@@ -148,20 +152,41 @@ impl Daemon {
             answer: json!({ "relay": mcp::RELAY_CONTRACT, "request_context": true }),
             lines: Arc::new(lines),
             link,
+            run_ended: Box::pin(async move {
+                let verified = run
+                    .wait_for(Option::is_some)
+                    .await
+                    .ok()
+                    .and_then(|run| run.clone());
+                if let Some((handle, number)) = verified {
+                    run_ended(&handle, number).await;
+                } else {
+                    std::future::pending().await
+                }
+            }),
         })
     }
 
-    fn relay(self: &Arc<Self>, hello: RelayHelloParams, evidence: Arc<RelayEvidence>) -> Relay {
+    fn relay(
+        self: &Arc<Self>,
+        hello: RelayHelloParams,
+        evidence: Arc<RelayEvidence>,
+        verified_run: VerifiedRelayRun,
+    ) -> Relay {
         let bound: Arc<OnceLock<BoundActor>> = Arc::new(OnceLock::new());
         let (pid, birth) = (evidence.process.pid, evidence.process.birth.clone());
         let authenticate: mcp::verified::Authenticate = {
             let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            let verified_run = verified_run.clone();
             Box::new(
                 move |credential: Option<&str>, meta: Option<&Value>, app: Option<&str>| {
                     let (daemon, evidence, bound) =
                         (daemon.clone(), evidence.clone(), bound.clone());
+                    let verified_run = verified_run.clone();
                     Box::pin(async move {
-                        let run = daemon.relay_run(&evidence, credential, meta).await?;
+                        let run = daemon
+                            .relay_run(&evidence, credential, meta, &verified_run)
+                            .await?;
                         let actor = match run {
                             Some(run) => BoundActor::managed(run, &daemon.machine_id),
                             None => {
@@ -313,10 +338,15 @@ impl Daemon {
         let managed_instructions: mcp::verified::ManagedInstructions = {
             let daemon = self.clone();
             let evidence = evidence.clone();
+            let verified_run = verified_run.clone();
             Box::new(move |credential: Option<&str>| {
                 let (daemon, evidence) = (daemon.clone(), evidence.clone());
+                let verified_run = verified_run.clone();
                 Box::pin(async move {
-                    let Some(run) = daemon.relay_run(&evidence, credential, None).await? else {
+                    let Some(run) = daemon
+                        .relay_run(&evidence, credential, None, &verified_run)
+                        .await?
+                    else {
                         return Ok(Initialization {
                             instructions: None,
                             acquire: None,
@@ -350,8 +380,12 @@ impl Daemon {
             let daemon = self.clone();
             Box::new(move |credential: Option<&str>, event| {
                 let (daemon, evidence) = (daemon.clone(), evidence.clone());
+                let verified_run = verified_run.clone();
                 Box::pin(async move {
-                    let Some(run) = daemon.relay_run(&evidence, credential, None).await? else {
+                    let Some(run) = daemon
+                        .relay_run(&evidence, credential, None, &verified_run)
+                        .await?
+                    else {
                         return Ok(None);
                     };
                     let number = run.run;
@@ -526,12 +560,25 @@ impl Daemon {
         evidence: &RelayEvidence,
         credential: Option<&str>,
         meta: Option<&Value>,
+        verified_run: &VerifiedRelayRun,
     ) -> Result<Option<RunIdentity>, ErrorBody> {
         if self.guests.member_of(&evidence.process).is_some() {
             return Ok(None);
         }
         if let Some(credential) = credential {
-            return self.runs.verify_credential(credential).await;
+            let run = self.runs.verify_credential(credential).await?;
+            if let Some(run) = &run
+                && let Some(handle) = self.get_agent(&run.agent_id)
+            {
+                verified_run.send_if_modified(|bound| {
+                    if bound.is_some() {
+                        return false;
+                    }
+                    *bound = Some((handle, run.run));
+                    true
+                });
+            }
+            return Ok(run);
         }
         blocking_in_place(|| self.legacy_relay_run(evidence, meta))
     }

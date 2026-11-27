@@ -181,6 +181,9 @@ pub(crate) trait Service: Send + Sync + 'static {
 
     /// Counts a new connection, or None while the daemon decides to exit.
     fn work(&self) -> Option<Self::Work>;
+
+    /// Updates connection work when its verified credential's only run has ended.
+    fn relay_run_ended(&self, _work: &mut Self::Work) {}
 }
 
 pub(crate) type RelayResponse = Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send>>;
@@ -189,6 +192,7 @@ pub(crate) struct RelayHandshake {
     pub(crate) answer: Value,
     pub(crate) lines: Arc<dyn RelayLines>,
     pub(crate) link: Arc<RelayLink>,
+    pub(crate) run_ended: Pin<Box<dyn Future<Output = ()> + Send>>,
 }
 
 /// What answers one relay's MCP lines.

@@ -925,6 +925,9 @@ lines to the person's clients. Base owns the shared `framework/clean-end` note.
 - `begin(Work)` counts the work until its guard drops. The idle decision uses the same lock to
   exclude new work. After 30 idle seconds it asks the server to pause acceptance, informs compatible
   machines of the idle exit, and waits for screen writers and exit commits before removing the socket.
+  A relay verified by a private run credential stops counting as activity when that run ends.
+  The daemon still waits for its connection to close before it exits. This lets the idle interval
+  run while Oh My Pi's shared MCP host closes an ended session's relay.
   A long-lived machine watch or foreground connection counts while active. Takeover settlement
   waits for the existing calls and run changes it can complete.
 - `take_over(UpgradeArgs, activity)` checks and stages the build. It freezes MCP effects and waits

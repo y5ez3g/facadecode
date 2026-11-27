@@ -53,6 +53,8 @@ const WRITERS_INTERVAL: Duration = Duration::from_millis(20);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Work {
     Connection,
+    /// A transport whose verified credential can only act for a run that has ended.
+    EndedRunRelay,
     /// Active machine work or a foreground machine connection.
     MachineSession,
     Start,
@@ -66,8 +68,9 @@ pub(crate) enum Work {
 }
 
 impl Work {
-    const ALL: [Work; 8] = [
+    const ALL: [Work; 9] = [
         Work::Connection,
+        Work::EndedRunRelay,
         Work::MachineSession,
         Work::Start,
         Work::Handover,
@@ -77,10 +80,15 @@ impl Work {
         Work::ExitCommit,
     ];
 
+    fn counts_as_activity(self) -> bool {
+        self != Work::EndedRunRelay
+    }
+
     /// What the daemon is doing while this work lasts, as its log says why it stays.
     fn doing(self) -> &'static str {
         match self {
             Work::Connection => "a client is connected",
+            Work::EndedRunRelay => "an ended run's relay is still connected",
             Work::MachineSession => "a machine session is active",
             Work::Start => "an agent is starting",
             Work::Handover => "runs are being handed to the keeper",
@@ -124,12 +132,29 @@ pub(crate) struct WorkGuard {
     work: Work,
 }
 
+impl WorkGuard {
+    /// Counts the relay for transport shutdown, without restarting the idle interval when it closes.
+    pub(crate) fn relay_run_ended(&mut self) {
+        debug_assert_eq!(self.work, Work::Connection);
+        {
+            let mut counts = self.lifecycle.counts.lock().unwrap();
+            counts.under_way[self.work as usize] -= 1;
+            self.work = Work::EndedRunRelay;
+            counts.under_way[self.work as usize] += 1;
+            counts.last_work_end = Some(Instant::now());
+        }
+        self.lifecycle.note_change();
+    }
+}
+
 impl Drop for WorkGuard {
     fn drop(&mut self) {
         {
             let mut counts = self.lifecycle.counts.lock().unwrap();
             counts.under_way[self.work as usize] -= 1;
-            counts.last_work_end = Some(Instant::now());
+            if self.work.counts_as_activity() {
+                counts.last_work_end = Some(Instant::now());
+            }
         }
         self.lifecycle.changed.notify_waiters();
     }
@@ -180,8 +205,11 @@ impl Lifecycle {
 
     /// Waits up to `timeout` for every client connection to end.
     pub(crate) async fn connections_closed(&self, timeout: Duration) {
-        self.wait(timeout, || self.count(Work::Connection) == 0)
-            .await;
+        self.wait(timeout, || {
+            let counts = self.counts.lock().unwrap();
+            counts.of(Work::Connection) == 0 && counts.of(Work::EndedRunRelay) == 0
+        })
+        .await;
     }
 
     /// Waits up to `timeout` until `done`, which is asked again at each change of the work.
@@ -205,7 +233,10 @@ impl Lifecycle {
     /// The first work under way, by the order of [`Work::ALL`].
     fn first_under_way(&self) -> Option<Work> {
         let counts = self.counts.lock().unwrap();
-        Work::ALL.into_iter().find(|work| counts.of(*work) > 0)
+        Work::ALL
+            .into_iter()
+            .filter(|work| work.counts_as_activity())
+            .find(|work| counts.of(*work) > 0)
     }
 
     pub(crate) fn delay_exit(&self, detail: &str) {
@@ -279,9 +310,12 @@ impl Lifecycle {
                 continue;
             }
             // A guard may start and drop between checks. Its end restarts the idle interval too.
-            {
+            let relay_still_closing = {
                 let mut counts = self.counts.lock().unwrap();
-                if Work::ALL.iter().any(|work| counts.of(*work) > 0) {
+                if Work::ALL
+                    .iter()
+                    .any(|work| work.counts_as_activity() && counts.of(*work) > 0)
+                {
                     idle_since = None;
                     continue;
                 }
@@ -291,7 +325,13 @@ impl Lifecycle {
                     idle_since = Some(ended);
                     continue;
                 }
-                counts.exiting = true;
+                let relay_still_closing = counts.of(Work::EndedRunRelay) > 0;
+                counts.exiting = !relay_still_closing;
+                relay_still_closing
+            };
+            if relay_still_closing {
+                changed.await;
+                continue;
             }
             crate::pause_for_test("after-idle-decision");
             log(
@@ -388,5 +428,24 @@ mod tests {
             "the wait missed the call's end and waited {:?}",
             waiting.elapsed()
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_ended_runs_relay_can_close_during_the_idle_interval() {
+        let lifecycle = Lifecycle::new();
+        let mut managed = lifecycle.begin(Work::Connection).unwrap();
+        let guest = lifecycle.begin(Work::Connection).unwrap();
+        managed.relay_run_ended();
+        assert_eq!(lifecycle.first_under_way(), Some(Work::Connection));
+        let guest_ended = Instant::now();
+        drop(guest);
+        assert_eq!(lifecycle.first_under_way(), None);
+        assert_eq!(lifecycle.count(Work::EndedRunRelay), 1);
+
+        tokio::time::advance(Duration::from_secs(15)).await;
+        drop(managed);
+        let counts = lifecycle.counts.lock().unwrap();
+        assert_eq!(counts.of(Work::EndedRunRelay), 0);
+        assert_eq!(counts.last_work_end, Some(guest_ended));
     }
 }

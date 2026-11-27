@@ -265,6 +265,10 @@ impl server::Service for Daemon {
     fn work(&self) -> Option<WorkGuard> {
         self.lifecycle.begin(Work::Connection)
     }
+
+    fn relay_run_ended(&self, work: &mut WorkGuard) {
+        work.relay_run_ended();
+    }
 }
 
 impl Daemon {
