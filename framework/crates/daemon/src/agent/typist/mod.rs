@@ -766,6 +766,27 @@ impl DraftCheck {
             && (!saw_marker || self.is_same(reading))
     }
 
+    /// A read can end while the CLI is printing the same paste marker in an unsynchronized redraw.
+    fn redraws_marker_prefix(&self, rule: &PasteRule, reading: &BoxReading) -> bool {
+        let Some((_, Some(marker))) = &self.stable else {
+            return false;
+        };
+        let Some((part, (end, 0))) = reading.draft.as_deref().zip(reading.draft_cursor) else {
+            return false;
+        };
+        !self.edited
+            && !self.recovered
+            && reading.info.state == InputState::Draft
+            && reading.draft_hidden().is_none()
+            && !part.is_empty()
+            && end < marker.len()
+            && marker
+                .get(..end)
+                .is_some_and(|prefix| prefix.trim_end() == part)
+            && facade_rules::shows_paste_placeholder(rule, marker, &self.paste.text)
+            && !facade_rules::is_paste_placeholder(rule, part)
+    }
+
     fn sees_paste_end(&self, rule: &PasteRule, reading: &BoxReading) -> bool {
         reading.paste_drawing.is_some()
             && reading.draft.as_deref().is_some_and(|shown| {
@@ -2405,7 +2426,7 @@ impl Typist {
         };
         let Some(left) = left else {
             // In the middle of a frame the draft it showed counts on.
-            if !reading.is_unread() {
+            if !reading.is_unread() && !draft.redraws_marker_prefix(rule, reading) {
                 draft.stable = None;
             }
             self.batch = Some(batch);
@@ -4372,6 +4393,54 @@ mod tests {
             terminal.step(&mut typist, shown + Duration::from_millis(150), ANY);
             assert_eq!(terminal.write_all(), b"\r", "{other:?}");
         }
+    }
+
+    #[test]
+    fn a_split_redraw_of_the_same_paste_marker_keeps_its_settle_time() {
+        let post = test_messages();
+        let mut terminal = Terminal::default();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(30);
+        let (mut typist, number, _) = pasted(
+            &post,
+            &mut terminal,
+            "message\n5\nof five",
+            (start, deadline),
+        );
+        let rule = facade_rules::find("fake").unwrap().unwrap();
+        let mut screen = facade_screen::Screen::new(120, 30, 0);
+        let marker = "[Pasted text #5 +2 lines]";
+        let (prefix, suffix) = marker.split_at(21);
+        let redraw = format!("\x1b[H\x1b[J\x1b[28;1H❯ {prefix}");
+        let finish = format!("{suffix}\x1b[30;1H  Enter to send\x1b[28;28H");
+
+        screen.feed(redraw.as_bytes());
+        screen.feed(finish.as_bytes());
+        terminal.reading = facade_rules::read_box(&rule.input, &screen.view());
+        assert_eq!(terminal.reading.draft.as_deref(), Some(marker));
+        let shown = start + Duration::from_millis(200);
+        terminal.step(&mut typist, shown, ANY);
+
+        for ms in [20, 40, 60, 80] {
+            screen.feed(redraw.as_bytes());
+            terminal.reading = facade_rules::read_box(&rule.input, &screen.view());
+            assert_eq!(terminal.reading.draft.as_deref(), Some(prefix));
+            assert_eq!(terminal.reading.draft_cursor, Some((prefix.len(), 0)));
+            let at = shown + Duration::from_millis(ms);
+            terminal.step(&mut typist, at, ANY);
+            assert!(terminal.write_all().is_empty());
+
+            screen.feed(finish.as_bytes());
+            terminal.reading = facade_rules::read_box(&rule.input, &screen.view());
+            terminal.step(&mut typist, at + Duration::from_millis(1), ANY);
+            if ms < 80 {
+                assert!(terminal.write_all().is_empty());
+            }
+        }
+        assert_eq!(terminal.write_all(), b"\r");
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, shown + Duration::from_millis(90), ANY);
+        assert_eq!(became(&post, number), TYPED);
     }
 
     /// A deadline in the middle of a frame waits for the frame, which shows whether the message is

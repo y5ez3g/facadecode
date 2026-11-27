@@ -488,7 +488,8 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     tail when a changed last glyph needs a following space or line break. Recovery matches
     the text or paste placeholder. An external edit ends automatic submission and cleanup authority.
     A person's Enter can still prove that they submitted the whole message. Unread frames keep
-    settle time running. A readable change restarts the wait.
+    settle time running. A partial redraw ending inside the same live paste marker also keeps
+    that time. Submission still requires the whole marker. A readable change restarts the wait.
     Codex queues an ordinary message with Tab while Working. When `Just done` shows an unseen
     completion, the submission key follows the current work evidence. The start prompt and recovered
     pastes use Enter.
