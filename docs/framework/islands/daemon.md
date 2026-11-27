@@ -504,9 +504,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     is considered. A disconnected peer is read through EOF, with write boundaries retained until
     the receipt has been settled. A read error stops input and the pending receipt fails. The actor
     waits through an unfinished update. A redraw of this draft or its same-numbered paste marker
-    invalidates the pending empty frame. A person's Enter applies the same finite-prefix check to
-    the whole-message evidence described under the actor. Evidence established before an edit
-    remains available.
+    invalidates the pending empty frame. When a CLI shows its working footer, Rules can recognize
+    its empty editor for an already issued submission. That editor stays unavailable for automatic
+    input. A person's Enter applies the same finite-prefix check to the whole-message evidence
+    described under the actor. Evidence established before an edit remains available.
   - Repeating the submission key requires the current draft to have been drawn after that key's
     write boundary and still belong to the typist. The CLI rule can allow up to three submission keys
     at its retry interval. A fully readable changed draft with an established erase range can be

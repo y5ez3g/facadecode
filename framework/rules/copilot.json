@@ -17,6 +17,7 @@
 		"rail": {
 			"fallback_prompt": "❯ ",
 			"footer": "^ *(?:← open sidebar · )?Interactive · (?:Manual Approval|Assisted Permissions|Allow All)(?: · | {2,}| *$)",
+			"working_footer": "^ *[●○◉] Working(?: · [0-9]+ B)? ctrl\\+c interrupt(?: |$)",
 			"live_notice": {
 				"text": "Please use /login to sign in to use Copilot",
 				"wait_kind": "auth",

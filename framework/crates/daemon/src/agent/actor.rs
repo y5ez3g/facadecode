@@ -272,7 +272,7 @@ struct DeliveryFrames {
 impl DeliveryFrames {
     fn observe(&mut self, reading: BoxReading, position: u64, before_edit: bool, typist: &Typist) {
         if self.confirmed_empty_at.is_none() {
-            match typist.recall(reading.clone()).info.state {
+            match typist.delivery_frame_state(&typist.recall(reading.clone())) {
                 InputState::Usable if typist.accepts_new_empty_evidence() => {
                     self.pending_empty_at.get_or_insert(position);
                 }
@@ -1834,7 +1834,8 @@ impl Actor {
     fn complete_delivery_frame(&self) -> bool {
         let reading = self.read_input_box(self.untouched_input);
         self.screen().screen().output_frame_complete()
-            && (self.typist.interaction_after_write() && reading.info.state == InputState::Unknown
+            && (self.typist.interaction_after_write()
+                && self.typist.delivery_frame_state(&reading) == InputState::Unknown
                 || self.typist.accepts_empty_evidence(reading))
     }
 

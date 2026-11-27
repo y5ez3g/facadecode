@@ -518,6 +518,8 @@ pub(crate) struct EditorRail {
     pub(crate) fallback_prompt: String,
     pub(crate) footer: Pattern,
     #[serde(default)]
+    pub(crate) working_footer: Option<Pattern>,
+    #[serde(default)]
     pub(crate) live_notice: Option<EditorLiveNotice>,
 }
 

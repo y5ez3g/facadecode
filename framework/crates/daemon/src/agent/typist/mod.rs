@@ -1571,8 +1571,8 @@ impl Typist {
             .and_then(Batch::deadline)
     }
 
-    /// A plain draft can still be our text as drawn by the CLI. A paste marker identifies it only
-    /// when its size and identity match this paste.
+    /// A plain draft or text under a working footer can still be our text as drawn by the CLI.
+    /// A paste marker identifies it only when its size and identity match this paste.
     pub(super) fn redraws_delivery_draft(&self, reading: &BoxReading) -> bool {
         self.paste_rule()
             .zip(self.batch.as_ref())
@@ -1587,11 +1587,25 @@ impl Typist {
             })
     }
 
+    /// A working composer supplies evidence only for a submission the typist already issued.
+    pub(super) fn delivery_frame_state(&self, reading: &BoxReading) -> InputState {
+        if let Some(state) = reading.working_editor
+            && self
+                .batch
+                .as_ref()
+                .is_some_and(|batch| matches!(batch.phase, DeliveryPhase::Submitting))
+        {
+            state
+        } else {
+            reading.info.state
+        }
+    }
+
     /// After an observed empty frame, a different paste marker or a later menu does not put this
     /// paste back in the box. An unread or clipped draft cannot establish that distinction.
     pub(super) fn accepts_empty_evidence(&self, reading: BoxReading) -> bool {
         let reading = self.recall(reading);
-        match reading.info.state {
+        match self.delivery_frame_state(&reading) {
             InputState::Usable | InputState::Interaction => true,
             InputState::Draft => !self.redraws_delivery_draft(&reading),
             InputState::Unknown | InputState::Unrecognized => false,

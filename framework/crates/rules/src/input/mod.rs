@@ -72,6 +72,8 @@ pub struct BoxReading {
     pub draft_cursor: Option<(usize, usize)>,
     /// The reason given by a recognized interaction, when the rule knows it.
     pub wait_kind: Option<WaitKind>,
+    /// The composer under a working footer, as evidence for an issued submission.
+    pub working_editor: Option<InputState>,
     /// Visible text ending at the caret of a full viewport that has no scroll markers.
     /// Only a paste just made into an observed empty input can use it for confirmation.
     pub paste_tail: Option<String>,
@@ -99,6 +101,7 @@ impl BoxReading {
             draft,
             draft_cursor: None,
             wait_kind: None,
+            working_editor: None,
             paste_tail: None,
             line: None,
             paste_drawing: None,
@@ -322,6 +325,7 @@ fn read_box_in_frame(
         draft,
         draft_start,
         wait_kind,
+        working_editor,
         paste_tail,
         line,
         unsure,
@@ -378,6 +382,7 @@ fn read_box_in_frame(
             draft,
             draft_cursor,
             wait_kind,
+            working_editor,
             paste_tail,
             line,
             paste_drawing,
@@ -397,6 +402,7 @@ struct Reading {
     /// Column and row of the first cell of the draft.
     draft_start: Option<(usize, usize)>,
     wait_kind: Option<WaitKind>,
+    working_editor: Option<InputState>,
     paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
@@ -573,6 +579,7 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         draft: None,
         draft_start: None,
         wait_kind: None,
+        working_editor: None,
         paste_tail: None,
         line: None,
         unsure: false,
@@ -1586,21 +1593,25 @@ impl<'a> Screen<'a> {
             return missing();
         }
 
-        // The rail can also enclose shell input, so both layouts need the native mode footer.
-        let interactive = self.lines.get(lower + 1).is_some_and(|footer| {
-            rail.footer.is_match(footer)
-                && !footer.split(" · ").any(|segment| {
-                    matches!(
-                        segment.trim(),
-                        "Shell"
-                            | "Plan"
-                            | "Autopilot"
-                            | "Autopilot (limited)"
-                            | "esc exit shell mode"
-                    )
-                })
-        });
-        if !interactive {
+        // The rail can also enclose shell input, so both layouts need a recognized mode footer.
+        let Some(footer) = self.lines.get(lower + 1) else {
+            return missing();
+        };
+        let interactive = rail.footer.is_match(footer);
+        if !interactive
+            && rail
+                .working_footer
+                .as_ref()
+                .is_none_or(|pattern| !pattern.is_match(footer))
+        {
+            return missing();
+        }
+        if footer.split(" · ").any(|segment| {
+            matches!(
+                segment.trim(),
+                "Shell" | "Plan" | "Autopilot" | "Autopilot (limited)" | "esc exit shell mode"
+            )
+        }) {
             return missing();
         }
 
@@ -1615,11 +1626,24 @@ impl<'a> Screen<'a> {
             lines.push(&cells[from..to]);
         }
         let place = format!("the editor at {}", row_span(first + 1, lower));
-        if let Some(notice) = rail
+        let notice = rail
             .live_notice
             .as_ref()
-            .filter(|notice| self.editor_live_notice(notice, upper))
-        {
+            .filter(|notice| self.editor_live_notice(notice, upper));
+        if !interactive {
+            let mut reading = missing();
+            if reading.state == InputState::Unknown && notice.is_none() {
+                reading.working_editor = if lines.iter().any(|line| !all_space(line)) {
+                    Some(InputState::Draft)
+                } else if lines.len() == 1 && column == start {
+                    Some(InputState::Usable)
+                } else {
+                    None
+                };
+            }
+            return reading;
+        }
+        if let Some(notice) = notice {
             return Reading {
                 wait_kind: notice.wait_kind,
                 ..reading(

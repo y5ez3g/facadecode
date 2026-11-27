@@ -298,7 +298,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     Oh My Pi draws what it predicts the person types next from the cursor on, in another color than
     the text before it. The reading leaves that out of the draft.
   - Copilot draws a colored rail or two plain full-width rules around its input. Both layouts
-    require a visible hardware caret and the `Interactive` footer below the editor.
+    require a visible hardware caret and the `Interactive` footer below the editor for automatic
+    input. With a recognized working footer, the complete editor can supply submission evidence.
+    An empty row with the caret at its start shows the composer is clear. Visible text can
+    indicate that the draft returned.
     The plain frame additionally has a `❯ ` prompt. A full viewport uses the shared editor
     guard. Its compact `[Paste #N - M lines]` marker supplies the paste's line count.
     The full styled sign-in notice two rows above a recognized editor reads `interaction`
