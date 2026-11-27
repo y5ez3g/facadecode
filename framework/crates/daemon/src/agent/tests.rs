@@ -3887,6 +3887,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
                 current: facade_rules::read_box(&rule.input, &screen.view()),
                 native_wait: None,
                 waits_for_frame: false,
+                draft_after_menu: false,
                 can_probe: true,
                 submitted: None,
                 after_write: false,

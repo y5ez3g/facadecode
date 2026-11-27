@@ -67,6 +67,8 @@ pub(crate) struct InputObservation<'a> {
     pub(crate) native_wait: Option<WaitKind>,
     /// A completed ordinary frame is still needed before automatic delivery can resume.
     pub(crate) waits_for_frame: bool,
+    /// The menu was redrawn away and the ordinary composer now holds a draft.
+    pub(crate) draft_after_menu: bool,
     /// The current frame includes output read after the terminal acknowledged its last write.
     pub(crate) after_write: bool,
     /// When a complete empty frame followed the delivery write and preceded any subsequent edit.
@@ -2150,6 +2152,7 @@ impl Typist {
         let info = self.recall(seen.current.clone()).info;
         match (seen.native_wait, info.state) {
             (Some(_), _) | (_, InputState::Interaction) => DeliveryFailure::InputInteraction,
+            (_, InputState::Draft) if seen.draft_after_menu => DeliveryFailure::InputDraft,
             (_, _) if seen.waits_for_frame => DeliveryFailure::InputUnknown,
             (_, InputState::Usable) if may_write => DeliveryFailure::Timeout,
             (_, InputState::Usable | InputState::Draft) => DeliveryFailure::InputDraft,
@@ -3152,6 +3155,7 @@ mod tests {
                     current: reading.clone(),
                     native_wait: None,
                     waits_for_frame: false,
+                    draft_after_menu: false,
                     can_probe: true,
                     submitted: submitted.map(|over| (over, observed_at)),
                     after_write: self.after_write,
@@ -6082,6 +6086,7 @@ mod tests {
                 current: input(InputState::Usable, None),
                 native_wait: None,
                 waits_for_frame: false,
+                draft_after_menu: false,
                 can_probe: true,
                 submitted: None,
                 after_write: true,

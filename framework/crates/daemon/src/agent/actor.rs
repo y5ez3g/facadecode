@@ -2416,6 +2416,9 @@ impl Actor {
             }
         }
         let waits_for_frame = self.input_gate.blocks_delivery() || frame_incomplete;
+        let fresh_menu_composer = !frame_incomplete
+            && self.input_gate.waits_for_menu_composer()
+            && self.input_gate.has_post_wait_composer();
         let can_probe = !held_first && !self.person.is_writing(now) && self.probe_frame_ready();
         let writes = if classifying {
             BoxWrites::AwaitingEscape
@@ -2480,6 +2483,7 @@ impl Actor {
             InputObservation {
                 after_write: !waits_for_frame
                     && self.delivery_frames.drawn.as_ref() == Some(&current),
+                draft_after_menu: fresh_menu_composer && current.info.state == InputState::Draft,
                 current,
                 native_wait,
                 waits_for_frame,
@@ -7626,6 +7630,63 @@ mod tests {
             actor.type_next();
             let keys = read_queued_probe_input(&mut actor, &mut cli).await;
             assert_eq!(keys, if hint { b" ".as_slice() } else { b"" });
+            assert_eq!(pending_delivery_bytes(&actor), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_draft_after_a_confirmed_menu_exit_keeps_its_delivery_reason() {
+        let border = "─".repeat(60);
+        for confirmed in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-draft-after-devin-menu");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "devin").await;
+            let menu_deadline = Instant::now() + Duration::from_millis(500);
+            let menu_delivery = queue_a_message(&mut actor, &messages, menu_deadline);
+            let menu = synchronized(
+                "\x1b[10;1H/ Type to search\x1b[23;1H↑↓ select · opt+p pin · ↵ confirm · opt+↵ this session only · esc cancel\x1b[10;3H",
+            );
+            read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+            tokio::time::pause();
+            tokio::time::advance(menu_deadline.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            tokio::time::resume();
+            assert!(matches!(
+                menu_delivery.borrow().as_ref(),
+                Some(Settled::Withdrawn(message)) if message.delivery.reason == Some(DeliveryFailure::InputInteraction)
+            ));
+            if confirmed {
+                let hint = synchronized(&format!(
+                    "\x1b[2J\x1b[9;1H{border}\r\n❭ \x1b[38;2;107;107;107mAsk Devin to build features\x1b[0m\r\n{border}\x1b[10;3H"
+                ));
+                read_output(&mut actor, &mut cli, hint.as_bytes()).await;
+                assert!(actor.input_gate.has_post_wait_composer());
+            }
+            let draft = synchronized(&format!(
+                "\x1b[2J\x1b[9;1H{border}\r\n❭ draft from the person\r\n{border}\x1b[10;24H"
+            ));
+            read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+            assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
+            assert!(actor.input_gate.blocks_delivery());
+
+            tokio::time::pause();
+            let deadline = Instant::now() + Duration::from_millis(500);
+            let settled = queue_a_message(&mut actor, &messages, deadline);
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), 0);
+            tokio::time::advance(deadline.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            tokio::time::resume();
+            let reason = if confirmed {
+                DeliveryFailure::InputDraft
+            } else {
+                DeliveryFailure::InputUnknown
+            };
+            assert!(matches!(
+                settled.borrow().as_ref(),
+                Some(Settled::Withdrawn(message)) if message.delivery.reason == Some(reason)
+            ));
+            assert_eq!(actor.terminal.queued(), 0);
             assert_eq!(pending_delivery_bytes(&actor), 0);
         }
     }
