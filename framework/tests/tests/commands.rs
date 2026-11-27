@@ -138,7 +138,9 @@ fn start_and_resume_answer_the_first_cli_color_queries() {
                 term.text()
             );
             assert!(
-                term.reports_mouse(),
+                wait_until(LOADED_TIMEOUT, || {
+                    term.output_count("\x1b[?1000h") > 0 && term.reports_mouse()
+                }),
                 "a foreground launch preserves the guest's mouse tracking request"
             );
         }
