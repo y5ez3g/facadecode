@@ -13,7 +13,10 @@
 		"lower": "^─+$",
 		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
 		"scrolls_unmarked": true,
-		"menus": [{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" }]
+		"menus": [
+			{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" },
+			{ "selected": "^ {2}Choose model$", "hint": { "pattern": "^ {2}↑↓ move · enter confirm · esc go back$", "within": 7 } }
+		]
 	},
 	"paste": {
 		"bracketed": true,

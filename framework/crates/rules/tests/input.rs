@@ -157,6 +157,28 @@ fn muse_screens_read_as_recorded() {
 }
 
 #[test]
+fn muse_reads_choose_model_until_the_composer_returns() {
+    let input = &find("muse").unwrap().unwrap().input;
+    let options = concat!(
+        "\x1b[?25l  Choose model\r\n\r\n",
+        "  muse-wonder-1.0\r\n⟩ muse-ember-1.0\r\n",
+        "  muse-spark-1.3\r\n  muse-spark-1.2\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(80, 24, 0);
+    screen.feed(options.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("  ↑↓ move · enter confirm · esc go back".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+
+    let border = "─".repeat(80);
+    screen.feed(format!("\x1b[2J\x1b[H{border}\r\n❯ \r\n{border}\x1b[2;3H\x1b[?25h").as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+}
+
+#[test]
 fn opencode_screens_read_as_recorded() {
     reads_as_recorded("opencode");
 }
