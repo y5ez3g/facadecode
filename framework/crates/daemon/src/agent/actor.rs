@@ -4715,6 +4715,7 @@ mod tests {
             Some(actor.terminal.output_position());
         let (report, last) = BLOCKED.split_at(BLOCKED.len() - 1);
         cli.write_output(report).unwrap();
+        actor.terminal.wait_for_queued_output(report.len()).await;
         issue_delivery(&mut actor).await;
         expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
         read_buffered_frames(&mut actor, report.len()).await;
@@ -6185,6 +6186,7 @@ mod tests {
         let (mut actor, mut cli, _) = pending_paste(&home).await;
         let frame = plain_claude_frame("", "");
         cli.write_output(frame.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(frame.len()).await;
         let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
         assert!(matches!(event, TerminalEvent::Read));
         actor.take_terminal(event);
@@ -6196,8 +6198,11 @@ mod tests {
                 .read_through
                 .is_some()
         );
+        let read = actor.terminal.output_position();
         cli.write_output(frame.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(frame.len()).await;
         issue_delivery(&mut actor).await;
+        assert_eq!(actor.terminal.output_position(), read);
         assert!(actor.terminal.written() > 0);
     }
 
@@ -7371,8 +7376,9 @@ mod tests {
         actor.take_terminal(event);
         assert_eq!(actor.terminal.queued(), 1);
 
-        cli.write_output(b"\x1b]7501;state=blocked:kind=question\x07")
-            .unwrap();
+        let question = b"\x1b]7501;state=blocked:kind=question\x07";
+        cli.write_output(question).unwrap();
+        actor.terminal.wait_for_queued_output(question.len()).await;
         assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"");
         assert!(actor.state.native_wait().is_some());
         assert!(
@@ -8046,6 +8052,8 @@ mod tests {
             assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
             assert_eq!(actor.terminal.queued(), 0);
             tokio::time::pause();
+            // The revoked offer schedules an immediate recheck before the timed reads.
+            actor.type_next();
             for _ in 0..2 {
                 if let Some(wake) = actor.typist_at {
                     tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
@@ -8053,6 +8061,10 @@ mod tests {
                 }
             }
             tokio::time::resume();
+            assert!(
+                !actor.typist.probing(),
+                "the restored input settles the probe"
+            );
 
             let settled = queue_a_message(
                 &mut actor,
@@ -8064,7 +8076,6 @@ mod tests {
             assert_eq!(pending_delivery_bytes(&actor), paste.len(), "split={split}");
             issue_delivery(&mut actor).await;
             expect_cli_input(&mut cli, paste);
-            assert!(!actor.typist.probing());
             assert!(settled.borrow().is_none());
         }
     }
