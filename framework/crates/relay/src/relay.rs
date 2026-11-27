@@ -1,7 +1,7 @@
 //! The relay's one loop: it waits for a line from the CLI or the daemon and passes
 //! it on. A request the daemon has not responded to is pending. When the daemon's connection
-//! ends, as when a newer Facade takes over, the relay connects again, gives the next daemon the
-//! pending requests, then the lines that came meanwhile. Where no one listens, it starts Facade
+//! ends, as when a newer Facade Code Framework takes over, the relay connects again, gives the next daemon the
+//! pending requests, then the lines that came meanwhile. Where no one listens, it starts Facade Code Framework
 //! once for each time it is disconnected.
 
 #[cfg(unix)]
@@ -206,7 +206,7 @@ impl Relay {
     }
 
     /// Connects once the wait is over, and gives the daemon the pending requests, then the held
-    /// lines. Where no one listens, it first starts Facade, once.
+    /// lines. Where no one listens, it first starts Facade Code Framework, once.
     fn connect_when_due(&mut self) {
         let Daemon::Disconnected {
             next_try,
@@ -247,7 +247,7 @@ impl Relay {
             }
         };
         if logged {
-            log("info", "connected to Facade");
+            log("info", "connected to Facade Code Framework");
         }
         self.hello.reconnect = true;
         self.reconnect_delay = MIN_RECONNECT_DELAY;
@@ -268,7 +268,7 @@ impl Relay {
         for pending in &self.pending {
             link.stream.write_all(&pending.line).map_err(|err| {
                 io::Error::other(format!(
-                    "Facade closed as it took the pending requests: {err}"
+                    "Facade Code Framework closed as it took the pending requests: {err}"
                 ))
             })?;
         }

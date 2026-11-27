@@ -11,7 +11,7 @@ import { withFileLock } from '../base/lock';
 import { facadeHome } from './paths';
 
 /**
- * A workspace's folder in the execution environment's Facade directory (ARCHITECTURE-3.1): keyed by the workspace's URI, so
+ * A workspace's folder in the execution environment's Facade Code Extension directory (ARCHITECTURE-3.1): keyed by the workspace's URI, so
  * every window of the same workspace shares it and finds its runs again after a reload. The key is the one the workspace kept
  * where it has one (ARCHITECTURE-2.2): a folder window that became a multi-root workspace keeps the folder's.
  */

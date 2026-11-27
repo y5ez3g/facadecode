@@ -21,15 +21,15 @@ const REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT
 
 /**
  * The program Git for Windows asks whether to try again to delete a file another program holds - a dialog, where a Git tool set one.
- * Without it Git asks no one, as no terminal is there, and fails as it does: no prompt is Facade's (WORKTREES-3.2, UX-1.1).
+ * Without it Git asks no one, as no terminal is there, and fails as it does: no prompt is Facade Code Extension's (WORKTREES-3.2, UX-1.1).
  */
 const PROMPT_VARIABLES = ['GIT_ASK_YESNO'];
 
-/** What Facade's Git reads its messages in, and how it takes the repository: answers in English, its optional locks not taken. */
+/** What Facade Code Extension's Git reads its messages in, and how it takes the repository: answers in English, its optional locks not taken. */
 const SET_VARIABLES: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' };
 
 /**
- * The environment Facade runs Git in: `env` without the variables that would point it at another repository or have it ask anyone, with
+ * The environment Facade Code Extension runs Git in: `env` without the variables that would point it at another repository or have it ask anyone, with
  * its own language and locks. Their names are compared whatever their case, as Windows compares them.
  */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -75,7 +75,7 @@ export class GitError extends Error {
 /**
  * The Git to run, as the editor's Git integration finds it (UX-4.2): the first `git.path` entry that is a file, else
  * `git` on the PATH; undefined where that is no Git. On macOS, `/usr/bin/git` without the Command Line Tools only offers
- * to install them, which is no setup prompt Facade may cause (WORKTREES-1.1, VERIFICATION J01).
+ * to install them, which is no setup prompt Facade Code Extension may cause (WORKTREES-1.1, VERIFICATION J01).
  */
 export async function gitExecutableOf(setting: unknown, isFile: (file: string) => boolean = isFileAt): Promise<string | undefined> {
 	const hints = (typeof setting === 'string' ? [setting] : Array.isArray(setting) ? setting : []).filter((hint): hint is string => typeof hint === 'string' && hint.trim() !== '');

@@ -1,6 +1,6 @@
 # Interaction and interface
 
-Group 6 covers controls for the Orchestrator-backed editor. Groups 1–5 retain the legacy implementation transition rules
+Group 6 covers controls for Facade Code Framework-backed editor. Groups 1–5 retain the legacy implementation transition rules
 and the existing native appearance and accessibility details where applicable.
 
 Layer 3. [Product](PRODUCT.md) prioritizes capability, familiarity and simplicity; [Rules](RULES.md) owns status/notification meaning.
@@ -55,7 +55,7 @@ success popup is introduced, and no exactly-once error-popup guarantee is requir
 
 **Commands use a verb, Title Case and an ellipsis when they ask for another choice; explanatory text uses sentence case.**
 
-Extension display name, activity-bar container and command category are `Facade Code`; a command's title agrees in
+Extension display name, activity-bar container and command category are `Facade Code Extension`; a command's title agrees in
 palette, menus and tooltips. Name objects as the person sees them,
 with window/environment context only when needed. Use “working location” when a plain folder is possible, “worktree” for
 a Git worktree. Never call submitted input “read,” a quiet CLI “done,” or a lost connection “exited.” CLI messages stay
@@ -68,7 +68,7 @@ person needs to tell agents apart. A failure says what did not happen and what t
 part failed.
 
 Edited English uses serial commas, direct imperative picker hints and concise status phrases, which may omit articles.
-Facade's terminal notices use objective prose without first-person narration or contractions; call the CLI's message
+Facade Code Extension's terminal notices use objective prose without first-person narration or contractions; call the CLI's message
 entry surface its terminal input. Keep failure reasons grammatical when inserted into a surrounding sentence, with
 no repeated failure prefix. Short fixed phrases fit their surface; a character budget never truncates a full title,
 path, dynamic diagnostic or message that the owning rule requires to remain available. Localized prose follows each
@@ -145,7 +145,7 @@ commands are bindable through normal Keyboard Shortcuts.
 **All human-facing strings ship in English and eleven translated languages; the specification and API remain English.**
 
 Languages: `zh-cn`, `zh-tw`, `pt-br`, `es`, `ru`, `de`, `ja`, `fr`, `ko`, `tr`, `pl`. Use VS Code's language selection
-and English fallback. Facade Code, Facade, CLI, MCP and YOLO are not translated. Use Microsoft's established editor
+and English fallback. Facade Code Extension, Facade Code Extension, CLI, MCP and YOLO are not translated. Use Microsoft's established editor
 terms; Chinese keeps the English word `Agent`, capitalized in every string, and uses `工作树` / `工作樹`. Resume list times
 and a card's details' start follow the time steps and rounding of VS Code's short `fromNow` helper, with `ago` retained,
 the chosen `just now` replacing its `now` phrase below 30 rounded seconds; then seconds, minutes, hours, days, weeks, months and years. Use the editor's translated singular/plural phrases. Units
@@ -155,7 +155,7 @@ shown as a localized absolute time instead of an invented recent activity. Withi
 time's first letter is in lower case, as a language's word that begins a list's line - `Vor`, `Il y a` - would not be
 there. Full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale
 updates refresh text; API IDs/paths never change with locale. Translations cover settings, pickers, errors, menus,
-access labels and empty states in the same implementation change. Facade's own failure reasons - CLI configuration and
+access labels and empty states in the same implementation change. Facade Code Extension's own failure reasons - CLI configuration and
 worktree problems, another window owning the workspace, a working location gone or not in this window, no agent or
 message number, a window component too old, a conversation its CLI cannot pin, an installation an update or uninstall
 removed - reach the person in their language through one presentation shared by pickers, notifications and cards, never
@@ -168,7 +168,7 @@ agents read stay English.
 
 **Every command has one `facade.` ID, one title and one behavioral owner.**
 
-Listed commands appear in the Facade Code palette category subject to availability, except entries explicitly marked
+Listed commands appear in the Facade Code Extension palette category subject to availability, except entries explicitly marked
 as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
@@ -197,7 +197,7 @@ the current state.
 
 PANEL-1.1 places the editor's Add Folder to Workspace... command in the view menu. Clear Filters is available in
 the filter picker and filtered empty state. The retired legacy IDs `continueSession`, `dismissAgent` and
-`showAgentLaunch` remain in the manifest without a Framework command surface.
+`showAgentLaunch` remain in the manifest without a Facade Code Framework command surface.
 
 ### 3.2 Context and internal commands
 
@@ -222,9 +222,9 @@ place to work (LIFECYCLE-1.3).
 
 ## 4 Settings
 
-### 4.1 Facade settings
+### 4.1 Facade Code Extension settings
 
-**Facade settings live in one JSONC file; the editor's Settings page links to it.**
+**Facade Code Extension settings live in one JSONC file; the editor's Settings page links to it.**
 
 CONFIGURATION owns `facade.json` in the Facade home. Local and remote execution environments read their own file;
 Settings Sync does not copy it. ARCHITECTURE-3.1 owns home selection and reload behavior.
@@ -236,12 +236,12 @@ Settings Sync does not copy it. ARCHITECTURE-3.1 owns home selection and reload 
 | `clis` | Object; `{}` | CONFIGURATION-2 |
 | `$schema` | Optional string; no runtime effect | CONFIGURATION-1.4 |
 
-Open Settings goes directly to the **Facade Code** section, on the Remote tab in a remote window and the User tab
+Open Settings goes directly to the **Facade Code Extension** section, on the Remote tab in a remote window and the User tab
 locally. A remote window with `workbench.settings.editor: json` opens facade.json directly through Open facade.json
 (CONFIGURATION-1.2). The unusable-home error still opens the setting itself, in remote editor settings JSON for
 that preference.
 
-The **Facade: Home** setting (`facade.home`, machine scope) shows `~/.facade` in its box. The description explains the home and links **Edit in facade.json** to
+The **Facade Code Extension: Home** setting (`facade.home`, machine scope) shows `~/.facade` in its box. The description explains the home and links **Edit in facade.json** to
 **Open facade.json** (`facade.openSettingsFile`). It opens or creates the actual local or remote file
 (CONFIGURATION-1.2, CONFIGURATION-1.3); a migration conflict opens the old editor settings JSON (CONFIGURATION-6.2).
 
@@ -253,7 +253,7 @@ errors have CONFIGURATION-4.1's distinct scopes; running agents keep their launc
 
 ### 4.2 Follow existing editor settings
 
-**Where VS Code has a relevant setting, use it instead of another Facade setting.**
+**Where VS Code has a relevant setting, use it instead of another Facade Code Extension setting.**
 
 | Editor setting | Owner/use |
 | --- | --- |
@@ -265,10 +265,10 @@ errors have CONFIGURATION-4.1's distinct scopes; running agents keep their launc
 | `workbench.experimental.modernUI` | PANEL-3.3 scrollbar appearance |
 | `window.zoomLevel`, `workbench.reduceMotion` | Layout/motion |
 
-The Facade file is not another layer of workspace editor settings. Native editor settings still apply where listed
+The Facade Code Extension file is not another layer of workspace editor settings. Native editor settings still apply where listed
 above; an entry's `env` follows CONFIGURATION-3.2. Unsupported optional editor settings use the documented
 empty/default behavior and do not block plain-folder agent use.
-Worktree creation uses the editor's native Git workflow through a supported, verified interface. Facade does not
+Worktree creation uses the editor's native Git workflow through a supported, verified interface. Facade Code Extension does not
 create a parallel setup/task runner; missing native integration does not block ordinary-folder agents.
 
 ## 5 Technical design
@@ -303,7 +303,7 @@ screen reader labels. Capture screenshots and scenario/version evidence. Automat
 they cannot certify native picker placement, focus or remote terminal behavior. Never test in the owner's profile.
 
 
-## 6 Orchestrator-backed commands and labels
+## 6 Facade Code Framework-backed commands and labels
 
 ### 6.1 Primary commands
 
@@ -320,7 +320,7 @@ Pin, Resume, YOLO and Guest keep their names in all translations. Open Settings 
 For a settings problem on that machine, Edit in facade.json opens the file under CONFIGURATION-7.1. For a problem on another machine, report the target and direct the person to its settings.
 
 Report agent and start errors using the machine or folder involved. Report the step that failed when activation
-cannot start or connect to Framework. The legacy cutover uses the action in ARCHITECTURE-1.4.
+cannot start or connect to Facade Code Framework. The legacy cutover uses the action in ARCHITECTURE-1.4.
 
 ## Checks
 
@@ -329,7 +329,7 @@ cannot start or connect to Framework. The legacy cutover uses the action in ARCH
 | 1.1–1.3 | Native flows/cancel, no progress/success toasts, error wording/action target, message-to-person notification, plain words without internal terms, language and naming consistency |
 | 2.1–2.4 | Theme/width/zoom/motion/contrast, keyboard/screen reader, localization completeness |
 | 3.1–3.2 | Manifest/registration catalog, selected-run palette actions after focus leaves the agent terminal, exact context targeting, unavailable without a target, test commands absent in production |
-| 4.1–4.2 | Every Open Settings entry opens the Settings section on the User/Remote tab, or remote facade.json for JSON users; unusable-home errors open that tab at Facade: Home; its link and deprecated keys' links open the local/remote file; Facade: Home plus set deprecated legacy keys; migration conflicts open the old editor settings JSON; defaults and validation; native editor environment precedence; future starts versus living processes, locally and remotely |
+| 4.1–4.2 | Every Open Settings entry opens the Settings section on the User/Remote tab, or remote facade.json for JSON users; unusable-home errors open that tab at Facade Code Extension: Home; its link and deprecated keys' links open the local/remote file; Facade Code Extension: Home plus set deprecated legacy keys; migration conflicts open the old editor settings JSON; defaults and validation; native editor environment precedence; future starts versus living processes, locally and remotely |
 | 5.1–5.3 | Localization/build audit, idle/update measurement and isolated visual evidence |
 
 Evidence: [Verification](engineering/VERIFICATION.md).

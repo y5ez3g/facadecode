@@ -147,7 +147,7 @@ def _commands(root: Path, rows: dict[str, str]) -> None:
     # The test-only TEST_COMMANDS live in the separate registerTestUi function.
     # Activation-error stubs also live outside the serving scopes listed here.
     handlers = [
-        (UI, _function(root, UI, "registerOrchestratorUi")),
+        (UI, _function(root, UI, "registerFrameworkUi")),
         (AGENT_UI, _function(root, AGENT_UI, "registerFrameworkAgentCommands")),
         ("extension/src/ui/commands/worktree.ts", _read(root, "extension/src/ui/commands/worktree.ts")),
         ("extension/src/host/framework/settings.ts", _read(root, "extension/src/host/framework/settings.ts")),
@@ -157,7 +157,7 @@ def _commands(root: Path, rows: dict[str, str]) -> None:
     for path, source in handlers:
         names = _serving_registrations(path, source, "framework")
         if not names or set(names) - symbols.keys() or registered.intersection(symbols[name] for name in names):
-            raise ValueError(f"{path}: invalid Framework command registration {names!r}")
+            raise ValueError(f"{path}: invalid Facade Code Framework command registration {names!r}")
         commands = [symbols[name] for name in names]
         registered.update(commands)
         _add(rows, "vscode-framework", "command", commands, path)

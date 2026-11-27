@@ -210,7 +210,7 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
             let hooks: Value = serde_json::from_str(config("hooks").unwrap()).unwrap();
             let approve = hooks["PermissionRequest"][0]["hooks"][0]["command"]
                 .as_str()
-                .expect("Muse receives Facade's approval hook");
+                .expect("Muse receives Facade Code Framework's approval hook");
             let command = if let Some(encoded) =
                 approve.strip_prefix("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")
             {
@@ -244,7 +244,7 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
                 .find_map(|pair| {
                     (pair[0] == "-e" && pair[1].ends_with("facade-pi.mjs")).then_some(&pair[1])
                 })
-                .expect("Pi gets Facade's MCP extension");
+                .expect("Pi gets Facade Code Framework's MCP extension");
             let extension = std::fs::read_to_string(extension).unwrap();
             assert!(
                 extension.contains("registerMcpServer(\"facade\",")

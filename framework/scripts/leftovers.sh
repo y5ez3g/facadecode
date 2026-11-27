@@ -46,15 +46,15 @@ environment_pids=$(printf '%s\n' "$processes" | awk -v tmp="$tmp" -v real="$real
 	}') || fail 'could not decode the process table'
 orphans=""
 if [ -n "$tree" ]; then
-	tree_pids=$(printf '%s\n' "$snapshot" | within "$tree") || fail 'could not match the Framework checkout'
-	tree_pids=$(printf '%s' "$tree_pids" | tr '\n' ' ') || fail 'could not prepare the Framework process IDs'
+	tree_pids=$(printf '%s\n' "$snapshot" | within "$tree") || fail 'could not match the Facade Code Framework checkout'
+	tree_pids=$(printf '%s' "$tree_pids" | tr '\n' ' ') || fail 'could not prepare the Facade Code Framework process IDs'
 	orphans=$(printf '%s\n' "$processes" | awk -v pids="$tree_pids" '
 		BEGIN {
 			count = split(pids, list, " ")
 			for (i = 1; i <= count; i++) in_checkout[list[i]] = 1
 		}
 		$2 == 1 && ($1 in in_checkout) { print $1 }
-	') || fail 'could not match Framework processes by parent'
+	') || fail 'could not match Facade Code Framework processes by parent'
 fi
 pids=$(printf '%s\n' "$folder_pids" "$environment_pids" "$orphans" | sort -un) ||
 	fail 'could not collect the remaining process IDs'

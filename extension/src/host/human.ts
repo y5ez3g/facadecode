@@ -12,7 +12,7 @@ import { notificationText } from './notify';
 /**
  * The person in this window (RULES-1.8, UX-1.2): native error notifications for human-operation errors and known failures with
  * no responsible agent, offering only Show or Edit in facade.json - the file a launch's problem is fixed in, opened as the link of
- * that name on Facade Code's Settings section opens it. Dismissal changes nothing.
+ * that name on Facade Code Extension's Settings section opens it. Dismissal changes nothing.
  */
 export class WindowHuman implements HumanPort, vscode.Disposable {
 	constructor(private readonly show: (run: RunId) => Promise<unknown>) { }

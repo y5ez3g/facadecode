@@ -7,7 +7,7 @@ import type { AgentInfo } from '../base/frameworkProtocol';
 import type { FrameworkPin } from '../core/ports';
 import type { AgentPty } from '../host/terminal/agentPty';
 import { restoreFrameworkPins } from '../host/framework/pinRestore';
-import { DaemonError, type AttachListener, type AttachWatchArgs, type OrchestratorLink, type ResizeAttach } from '../host/framework/types';
+import { DaemonError, type AttachListener, type AttachWatchArgs, type FrameworkLink, type ResizeAttach } from '../host/framework/types';
 import { TestEmitter, withModules } from './withModules';
 
 const local = '00000000-0000-4000-8000-000000000001';
@@ -15,7 +15,7 @@ const gpu = '00000000-0000-4000-8000-000000000002';
 const server = '00000000-0000-4000-8000-000000000003';
 const none = { dispose() { } };
 
-suite('Orchestrator terminals', () => {
+suite('Facade Code Framework terminals', () => {
 	test('Attach redraws after a refused watch or lost connection, ignores old watches and drops only unsent bytes (RULES-6.3)', async () => {
 		const watches: { args: () => AttachWatchArgs; listener: AttachListener; disposed: boolean }[] = [];
 		const retries = new Set<() => void>();
@@ -59,10 +59,10 @@ suite('Orchestrator terminals', () => {
 			retries.delete(callback);
 			callback();
 		};
-		const { OrchestratorTerminals } = withModules({ vscode, '../terminal/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
+		const { FrameworkTerminals } = withModules({ vscode, '../terminal/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
 		let canSend = true;
 		const ref = { machine_id: gpu, agent_id: 'a7' };
-		const link: OrchestratorLink = {
+		const link: FrameworkLink = {
 			connected: true,
 			machineId: local,
 			onDidConnect: () => none,
@@ -83,7 +83,7 @@ suite('Orchestrator terminals', () => {
 			},
 			dispose() { }
 		};
-		const terminals = new OrchestratorTerminals(link, {
+		const terminals = new FrameworkTerminals(link, {
 			viewer: 'VS Code: Fixture', colours: colors, media: {} as never, log: () => undefined
 		});
 		const run = 'remote';

@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code：讓多個 AI 程式設計 Agent 一起工作",
 	"description": "從 VS Code 使用 Facade Code。在各部機器上啟動程式設計 Agent，將終端機與檔案並排開啟。",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "新增 Agent...",
 	"command.openTerminal": "開啟終端機",
 	"command.renameAgent": "重新命名 Agent...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "上移",
 	"command.moveDown": "下移",
 	"command.revealAgent": "顯示 Agent",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Facade Code 視窗元件",
-	"windowDescription": "遠端視窗重新連線或擴充功能重新啟動時，關閉 Facade Code 上次留下的終端機索引標籤。",
+	"windowDescription": "遠端視窗重新連線或擴充功能重新啟動時，關閉 Facade Code Extension 上次留下的終端機索引標籤。",
 	"command.filter": "篩選 Agent...",
 	"command.showAgentLaunch": "顯示 Agent 命令列...",
 	"command.showAgentsLog": "顯示 Agent 記錄",
@@ -41,6 +41,6 @@
 	"command.continueSession": "接續工作階段...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "此視窗用於儲存設定、Agent 記錄和移轉舊版資料的 Facade 資料夾。這裡的路徑優先於 `FACADE_HOME` 和預設路徑 `~/.facade`。\n\n[在 facade.json 中編輯](command:facade.openSettingsFile)可變更 YOLO、建議名稱和 CLI 的啟動方式。",
+	"config.home": "此視窗用於儲存設定、Agent 記錄和移轉舊版資料的 Facade Code Extension 資料夾。這裡的路徑優先於 `FACADE_HOME` 和預設路徑 `~/.facade`。\n\n[在 facade.json 中編輯](command:facade.openSettingsFile)可變更 YOLO、建議名稱和 CLI 的啟動方式。",
 	"config.home.pattern": "路徑必須以 ~/ 開頭或是絕對路徑。"
 }

@@ -1,7 +1,7 @@
 # VS Code experience
 
-[Facade Code](../PRODUCT.md) defines the product. [Shared rules](RULES.md#6-the-vs-code-entry-point) and the feature
-specifications define how these journeys behave in the Orchestrator-backed editor. The legacy implementation retains its
+[the product guide](../PRODUCT.md) defines the product. [Shared rules](RULES.md#6-the-vs-code-entry-point) and the feature
+specifications define how these journeys behave in Facade Code Framework-backed editor. The legacy implementation retains its
 transition rules in the corresponding feature specifications.
 
 ## 1 Start an agent
@@ -25,14 +25,14 @@ complete its step, show the reason. A plain folder needs only the CLI. See WORKT
 
 **Explain missing startup prerequisites where the person can correct them.**
 
-If the chosen machine has no usable CLI, explain what is needed. The local Open Settings action opens the Facade Code settings section under CONFIGURATION-1.2. A start on another machine uses that machine's settings. Return an actionable
+If the chosen machine has no usable CLI, explain what is needed. The local Open Settings action opens the Facade Code Extension settings section under CONFIGURATION-1.2. A start on another machine uses that machine's settings. Return an actionable
 error when the machine or working folder is unavailable.
 
 ## 2 Follow an agent
 
 ### 2.1 Find and open
 
-**Running Managed Agents visible to the Orchestrator appear in the panel.**
+**Running Managed Agents visible to Facade Code Framework appear in the panel.**
 
 Start an agent from Shell, then click its card in VS Code. Its terminal opens with the same screen and input as a Shell
 Attach. Closing either view leaves the agent running. Read terminal output directly or use the card's state and
@@ -67,7 +67,7 @@ Use the card's Pin or Unpin action to change the saved intent. See LIFECYCLE-5.4
 **Reopen the workspace to see its agents and Pins again.**
 
 A reopened workspace uses its saved agent list and Pins. The Window Component can clean up stale terminal tabs.
-Remote-SSH works against the Orchestrator on the remote editor host. See RULES-6.1 and RULES-6.8.
+Remote-SSH works against Facade Code Framework on the remote editor host. See RULES-6.1 and RULES-6.8.
 
 ## Checks
 

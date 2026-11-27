@@ -28,7 +28,7 @@ impl ManagedAgent {
     }
 }
 
-/// A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
+/// A CLI a start can run: an entry of Facade Code Framework's settings file (CONFIGURATION-2.1).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CliInfo {
     /// The name a start gives: a built-in's, such as `claude`, or the name of a CLI the settings
@@ -85,13 +85,13 @@ pub struct ManagedAgent {
     pub unreachable: bool,
     /// The display name. Names are nonempty but may repeat.
     pub name: String,
-    /// The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or
+    /// The CLI: the name of its entry in Facade Code Framework's settings file, a built-in's such as `claude` or
     /// an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a
     /// program started by its path or name.
     pub cli: String,
     /// The CLI's working folder at startup.
     pub cwd: String,
-    /// The ID of the Facade machine that runs the agent.
+    /// The ID of the Facade Code Framework machine that runs the agent.
     pub machine_id: String,
     /// One or more member windows, unique and sorted by machine ID and window ID.
     pub windows: Vec<WindowRef>,
@@ -100,12 +100,12 @@ pub struct ManagedAgent {
     /// The window that provided the agent's running location, where a window supplied it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_source_window: Option<WindowRef>,
-    /// The CLI's process ID. Omitted for a guest, whose process Facade does not know.
+    /// The CLI's process ID. Omitted for a guest, whose process Facade Code Framework does not know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     /// Whether the CLI is running or ended.
     pub process: ProcessState,
-    /// Terminal width in columns. Omitted for a guest, which has no terminal of Facade's.
+    /// Terminal width in columns. Omitted for a guest, which has no terminal of Facade Code Framework's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<u16>,
     /// Terminal height in rows. Omitted for a guest.
@@ -127,7 +127,7 @@ pub struct ManagedAgent {
     pub root_machine_id: Option<String>,
     /// Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With
     /// YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation
-    /// tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a
+    /// tree. A launch takes it from Facade Code Framework's settings file, `facade.json`, as it is accepted; a
     /// guest as it joins.
     pub yolo: bool,
     /// The recorded exit. Omitted while the agent is running.
@@ -146,19 +146,19 @@ pub struct ManagedAgent {
     /// The last thing that went into the agent's message input. Omitted until something has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<Said>,
-    /// Whether the agent's CLI can use Facade's tools.
+    /// Whether the agent's CLI can use Facade Code Framework's tools.
     pub tools_state: ToolsState,
-    /// Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable.
+    /// Why the agent's CLI cannot use Facade Code Framework's tools. Omitted unless they are unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools_reason: Option<ToolsReason>,
-    /// A guest: a session of a CLI the person started outside Facade, which joined through the
-    /// CLI's hooks. Its terminal is not Facade's: Facade cannot read its screen, type into it,
-    /// resize, stop or resume it. Omitted for an agent Facade started.
+    /// A guest: a session of a CLI the person started outside Facade Code Framework, which joined through the
+    /// CLI's hooks. Its terminal is not Facade Code Framework's: Facade Code Framework cannot read its screen, type into it,
+    /// resize, stop or resume it. Omitted for an agent Facade Code Framework started.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub guest: bool,
 }
 
-/// Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that a CLI started
+/// Whether an agent's CLI can use Facade Code Framework's tools: `facade-mcp`, the MCP server that a CLI started
 /// by its rule is given for its run.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -189,20 +189,20 @@ impl ToolsState {
     }
 }
 
-/// Why an agent's CLI cannot use the Facade tools it was given.
+/// Why an agent's CLI cannot use the Facade Code Framework tools it was given.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolsReason {
-    /// Facade could not give them to this run's CLI; the daemon's log says why.
+    /// Facade Code Framework could not give them to this run's CLI; the daemon's log says why.
     NotGiven,
-    /// Its Facade server did not connect within 30 seconds of the run's start or resume, or of a
+    /// Its Facade Code Framework server did not connect within 30 seconds of the run's start or resume, or of a
     /// daemon's recovery of the run.
     NotConnected,
     /// Its CLI starts its servers only with its first turn or its panel of servers, and the run's
-    /// start could not have the panel start Facade's server before the first turn; the daemon's log
+    /// start could not have the panel start Facade Code Framework's server before the first turn; the daemon's log
     /// says why. The first turn starts it.
     NotStarted,
-    /// Its Facade server's last connection closed while the run went on.
+    /// Its Facade Code Framework server's last connection closed while the run went on.
     Disconnected,
     /// The CLI ended.
     Ended,
@@ -225,15 +225,17 @@ impl ToolsReason {
     }
 
     /// The reason as words a person reads after the tools' state:
-    /// `its Facade server's connection closed`.
+    /// `its Facade Code Framework server's connection closed`.
     pub fn words(self) -> &'static str {
         match self {
-            ToolsReason::NotGiven => "Facade could not give them to its CLI",
-            ToolsReason::NotConnected => "its Facade server did not connect within 30 seconds",
-            ToolsReason::NotStarted => {
-                "its CLI did not start its Facade server before its first turn"
+            ToolsReason::NotGiven => "Facade Code Framework could not give them to its CLI",
+            ToolsReason::NotConnected => {
+                "its Facade Code Framework server did not connect within 30 seconds"
             }
-            ToolsReason::Disconnected => "its Facade server's connection closed",
+            ToolsReason::NotStarted => {
+                "its CLI did not start its Facade Code Framework server before its first turn"
+            }
+            ToolsReason::Disconnected => "its Facade Code Framework server's connection closed",
             ToolsReason::Ended => "its CLI ended",
             ToolsReason::Unknown => "a reason this build does not recognize",
         }
@@ -241,7 +243,7 @@ impl ToolsReason {
 }
 
 /// What an agent is doing, from its CLI's own status reports, from its screen where its CLI's rule
-/// reads it, and from Facade's own facts. The first state that holds, in this order, is the
+/// reads it, and from Facade Code Framework's own facts. The first state that holds, in this order, is the
 /// agent's: `waiting_for_you`, `error`, `just_done`, `working`, `idle`, `starting`, then `unknown`;
 /// `ended` once its process ended.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -302,17 +304,17 @@ pub struct StateDetail {
     /// reported. Untrusted text on one line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    /// How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade
+    /// How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade Code Framework
     /// did not stop it; `exit.reason` says what is known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub how: Option<HowEnded>,
-    /// Why nothing shows what the CLI is doing, on `unknown`, or what Facade found wrong, on an
+    /// Why nothing shows what the CLI is doing, on `unknown`, or what Facade Code Framework found wrong, on an
     /// `error` it found: a start that showed nothing, or tools the CLI cannot use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<StateReason>,
 }
 
-/// Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it.
+/// Why nothing shows what an agent's CLI is doing, or what Facade Code Framework found wrong with it.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StateReason {
@@ -328,7 +330,7 @@ pub enum StateReason {
     /// `error`: a CLI started by its rule's name showed nothing of what it is doing within 30
     /// seconds of its start or resume.
     NotReady,
-    /// `error`: the CLI cannot use the Facade tools it was given; `tools_reason` says why.
+    /// `error`: the CLI cannot use the Facade Code Framework tools it was given; `tools_reason` says why.
     ToolsUnavailable,
     /// A reason this build does not recognize. The daemon never sends it.
     #[serde(other)]
@@ -363,7 +365,9 @@ impl StateReason {
             StateReason::NotReady => {
                 "its CLI showed nothing of what it is doing within 30 seconds of its start"
             }
-            StateReason::ToolsUnavailable => "its CLI cannot use the Facade tools it was given",
+            StateReason::ToolsUnavailable => {
+                "its CLI cannot use the Facade Code Framework tools it was given"
+            }
             StateReason::Unknown => "a reason this build does not recognize",
         }
     }
@@ -414,7 +418,7 @@ impl WaitKind {
 pub enum HowEnded {
     /// It exited with code 0.
     Normal,
-    /// Facade stopped it.
+    /// Facade Code Framework stopped it.
     Stopped,
     /// It exited with another code, or a signal ended it.
     Crashed,
@@ -463,7 +467,7 @@ pub fn error_words(detail: Option<&StateDetail>, tools: Option<ToolsReason>) -> 
         )
     } else if let Some(reason) = tools {
         format!(
-            "is in Error because its Facade tools are unavailable: {}",
+            "is in Error because its Facade Code Framework tools are unavailable: {}",
             reason.words()
         )
     } else if let Some(reason) = detail.and_then(|detail| detail.reason) {
@@ -477,7 +481,7 @@ pub const ANSWER_WAIT: &str =
     "Use `read_screen` to read its screen, then `press_keys` or `type_text` to respond.";
 
 /// The latest submission through an agent's terminal, from a person, an `agent.type` call with
-/// `enter`, or a message Facade delivered.
+/// `enter`, or a message Facade Code Framework delivered.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct Said {
     /// The text on one line, at most 1,024 characters.
@@ -582,7 +586,7 @@ pub struct AgentLabel {
     pub name: String,
     pub cli: String,
     pub state: AgentState,
-    /// The managed agent has a recorded session that Facade can resume.
+    /// The managed agent has a recorded session that Facade Code Framework can resume.
     pub resumable: bool,
 }
 

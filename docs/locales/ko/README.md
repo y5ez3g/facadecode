@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
+<img src="../../../extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**VS Code를 위한 멀티 에이전트 오케스트레이터.**
+**VS Code에서 코딩 에이전트를 함께 실행하세요.**
 
 동일한 IDE 창에서 네이티브 에이전트 CLI를 실행하고 코드를 편집하며 변경 사항을 검토하세요. 본인 소유의 계정과 구독을 사용하고 에이전트가 창과 머신을 넘어 협업하도록 지원합니다.
 
@@ -35,9 +35,9 @@
 code --install-extension facade.facadecode
 ```
 
-또는 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) 나 [Open VSX](https://open-vsx.org/extension/facade/facadecode) 에서 **Facade Code**를 설치하세요. macOS(Apple silicon), Linux(x64), Windows(x64)에서 실행됩니다.
+또는 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) 나 [Open VSX](https://open-vsx.org/extension/facade/facadecode) 에서 **Facade Code Extension**를 설치하세요. macOS(Apple silicon), Linux(x64), Windows(x64)에서 실행됩니다.
 
-다음으로 사용하려는 지원 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode 또는 Pi)를 설치하고 로그인하세요. Facade Code는 각 CLI의 자체 로그인 및 구독을 사용하여 실행합니다.
+다음으로 사용하려는 지원 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode 또는 Pi)를 설치하고 로그인하세요. Facade Code Extension Code는 각 CLI의 자체 로그인 및 구독을 사용하여 실행합니다.
 
 > **에이전트는 기본적으로 승인 확인 없이 실행됩니다.** `yolo`가 기본적으로 활성화되어 있어 에이전트가 먼저 묻지 않고 명령을 실행하고 파일을 변경할 수 있습니다. 각 CLI의 표준 승인 프롬프트를 복원하려면 이 설정을 끄세요. 자세한 내용은 [확장 README](../../../extension/README.md#install)를 참조하세요.
 
@@ -45,7 +45,7 @@ code --install-extension facade.facadecode
 
 **에이전트와 IDE가 같은 창에.**
 
-Facade Code는 파일 옆의 편집기 터미널 탭에서 네이티브 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi)를 직접 실행하며 각 CLI 고유의 명령, 도구, 계정 및 구독을 사용합니다. 패널의 카드를 통해 각 에이전트의 상태를 실시간으로 추적할 수 있습니다.
+Facade Code Extension Code는 파일 옆의 편집기 터미널 탭에서 네이티브 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi)를 직접 실행하며 각 CLI 고유의 명령, 도구, 계정 및 구독을 사용합니다. 패널의 카드를 통해 각 에이전트의 상태를 실시간으로 추적할 수 있습니다.
 
 - **코드 옆에서 작업.** 각 에이전트는 편집기 영역의 전용 터미널 탭에서 실행됩니다. 탭을 닫아도 뷰가 숨겨질 뿐 에이전트는 백그라운드에서 계속 실행되며, 카드를 클릭하면 다시 열립니다.
 - **에이전트 전반의 상태 추적.** 카드는 각 에이전트에 마지막으로 전송된 내용과 현재 작업 중인지, 권한이 필요한지, 오류가 발생했는지를 보여주며, 세부 정보에는 제목, 폴더, 누가 시작했는지가 표시됩니다. 에이전트는 창 다시 로드 및 확장 재시작 중에도 계속 실행됩니다.
@@ -57,7 +57,7 @@ Facade Code는 파일 옆의 편집기 터미널 탭에서 네이티브 에이�
 
 MCP 및 터미널 프로토콜을 통해 에이전트는 다른 에이전트를 시작, 중지, 검색하고 메시지를 교환하며, 상대의 터미널 화면을 읽고 텍스트를 입력하거나 키를 누를 수 있습니다.
 
-- **에이전트 시작 및 중지.** 모든 에이전트는 6개 CLI 중 하나를 사용하여 이 컴퓨터의 Facade 창에 있는 폴더나 새 worktree에서 다른 에이전트를 시작하고 첫 번째 작업을 할당할 수 있습니다. 동일한 요청 ID를 공유하는 재시도 요청은 에이전트를 중복 생성하지 않습니다.
+- **에이전트 시작 및 중지.** 모든 에이전트는 6개 CLI 중 하나를 사용하여 이 컴퓨터의 Facade Code Extension 창에 있는 폴더나 새 worktree에서 다른 에이전트를 시작하고 첫 번째 작업을 할당할 수 있습니다. 동일한 요청 ID를 공유하는 재시도 요청은 에이전트를 중복 생성하지 않습니다.
 - **메시지 전송.** 에이전트끼리 서로 메시지를 주고받을 수 있으며 사용자에게 메시지를 보낼 수도 있습니다. Facade는 전체 메시지를 한 번에 붙여넣고 전송합니다. 전송되지 않은 텍스트나 프롬프트 질문이 입력 창을 가로막고 있는 경우 입력 창이 비워질 때까지 전송이 대기합니다.
 - **터미널 제어.** 에이전트는 다른 에이전트의 화면을 읽고 명령을 입력하며 키를 전송하여 프롬프트에 응답하거나 막힌 동료를 도울 수 있습니다. 하위 에이전트가 권한, 응답 또는 로그인을 기다린 지 20초가 지나면 이를 시작한 에이전트에게 알림이 전달됩니다.
 
@@ -65,9 +65,9 @@ MCP 및 터미널 프로토콜을 통해 에이전트는 다른 에이전트를 
 
 **창, 머신, 위치를 넘어 에이전트를 연결하세요.**
 
-Facade Code는 이 컴퓨터에서 열려 있는 Facade 창의 에이전트들을 하나의 네트워크로 연결합니다. [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창을 열어 협업을 다른 머신으로 확장하세요.
+Facade Code Extension Code는 이 컴퓨터에서 열려 있는 Facade Code Extension 창의 에이전트들을 하나의 네트워크로 연결합니다. [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창을 열어 협업을 다른 머신으로 확장하세요.
 
-- **창을 넘어.** `yolo`가 켜져 있으면 에이전트가 로컬 창과 Remote - SSH 창을 가리지 않고 이 컴퓨터의 모든 Facade 창에 있는 에이전트에 도달할 수 있습니다. 꺼져 있으면 자신이 속한 그룹(사용자가 시작한 에이전트 및 그 에이전트가 파생 시작한 에이전트)에만 도달합니다.
+- **창을 넘어.** `yolo`가 켜져 있으면 에이전트가 로컬 창과 Remote - SSH 창을 가리지 않고 이 컴퓨터의 모든 Facade Code Extension 창에 있는 에이전트에 도달할 수 있습니다. 꺼져 있으면 자신이 속한 그룹(사용자가 시작한 에이전트 및 그 에이전트가 파생 시작한 에이전트)에만 도달합니다.
 - **SSH를 통한 확장.** [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창에서 에이전트는 원격 머신의 도구, 파일, 계정을 사용하여 원격 호스트에서 직접 실행됩니다. 로컬 에이전트가 Remote - SSH 창에 있는 에이전트를 직접 시작하고 지시할 수 있습니다.
 - **휴대폰에서 조정.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)을 사용하여 휴대폰의 Claude 앱을 컴퓨터의 Claude Code 세션에 연결하세요. 해당 세션이 Facade를 통해 다른 에이전트를 조정하고 진행 상황을 휴대폰으로 보고합니다.
 
@@ -97,6 +97,6 @@ IDE 미리 보기 다운로드: [macOS (Apple silicon, .dmg)](https://github.com
 
 ## 라이선스
 
-업스트림 VS Code와 동일한 MIT 라이선스입니다. Microsoft 저작권 고지 및 Facade Code 기여자 고지는 [`LICENSE.txt`](../../../LICENSE.txt)를 참조하세요.
+업스트림 VS Code와 동일한 MIT 라이선스입니다. Microsoft 저작권 고지 및 Facade Code Extension 기여자 고지는 [`LICENSE.txt`](../../../LICENSE.txt)를 참조하세요.
 
-<sub>Facade Code는 독립적인 제품이며 표시된 타사 도구 제공업체와 제휴, 보증 또는 후원 관계가 아닙니다. 모든 타사 상표 및 로고는 해당 소유자의 자산입니다.</sub>
+<sub>Facade Code Extension Code는 독립적인 제품이며 표시된 타사 도구 제공업체와 제휴, 보증 또는 후원 관계가 아닙니다. 모든 타사 상표 및 로고는 해당 소유자의 자산입니다.</sub>

@@ -48,7 +48,7 @@ export function createExclusively(file: string, text: string): boolean {
 	}
 }
 
-/** Open VS Code's Facade section or the configured setting itself (CONFIGURATION-1.2). */
+/** Open VS Code's Facade Code Framework section or the configured setting itself (CONFIGURATION-1.2). */
 export function openFacadeSettings(query: string): Thenable<unknown> {
 	return vscode.env.remoteName !== undefined
 		? vscode.commands.executeCommand('workbench.action.openRemoteSettings', { query })
@@ -71,11 +71,11 @@ export function frameworkSettings(options: { readonly status: () => Promise<{ re
 	const open = async (): Promise<void> => {
 		const { settings_file: file } = await options.status();
 		if (!path.isAbsolute(file)) {
-			throw new Error(vscode.l10n.t("The Orchestrator did not return an absolute path to facade.json."));
+			throw new Error(vscode.l10n.t("Facade Code Framework did not return an absolute path to facade.json."));
 		}
 		const shown = shownFile(file);
 		try {
-			// An empty object uses the Orchestrator's defaults. A concurrent creator keeps its file.
+			// An empty object uses Facade Code Framework's defaults. A concurrent creator keeps its file.
 			if (!fs.existsSync(file) && createExclusively(file, '{}\n')) {
 				options.log.event(`Created ${shown}`);
 			}

@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code: запускайте ИИ-агентов для программирования вместе",
 	"description": "Доступ к Facade Code из VS Code. Запускайте агентов для программирования на своих машинах и открывайте их терминалы рядом с файлами.",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "Новый агент...",
 	"command.openTerminal": "Открыть терминал",
 	"command.renameAgent": "Переименовать агента...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "Переместить вверх",
 	"command.moveDown": "Переместить вниз",
 	"command.revealAgent": "Показать агента",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Оконный компонент Facade Code",
-	"windowDescription": "Закрывает оставшиеся вкладки терминалов Facade Code после повторного подключения удалённого окна или перезапуска расширения.",
+	"windowDescription": "Закрывает оставшиеся вкладки терминалов Facade Code Extension после повторного подключения удалённого окна или перезапуска расширения.",
 	"command.filter": "Фильтровать агентов...",
 	"command.showAgentLaunch": "Показать командную строку агента...",
 	"command.showAgentsLog": "Показать журнал агентов",
@@ -41,6 +41,6 @@
 	"command.continueSession": "Продолжить беседу...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Папка Facade, которую это окно использует для настроек, записей агентов и переноса данных из прежних версий. Путь в этом поле имеет приоритет над `FACADE_HOME` и путём по умолчанию `~/.facade`.\n\n[Изменить в facade.json](command:facade.openSettingsFile) чтобы изменить YOLO, предлагаемые имена и способ запуска CLI.",
+	"config.home": "Папка Facade Code Extension, которую это окно использует для настроек, записей агентов и переноса данных из прежних версий. Путь в этом поле имеет приоритет над `FACADE_HOME` и путём по умолчанию `~/.facade`.\n\n[Изменить в facade.json](command:facade.openSettingsFile) чтобы изменить YOLO, предлагаемые имена и способ запуска CLI.",
 	"config.home.pattern": "Путь должен начинаться с ~/ или быть абсолютным."
 }

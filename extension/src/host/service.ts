@@ -8,7 +8,7 @@ import { messageOf } from '../base/errors';
 import { facadeRoot } from '../record/paths';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { openSettingsLabel } from '../ui/presentation';
-import { activateOrchestrator } from './framework/index';
+import { activateFramework } from './framework/index';
 import { openFacadeSettings } from './framework/settings';
 import { DaemonError } from './framework/types';
 import { homeReloadText, UnusableHome, unusableHomeText, useFacadeHome } from './home';
@@ -17,7 +17,7 @@ import { legacyPinMigration } from './legacyCutover';
 import type { LegacyPredecessor } from './legacyPins';
 
 /**
- * Why this window's Facade could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again, and
+ * Why this window's Facade Code Extension could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again, and
  * `opensSetting` where a setting is what to fix, offered as Open Settings at that setting.
  */
 export class ActivationError extends Error {
@@ -27,12 +27,12 @@ export class ActivationError extends Error {
 }
 
 /**
- * A window whose Facade could not start says why where the person looks - a notification, with the reload that tries again where
+ * A window whose Facade Code Extension could not start says why where the person looks - a notification, with the reload that tries again where
  * one can help, and the panel in place of a progress that would never end - not only in the editor's log (UX-2.4); and each of
- * Facade's commands says it again, rather than that the editor has no such command (ARCHITECTURE-4.3).
+ * Facade Code Extension's commands says it again, rather than that the editor has no such command (ARCHITECTURE-4.3).
  */
 export function sayActivationFailed(context: vscode.ExtensionContext, err: unknown): void {
-	const text = err instanceof ActivationError ? err.message : vscode.l10n.t("Could not start {0}: {1}.", 'Facade Code', messageOf(err));
+	const text = err instanceof ActivationError ? err.message : vscode.l10n.t("Could not start {0}: {1}.", 'Facade Code Extension', messageOf(err));
 	try {
 		context.subscriptions.push(vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
 			resolveWebviewView: view => {
@@ -91,7 +91,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 
 	await vscode.commands.executeCommand('setContext', 'facade.implementation', 'framework');
 	try {
-		return await activateOrchestrator(context, { root, home, legacy: { predecessor, pins: owner => legacyPinMigration(home, owner) } });
+		return await activateFramework(context, { root, home, legacy: { predecessor, pins: owner => legacyPinMigration(home, owner) } });
 	} catch (error) {
 		const cause = error instanceof Error ? error.cause : undefined;
 		if (cause instanceof DaemonError && (cause.reason === 'protocol_incompatible' || cause.reason === 'refused')) {

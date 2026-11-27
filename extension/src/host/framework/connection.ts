@@ -12,14 +12,14 @@ import type { Disposable, Event } from '../../core/ports';
 import { Connection, connectDaemonSocket, errorOf, startDaemon, unavailable, type DaemonOptions } from './rpc';
 import {
 	DaemonError, type AttachListener, type AttachWatchArgs, type EditorCalls, type EditorTopic,
-	type OrchestratorLink, type RawInputArgs, type ResizeAttach, type WatchListener
+	type FrameworkLink, type RawInputArgs, type ResizeAttach, type WatchListener
 } from './types';
 
 /** How long one connection to the socket may take. */
 const CONNECT_WAIT_MS = 2_000;
 /** How long a `hello` may stay unanswered: a daemon takes connections only once it has recovered its agents. */
 const HELLO_WAIT_MS = 10_000;
-/** How long the first connection retries after Facade was started (PROTOCOL "Connect to the daemon"). */
+/** How long the first connection retries after Facade Code Framework was started (PROTOCOL "Connect to the daemon"). */
 const START_WAIT_MS = 10_000;
 /** How long between two attempts to connect. */
 const RETRY_MS = 500;
@@ -75,9 +75,9 @@ interface Watching {
 }
 
 /**
- * Starts Facade if its socket is absent. Callers and watches use a verified daemon API v1 connection.
+ * Starts Facade Code Framework if its socket is absent. Callers and watches use a verified daemon API v1 connection.
  */
-export async function connectOrchestrator(options: DaemonOptions): Promise<OrchestratorLink> {
+export async function connectFramework(options: DaemonOptions): Promise<FrameworkLink> {
 	const link = new Link(options);
 	try {
 		await link.open();
@@ -88,7 +88,7 @@ export async function connectOrchestrator(options: DaemonOptions): Promise<Orche
 	return link;
 }
 
-class Link implements OrchestratorLink {
+class Link implements FrameworkLink {
 	private machine!: string;
 	private connection: Connection | undefined;
 	private hello?: DaemonHelloResult;
@@ -129,7 +129,7 @@ class Link implements OrchestratorLink {
 		for (; ;) {
 			await this.until(() => this.connected && this.generation > afterGeneration);
 			if (this.machine !== machine) {
-				throw unavailable('The Facade machine changed before the call could be sent.');
+				throw unavailable('The Facade Code Framework machine changed before the call could be sent.');
 			}
 			const connection = this.connection;
 			if (!connection?.active) {
@@ -221,7 +221,7 @@ class Link implements OrchestratorLink {
 			const remaining = deadline - Date.now();
 			if (remaining <= 0) {
 				const reason = attempt.kind === 'wait' ? attempt.reason : 'the socket closed during hello';
-				throw unavailable(`The Orchestrator did not respond within ${waitMs / 1000} seconds: ${reason}`);
+				throw unavailable(`Facade Code Framework did not respond within ${waitMs / 1000} seconds: ${reason}`);
 			}
 			await timeout(Math.min(RETRY_MS, remaining), this.stop.signal).catch(() => undefined);
 		}
@@ -255,7 +255,7 @@ class Link implements OrchestratorLink {
 				return { kind: 'wait', reason: error.message };
 			}
 			if (error instanceof DaemonError && error.reason === 'invalid_argument' && error.code === -32602) {
-				throw incompatible('The running Facade Code Framework did not accept daemon API v1. Use compatible Framework builds for the editor, Shell and participating SSH endpoints. ' + error.message, error);
+				throw incompatible('The running Facade Code Framework did not accept daemon API v1. Use compatible Facade Code Framework builds for the editor, Shell and participating SSH endpoints. ' + error.message, error);
 			}
 			throw error;
 		} finally {
@@ -358,7 +358,7 @@ class Link implements OrchestratorLink {
 		this.tell(() => watching.on.ended?.(errorOf(params.error)));
 	}
 
-	/** A newer Facade takes over: answers, sends nothing more, and connects again once the new daemon answers. */
+	/** A newer Facade Code Framework takes over: answers, sends nothing more, and connects again once the new daemon answers. */
 	private closing(connection: Connection): void {
 		if (!this.installed(connection)) { return; }
 		this.options.log('A newer Facade Code Framework is taking over.');
@@ -438,7 +438,7 @@ class Link implements OrchestratorLink {
 			};
 			const timer = setTimeout(() => {
 				done();
-				reject(unavailable(`The Orchestrator did not respond within ${ms / 1000} seconds.`));
+				reject(unavailable(`Facade Code Framework did not respond within ${ms / 1000} seconds.`));
 			}, ms);
 			const done = () => {
 				clearTimeout(timer);

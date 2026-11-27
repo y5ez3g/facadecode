@@ -47,7 +47,7 @@ pub(crate) struct StartStep {
     pub(crate) release_held: bool,
     /// Readying the tools failed: they stay unavailable until their server connects.
     pub(crate) tools_not_started: bool,
-    /// Facade answered the CLI's trust question.
+    /// Facade Code Framework answered the CLI's trust question.
     pub(crate) answered: bool,
 }
 

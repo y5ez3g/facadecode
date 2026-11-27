@@ -52,7 +52,7 @@ export function cliIcon(media: vscode.Uri, icon: string): vscode.IconPath {
 }
 
 /**
- * An entry's icon on its terminal tab (LIFECYCLE-2.2, CONFIGURATION-2.4): a glyph Facade contributes, which survives the native file-icon
+ * An entry's icon on its terminal tab (LIFECYCLE-2.2, CONFIGURATION-2.4): a glyph Facade Code Extension contributes, which survives the native file-icon
  * theme rules that can hide a tab's image icon - a built-in's logo in the theme's text color, or a robot in its own colors.
  */
 export function cliTerminalIcon(icon: string): vscode.ThemeIcon {
@@ -83,14 +83,14 @@ export function withWorktreeEffects(reason: string, effects?: WorktreeCreationEf
 }
 
 /**
- * Why an operation of the person's failed, as they are told it (UX-2.4): Facade's own reason in their language, any other error -
+ * Why an operation of the person's failed, as they are told it (UX-2.4): Facade Code Extension's own reason in their language, any other error -
  * the system's, Git's or a CLI's - in its own words.
  */
 export function reasonOf(err: unknown): string {
 	return err instanceof PlanError || err instanceof FacadeError ? reasonText(err.said, err.message) : messageOf(err);
 }
 
-/** Facade's own reason in the person's language (UX-2.4), as `said` names it; `otherwise` where it has none. */
+/** Facade Code Extension's own reason in the person's language (UX-2.4), as `said` names it; `otherwise` where it has none. */
 export function reasonText(said: FacadeReason | undefined, otherwise: string): string {
 	const [a = '', b = '', c = '', d = '', e = ''] = said?.values ?? [];
 	switch (said?.kind) {
@@ -108,11 +108,11 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// {0} is the settings file; {1} a line; {2} a column; {3} the name's place in the list, counting from 1
 		case 'settings_name_blank': return vscode.l10n.t("{0}:{1}:{2}: the name at position {3} must not be empty or only spaces", a, b, c, d);
 		// {0} is the settings file; {1} a line; {2} a column; {3} the key, quoted
-		case 'settings_key': return vscode.l10n.t("{0}:{1}:{2}: {3} is not a Facade setting; the settings are yolo, names and clis", a, b, c, d);
+		case 'settings_key': return vscode.l10n.t("{0}:{1}:{2}: {3} is not a Facade Code Framework setting; the settings are yolo, names and clis", a, b, c, d);
 		// {0} is the settings file; {1} why, as the system says it
 		case 'settings_read': return vscode.l10n.t("{0} could not be read: {1}", a, b);
 		case 'settings_create': return vscode.l10n.t("{0} could not be created: {1}", a, b);
-		case 'settings_migration_read': return vscode.l10n.t("The editor's Facade settings that {0} would be made from could not be read: {1}", a, b);
+		case 'settings_migration_read': return vscode.l10n.t("The editor's Facade Code Extension settings that {0} would be made from could not be read: {1}", a, b);
 		// {0} is an earlier editor setting, such as facade.custom.aider.launch
 		case 'migration_shape': return vscode.l10n.t("{0} has no place in facade.json; fix it or remove it, or write facade.json yourself", a);
 		// {0} and {1} are earlier editor settings, such as facade.custom.codex and facade.codex; {2} the entry both would be, such as clis.codex
@@ -149,11 +149,11 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// {0} is the field, such as clis.codex.enabled; {1} the type of value it holds, such as string
 		case 'entry_enabled_type': return vscode.l10n.t("{0} must be true or false; received {1}", a, b);
 		// {0} is the setting, such as clis.codex.args; {1} the argument's place in it, from 0; {2} the option, such as --sandbox
-		case 'args_reserved': return vscode.l10n.t("{0}[{1}] is {2}, which Facade sets or decides itself; remove it", a, b, c);
+		case 'args_reserved': return vscode.l10n.t("{0}[{1}] is {2}, which Facade Code Framework sets or decides itself; remove it", a, b, c);
 		// {0} is the setting, such as clis.codex.args; {1} the argument's place in it, from 0; {2} the configuration key, such as model
-		case 'args_reserved_key': return vscode.l10n.t("{0}[{1}] sets {2}, which Facade sets itself; remove it", a, b, c);
+		case 'args_reserved_key': return vscode.l10n.t("{0}[{1}] sets {2}, which Facade Code Framework sets itself; remove it", a, b, c);
 		// {0} is the setting, such as clis.codex.args; {1} the argument's place in it, from 0
-		case 'args_positional': return vscode.l10n.t("{0}[{1}] is not an option: Facade gives the CLI its task and folder itself, so args holds only options and their values", a, b);
+		case 'args_positional': return vscode.l10n.t("{0}[{1}] is not an option: Facade Code Framework gives the CLI its task and folder itself, so args holds only options and their values", a, b);
 		// {0} is the variable's field, such as clis.claude.env.ANTHROPIC_AUTH_TOKEN; {1} the variable it reads
 		// {2} is the reference as written, such as ${env:WORK_API_KEY}: a value of its own, as VS Code fills no placeholder inside braces
 		case 'env_reference_missing': return vscode.l10n.t("{0} reads {2}, but {1} is not in the editor's environment; set it there, or write the value", a, b, `\${env:${b}}`);
@@ -194,14 +194,14 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the program setting
 		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs via cmd.exe, which cannot run in UNC path {1}; set {2} to the CLI executable or Node entry point", a, b, c);
 		// {0} is the installed version of OpenCode, such as 1.19.5; the commands are npm's, to be kept as they are
-		case 'opencode_1x': return vscode.l10n.t("OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli", a);
+		case 'opencode_1x': return vscode.l10n.t("OpenCode {0} is not supported: Facade Code Extension needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli", a);
 		// {0} is the script, such as a package's cli.js
 		case 'node_missing': return vscode.l10n.t("{0} is a Node script, and Node is not on PATH to run it", a);
-		case 'component_outdated': return vscode.l10n.t("Facade Code requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.");
+		case 'component_outdated': return vscode.l10n.t("Facade Code Extension requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.");
 		case 'numbers_unavailable': return vscode.l10n.t("This computer's counter could not give the agent a number. Try again.");
 		case 'ownership_lost': return vscode.l10n.t("This workspace is owned by another window. Reload this window to take ownership.");
-		// {0} is the file of Facade Code's installation that an update or uninstall removed, such as its dist/ptyd.js
-		case 'installation_removed': return vscode.l10n.t("The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.", a);
+		// {0} is the file of Facade Code Extension's installation that an update or uninstall removed, such as its dist/ptyd.js
+		case 'installation_removed': return vscode.l10n.t("The Facade Code Extension installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.", a);
 		// {0} is the CLI's ID, quoted; {1} the settings file
 		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured; add it to clis in {1}.", a, b);
 		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the conversation is of, such as Codex
@@ -232,12 +232,12 @@ export function agentCountText(count: number): string {
 	return count === 1 ? vscode.l10n.t("1 agent") : vscode.l10n.t("{0} agents", count);
 }
 
-/** The command that opens the editor's Settings at Facade Code's section, as its gear and its items in New Agent say it (UX-1.3). */
+/** The command that opens the editor's Settings at Facade Code Extension's section, as its gear and its items in New Agent say it (UX-1.3). */
 export function openSettingsLabel(): string {
 	return vscode.l10n.t("Open Settings");
 }
 
-/** The link that opens facade.json, as Facade Code's Settings section says it, and so the button of an error it holds (UX-1.3). */
+/** The link that opens facade.json, as Facade Code Extension's Settings section says it, and so the button of an error it holds (UX-1.3). */
 export function editSettingsFileLabel(): string {
 	return vscode.l10n.t("Edit in facade.json");
 }

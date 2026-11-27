@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Facade's robots (CONFIGURATION-2.4): round faces in a gradient with two eyes. An entry shows one by `"icon": "facade-<robot>"`, and
+// Facade Code Extension's robots (CONFIGURATION-2.4): round faces in a gradient with two eyes. An entry shows one by `"icon": "facade-<robot>"`, and
 // a program without an icon shows facade-pearl. scripts/robot-icons.py draws each twice: `media/agents/robot-<robot>.svg`,
 // the image cards and pickers show, and a glyph of `media/robots.woff`, the icon `facade-robot-<robot>` a terminal tab shows.
 

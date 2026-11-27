@@ -8,7 +8,7 @@ import * as path from 'path';
 import { codeOf } from './errors';
 
 /**
- * Whether the running process `pid` runs the same program as this one - another Facade window's extension
+ * Whether the running process `pid` runs the same program as this one - another Facade Code Extension window's extension
  * host, say - rather than whatever program got its id after the one that had it ended; undefined where
  * the system cannot tell (Windows).
  */

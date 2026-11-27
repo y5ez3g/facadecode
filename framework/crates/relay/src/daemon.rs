@@ -81,27 +81,45 @@ impl DaemonLink {
         #[cfg(windows)]
         let connection = Stream::connect(socket, events);
         let mut stream = connection.map_err(|err| {
-            io::Error::new(err.kind(), format!("cannot reach Facade at {at}: {err}"))
+            io::Error::new(
+                err.kind(),
+                format!("cannot reach Facade Code Framework at {at}: {err}"),
+            )
         })?;
         #[cfg(unix)]
-        let user = peer_user(&stream)
-            .map_err(|err| fail(format!("cannot tell whose Facade is at {at}: {err}")))?;
+        let user = peer_user(&stream).map_err(|err| {
+            fail(format!(
+                "cannot tell whose Facade Code Framework is at {at}: {err}"
+            ))
+        })?;
         #[cfg(unix)]
         if user != Uid::current() {
-            return Err(fail(format!("the Facade at {at} is another user's")));
+            return Err(fail(format!(
+                "the Facade Code Framework at {at} is another user's"
+            )));
         }
-        stream
-            .write_all(&hello.to_line())
-            .map_err(|err| fail(format!("cannot say hello to Facade at {at}: {err}")))?;
+        stream.write_all(&hello.to_line()).map_err(|err| {
+            fail(format!(
+                "cannot say hello to Facade Code Framework at {at}: {err}"
+            ))
+        })?;
         let mut lines = Lines::default();
         let response = loop {
             if let Some(line) = lines.next_line() {
                 break line;
             }
             match lines.fill(&mut stream) {
-                Ok(0) => return Err(fail(format!("Facade at {at} closed before it responded"))),
+                Ok(0) => {
+                    return Err(fail(format!(
+                        "Facade Code Framework at {at} closed before it responded"
+                    )));
+                }
                 Ok(_) => {}
-                Err(err) => return Err(fail(format!("Facade at {at} did not respond: {err}"))),
+                Err(err) => {
+                    return Err(fail(format!(
+                        "Facade Code Framework at {at} did not respond: {err}"
+                    )));
+                }
             }
         };
         if jsonrpc::read(&response)
@@ -112,7 +130,7 @@ impl DaemonLink {
         {
             let said = String::from_utf8_lossy(&response);
             return Err(fail(format!(
-                "Facade at {at} refused the hello: {}",
+                "Facade Code Framework at {at} refused the hello: {}",
                 said.trim_end()
             )));
         }
@@ -126,7 +144,7 @@ impl DaemonLink {
 }
 
 /// Runs `facade daemon --detach` from the relay's own folder, as a client does where no daemon
-/// listens, and blocks until it returns, which takes up to 10 seconds while Facade starts. Its
+/// listens, and blocks until it returns, which takes up to 10 seconds while Facade Code Framework starts. Its
 /// output goes to standard error: standard output carries MCP.
 pub(crate) fn start_facade() -> Result<(), String> {
     let program = std::env::current_exe()

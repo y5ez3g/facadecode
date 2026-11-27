@@ -5,7 +5,7 @@
 
 /**
  * JSON as a program's settings file has it - comments and trailing commas allowed - read with where each of
- * its parts is, so that what Facade adds to it goes in as an edit of the text: the rest of the file, its
+ * its parts is, so that what Facade Code Extension adds to it goes in as an edit of the text: the rest of the file, its
  * comments, a number too large for JavaScript, a key written twice and its layout, stays as it was (X-48).
  */
 

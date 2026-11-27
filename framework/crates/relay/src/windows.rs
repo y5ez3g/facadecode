@@ -367,7 +367,7 @@ fn authenticate(pipe: &OwnedHandle) -> io::Result<()> {
     if !same_user {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "the Facade at this pipe is another user's",
+            "the Facade Code Framework at this pipe is another user's",
         ));
     }
     Ok(())

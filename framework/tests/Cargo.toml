@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Scenario tests that run built Facade programs in isolated Facade homes, with the fake CLI they drive and the stress test."
+description = "Scenario tests that run built Facade Code Framework programs in isolated Facade homes, with the fake CLI they drive and the stress test."
 
 [lib]
 path = "src/lib.rs"

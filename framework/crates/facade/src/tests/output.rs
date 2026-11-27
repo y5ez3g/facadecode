@@ -177,7 +177,7 @@ fn every_state_has_its_words() {
         ),
         (
             ended(json!({ "code": 0, "at": at }), "stopped"),
-            "Ended (stopped by Facade)",
+            "Ended (stopped by Facade Code Framework)",
         ),
         (
             ended(json!({ "code": 0, "at": at }), "normal"),
@@ -408,7 +408,7 @@ fn status_shows_settings_services_and_each_machine_s_clis() {
     let text = status_text(&status, &clis, "peer-id", "0.1.6", launcher);
     assert_eq!(
         text,
-        "Facade 0.1.6+abc is running on peer.\nCLI version         0.1.6\nActive agents       12\n\n\
+        "Facade Code Framework 0.1.6+abc is running on peer.\nCLI version         0.1.6\nActive agents       12\n\n\
          Home                /home/you/.facade\nSettings            /home/you/.facade/facade.json\n\
          Daemon PID          16968\nKeeper PID          16752\n\n\
          Guest MCP           Add \"/home/you/.facade/framework/bin/facade-mcp\" as a stdio server.\n\n\
@@ -419,7 +419,7 @@ fn status_shows_settings_services_and_each_machine_s_clis() {
     let text = status_text(&status, &clis, "peer-id", "0.1.6", launcher);
     assert_eq!(
         text.lines().next(),
-        Some("Facade 0.1.5 is running on peer.")
+        Some("Facade Code Framework 0.1.5 is running on peer.")
     );
     assert_eq!(field(&text, "CLI version").as_deref(), Some("0.1.6"));
     assert_eq!(field(&text, "Keeper PID").as_deref(), Some("-"));
@@ -428,7 +428,7 @@ fn status_shows_settings_services_and_each_machine_s_clis() {
         sleeping.ends_with("\n\nAvailable CLIs\nlaptop              claude, codex"),
         "{sleeping}"
     );
-    assert!(sleeping.starts_with("Facade 0.1.6 is not running on "));
+    assert!(sleeping.starts_with("Facade Code Framework 0.1.6 is not running on "));
     assert_eq!(field(&sleeping, "Home").as_deref(), Some(home));
     assert_eq!(field(&sleeping, "Settings").as_deref(), Some(settings));
     for label in ["Active agents", "Daemon PID", "Keeper PID"] {

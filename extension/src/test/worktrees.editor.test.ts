@@ -469,7 +469,7 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		]);
 	});
 
-	test('UX-2.4: Facade\'s own reasons are said to the person in their words, when New Worktree is unavailable and when a creation fails', async () => {
+	test('UX-2.4: Facade Code Extension\'s own reasons are said to the person in their words, when New Worktree is unavailable and when a creation fails', async () => {
 		const editor = fakeEditor();
 		const errors: string[] = [];
 		const english = 'This editor\'s Git extension cannot create worktrees: its API has no worktree creation.';

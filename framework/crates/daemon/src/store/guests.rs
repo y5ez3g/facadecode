@@ -1,6 +1,6 @@
 //! The `guests` table: each guest's record, so that a daemon started anew lists it again with its
 //! number and its inbox, and its session's next hook finds it. A guest's row is written as it
-//! joins and its `heard_at` as Facade hears from it again; the row goes with its inbox when the
+//! joins and its `heard_at` as Facade Code Framework hears from it again; the row goes with its inbox when the
 //! guest ends (`Store::delete_guest`). Its environment and the process it ends with stay in memory.
 
 use std::sync::Arc;
@@ -19,7 +19,7 @@ pub(crate) struct GuestRecord {
     pub(crate) session: String,
     pub(crate) cwd: String,
     pub(crate) created_at: String,
-    /// When Facade last heard from it, its join or a hook that began a turn, in UTC ISO 8601 with
+    /// When Facade Code Framework last heard from it, its join or a hook that began a turn, in UTC ISO 8601 with
     /// milliseconds.
     pub(crate) heard_at: String,
 }
@@ -116,7 +116,7 @@ impl GuestTable {
         )
     }
 
-    /// Commits that Facade heard from guest `agent_id` at `at`.
+    /// Commits that Facade Code Framework heard from guest `agent_id` at `at`.
     #[cfg(test)]
     pub(crate) fn heard_from_guest(&self, agent_id: &str, at: &str) -> anyhow::Result<()> {
         self.0.with(
@@ -136,7 +136,7 @@ impl GuestTable {
         self.select("1", [])
     }
 
-    /// The guests Facade last heard from before `before`, an ISO 8601 time, by number.
+    /// The guests Facade Code Framework last heard from before `before`, an ISO 8601 time, by number.
     pub(crate) fn guests_heard_before(&self, before: &str) -> anyhow::Result<Vec<GuestRecord>> {
         self.select("heard_at < ?1", [before])
     }

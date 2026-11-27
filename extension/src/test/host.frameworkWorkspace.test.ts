@@ -97,11 +97,11 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 	}
 }
 
-suite('Orchestrator workspace roster (RULES-6.1)', () => {
+suite('Facade Code Framework workspace roster (RULES-6.1)', () => {
 	for (const failsOnOpen of [true, false]) {
 		const when = failsOnOpen ? 'cannot open' : 'fails after opening';
 		test(`a native watch that ${when} falls back and retries a transient roster read (ARCHITECTURE-3.1)`, () => {
-			const temp = tempDir('fd-orchestrator-watch-');
+			const temp = tempDir('fd-framework-watch-');
 			const file = path.join(temp.dir, 'orchestrator-workspace.json');
 			const messages: string[] = [];
 			const error = Object.assign(new Error('Too many open files'), { code: 'EMFILE' });
@@ -154,8 +154,8 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 				refresh();
 				assert.deepStrictEqual(workspace.snapshot().members, [next]);
 				assert.deepStrictEqual(messages, [
-					'Could not watch the Facade workspace: Too many open files',
-					'Could not read the Facade workspace: Transient read error',
+					'Could not watch the Facade Code Framework workspace: Too many open files',
+					'Could not read the Facade Code Framework workspace: Transient read error',
 				]);
 			} finally {
 				workspace.dispose();
@@ -167,7 +167,7 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 	}
 
 	test('a fresh window imports the exact saved empty workspace before its URI ledger existed (ARCHITECTURE-6.2)', async () => {
-		const temp = tempDir('fd-orchestrator-saved-empty-');
+		const temp = tempDir('fd-framework-saved-empty-');
 		const pin = {
 			id: 'saved-pin', location: 'folder', cwd: '/work', name: 'Legacy Fixture',
 			conversation: { environment: 'local', cli: 'codex', sessionId: 'old-session' },
@@ -234,7 +234,7 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 	});
 
 	test('an interrupted v1 conversion corroborates a different workspace Pin only with an exact durable record (ARCHITECTURE-6.2)', async () => {
-		const temp = tempDir('fd-orchestrator-partial-conversion-');
+		const temp = tempDir('fd-framework-partial-conversion-');
 		const { FrameworkWorkspace } = withModules({ vscode: { EventEmitter: TestEmitter } })
 			<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'));
 		const before = {
@@ -244,7 +244,7 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 		const other = { ...before, id: 'other-pin' };
 		const reference = { machine_id: local, agent_id: 'a7' };
 		const converted = {
-			...before, name: 'Framework name', machine_id: reference.machine_id, agent: reference.agent_id,
+			...before, name: 'Facade Code Framework name', machine_id: reference.machine_id, agent: reference.agent_id,
 			conversation: { ...before.conversation, environment: `machine:${local}` },
 		};
 		const first = workspaceRecord('file:///first', temp.dir);
@@ -283,7 +283,7 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 	});
 
 	test('startup settings and the one restart attempt survive another window, and the Pin follows the new reference and session (RULES-6.4)', () => {
-		const temp = tempDir('fd-orchestrator-restart-');
+		const temp = tempDir('fd-framework-restart-');
 		const { FrameworkWorkspace } = withModules({ vscode: { EventEmitter: TestEmitter } })
 			<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'));
 		const open = () => new FrameworkWorkspace(temp.dir, {}, { event: () => undefined });
@@ -322,7 +322,7 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 
 	test('an unrecognized legacy recovery file leaves ordinary Pins usable and preserves the file', async () => {
 		for (const original of ['{broken', '{"version":2,"data":"future recovery"}\n']) {
-			const temp = tempDir('fd-orchestrator-sidecar-');
+			const temp = tempDir('fd-framework-sidecar-');
 			const messages: string[] = [];
 			const { FrameworkWorkspace } = withModules({ vscode: {
 				EventEmitter: TestEmitter,
@@ -363,7 +363,7 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 	});
 
 	test('keeps equal numbers distinct and removes records only from an authoritative machine view', async () => {
-		const temp = tempDir('fd-orchestrator-roster-');
+		const temp = tempDir('fd-framework-roster-');
 		const uri = 'file:///workspace';
 		const load = (sessionId: string) => withModules({ vscode: {
 			env: { sessionId },

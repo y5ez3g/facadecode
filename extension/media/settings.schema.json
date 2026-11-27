@@ -1,7 +1,7 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
-	"$comment": "Facade Code's settings file, facade.json in the Facade home: by default ~/.facade/facade.json (docs/extension/features/CONFIGURATION.md).",
-	"title": "Facade Code settings",
+	"$comment": "Facade Code Framework's settings file, facade.json in the Facade home: by default ~/.facade/facade.json (docs/extension/features/CONFIGURATION.md).",
+	"title": "Facade Code Framework settings",
 	"type": "object",
 	"allowComments": true,
 	"allowTrailingCommas": true,
@@ -9,17 +9,17 @@
 	"properties": {
 		"$schema": {
 			"type": "string",
-			"description": "For the editor only. Facade checks that it is a string and does not use its value."
+			"description": "For the editor only. Facade Code Extension checks that it is a string and does not use its value."
 		},
 		"yolo": {
 			"type": "boolean",
 			"default": true,
-			"markdownDescription": "With `true`, Facade handles CLI approvals and directory trust prompts, disables the CLI sandbox where supported, and lets MCP callers reach all agents across connected machines. With `false`, each CLI keeps its own approvals and sandbox, and MCP callers reach only their entire creation tree. Facade tools need no approval in either mode. Changes apply to managed agents on start or Resume and to Guests when they connect."
+			"markdownDescription": "With `true`, Facade Code Framework handles CLI approvals and directory trust prompts, disables the CLI sandbox where supported, and lets MCP callers reach all agents across connected machines. With `false`, each CLI keeps its own approvals and sandbox, and MCP callers reach only their entire creation tree. Facade Code Framework tools need no approval in either mode. Changes apply to managed agents on start or Resume and to Guests when they connect."
 		},
 		"names": {
 			"type": "array",
 			"items": { "type": "string", "pattern": "\\S" },
-			"markdownDescription": "Names for agents and Guests without a name. Facade picks a name at random, preferring names unused in `facade list` and allowing duplicates when all names are in use."
+			"markdownDescription": "Names for agents and Guests without a name. Facade Code Framework picks a name at random, preferring names unused in `facade list` and allowing duplicates when all names are in use."
 		},
 		"clis": {
 			"type": "object",
@@ -92,7 +92,7 @@
 			"type": "array",
 			"items": { "type": "string" },
 			"default": [],
-			"markdownDescription": "Arguments, passed exactly as written and in order: no shell, nothing expanded. Options Facade sets or decides itself - approvals and sandbox (`yolo`), model and effort (their fields), the folder, the session and the first task - are refused."
+			"markdownDescription": "Arguments, passed exactly as written and in order: no shell, nothing expanded. Options Facade Code Framework sets or decides itself - approvals and sandbox (`yolo`), model and effort (their fields), the folder, the session and the first task - are refused."
 		},
 		"env": {
 			"type": "object",
@@ -339,19 +339,19 @@
 				"type": {
 					"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder", "omp", "copilot", "custom"],
 					"markdownEnumDescriptions": [
-						"Claude Code, with everything Facade gives it, under this name.",
-						"Codex, with everything Facade gives it, under this name.",
-						"Antigravity, with everything Facade gives it, under this name.",
-						"Muse Code, with everything Facade gives it, under this name.",
-						"OpenCode, with everything Facade gives it, under this name.",
-						"Pi, with everything Facade gives it, under this name.",
-						"Devin, with everything Facade gives it, under this name.",
-						"Cursor, with everything Facade gives it, under this name.",
-						"Kiro, with everything Facade gives it, under this name.",
-						"Qoder, with everything Facade gives it, under this name.",
-						"Oh My Pi, with everything Facade gives it, under this name.",
-						"GitHub Copilot CLI, with everything Facade gives it, under this name.",
-						"Any other program, started in a terminal with nothing of Facade's: no tools, messages, status, model, effort, Resume or Pin."
+						"Claude Code, with everything Facade Code Framework gives it, under this name.",
+						"Codex, with everything Facade Code Framework gives it, under this name.",
+						"Antigravity, with everything Facade Code Framework gives it, under this name.",
+						"Muse Code, with everything Facade Code Framework gives it, under this name.",
+						"OpenCode, with everything Facade Code Framework gives it, under this name.",
+						"Pi, with everything Facade Code Framework gives it, under this name.",
+						"Devin, with everything Facade Code Framework gives it, under this name.",
+						"Cursor, with everything Facade Code Framework gives it, under this name.",
+						"Kiro, with everything Facade Code Framework gives it, under this name.",
+						"Qoder, with everything Facade Code Framework gives it, under this name.",
+						"Oh My Pi, with everything Facade Code Framework gives it, under this name.",
+						"GitHub Copilot CLI, with everything Facade Code Framework gives it, under this name.",
+						"Any other program, started in a terminal with nothing of Facade Code Framework's: no tools, messages, status, model, effort, Resume or Pin."
 					],
 					"markdownDescription": "The CLI this entry runs."
 				}

@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-// Every unit-test process gets its own Facade root, and with it its own Facade directory, so no test can touch a person's real data
+// Every unit-test process gets its own Facade Code Extension root, and with it its own Facade Code Extension directory, so no test can touch a person's real data
 // (ARCHITECTURE-5.3).
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-test-'));
 process.env.FACADE_HOME = home;

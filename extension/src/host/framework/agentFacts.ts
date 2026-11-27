@@ -61,7 +61,7 @@ export function agentFacts(info: AgentInfo, view: AgentPresentation): RunFacts {
 	const startedAt = Date.parse(info.started_at);
 	return {
 		id,
-		orchestrator: { reference, state, ...(view.machine !== undefined ? { machine: view.machine } : {}) },
+		framework: { reference, state, ...(view.machine !== undefined ? { machine: view.machine } : {}) },
 		alias: agent_id,
 		address: info.address,
 		name: info.name,
@@ -105,7 +105,7 @@ export function failedPinFacts(pin: FrameworkPin, error: RunError, machine: stri
 	const id = agentKey(reference);
 	return {
 		id,
-		orchestrator: { reference, state: 'error', ...(machine !== undefined ? { machine } : {}) },
+		framework: { reference, state: 'error', ...(machine !== undefined ? { machine } : {}) },
 		alias: pin.agent,
 		name: pin.name,
 		cli: pin.conversation.cli,

@@ -1,10 +1,10 @@
 # Relay
 
-The relay is `facade-mcp`, the program a CLI starts as its Facade MCP server. With the daemon's MCP server it forms
+The relay is `facade-mcp`, the program a CLI starts as its Facade Code Framework MCP server. With the daemon's MCP server it forms
 Facade API v1's MCP entry point. It passes each MCP line between the CLI's
 MCP client and the daemon's MCP server, and keeps the CLI's requests alive while one daemon takes over from another. It
-is its own island because it must almost never change: a CLI keeps running the same `facade-mcp` across Facade upgrades,
-so it knows only a small fixed contract and nothing of MCP or Facade's tools. Crate `facade-relay`, folder
+is its own island because it must almost never change: a CLI keeps running the same `facade-mcp` across Facade Code Framework upgrades,
+so it knows only a small fixed contract and nothing of MCP or Facade Code Framework's tools. Crate `facade-relay`, folder
 `framework/crates/relay/`, program `facade-mcp`.
 
 ## Owns
@@ -34,7 +34,7 @@ It keeps nothing on disk.
 ## Never does
 
 - Change or make MCP messages. Its hello and its response to `closing` are its only own lines.
-- Depend on a Facade crate. Its dependencies are `sha2`, `nix` on Unix and `windows-sys` on Windows.
+- Depend on a Facade Code Framework crate. Its dependencies are `sha2`, `nix` on Unix and `windows-sys` on Windows.
 - Read its arguments. They go into the hello and nowhere else.
 - Start any process other than `facade daemon --detach`.
 - Time out a request, limit a line's size, or queue anything beyond the pending and held lines.
@@ -42,7 +42,7 @@ It keeps nothing on disk.
 
 ## Interface
 
-**CLIs.** A CLI runs the launcher `framework/bin/facade-mcp` from its MCP settings. The entries Facade writes come from
+**CLIs.** A CLI runs the launcher `framework/bin/facade-mcp` from its MCP settings. The entries Facade Code Framework writes come from
 the wiring in [rules](rules.md); a person can also write one by hand with only the program's path.
 
 - Standard input and output: MCP, one JSON-RPC message per line.
@@ -76,7 +76,7 @@ own environment, as DAEMON.md tells a client to. On Windows the program is `faca
 - `nix` (Unix only): `poll`; the user ID; the peer's user, through `getpeereid`, or `SO_PEERCRED` on Linux.
 - `sha2`: the hash in the socket's name.
 - `windows-sys` (Windows only): the completion port, overlapped pipe I/O and the server's user SID.
-- No Facade crate. At run time it uses the daemon's socket and the `facade` program beside it.
+- No Facade Code Framework crate. At run time it uses the daemon's socket and the `facade` program beside it.
 
 ## Inside
 
@@ -136,10 +136,10 @@ whose `id` has the same bytes. Every line but `closing` goes to standard output 
 for the daemon's first line. The relay then writes the pending requests to the new link. Any failure leaves it
 disconnected:
 
-- It logs why once for each time it is disconnected. When it logged, it logs `connected to Facade` once it connects.
+- It logs why once for each time it is disconnected. When it logged, it logs `connected to Facade Code Framework` once it connects.
 - Where no one listens (the socket is missing, or the connection is refused) and it has not done so since it was last
   connected, it runs `start_facade`. Once that succeeds, it tries again at once; where it fails, it logs why and waits
-  as below. `start_facade` waits for `facade daemon --detach` to return, which takes up to 10 seconds while Facade
+  as below. `start_facade` waits for `facade daemon --detach` to return, which takes up to 10 seconds while Facade Code Framework
   starts. Its standard input is empty and its output goes to standard error, as standard output carries MCP.
 - Otherwise it waits 0.1 seconds, doubling up to 2 seconds. The wait starts again from 0.1 seconds once a daemon took
   the hello and the pending requests.

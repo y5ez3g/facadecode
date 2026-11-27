@@ -1,4 +1,4 @@
-//! A newer Facade taking over while every agent runs on (`daemon.upgrade`): a command of a newer
+//! A newer Facade Code Framework taking over while every agent runs on (`daemon.upgrade`): a command of a newer
 //! build that finds this daemon asks it to hand over.
 //!
 //! 1. Check: the build must be newer and share a daemon API version. While the keeper holds CLIs,
@@ -45,11 +45,11 @@ pub(crate) fn handed_over_cleanly() -> bool {
     HANDED_OVER_CLEANLY.load(Ordering::SeqCst)
 }
 
-/// The refusal of a call that comes while a newer Facade takes over: nothing was done.
+/// The refusal of a call that comes while a newer Facade Code Framework takes over: nothing was done.
 fn upgrading() -> ErrorBody {
     operation_error(
         Reason::Upgrading,
-        "a newer Facade is taking over; nothing was done; repeat the call once Facade \
+        "a newer Facade Code Framework is taking over; nothing was done; repeat the call once Facade Code Framework \
          answers again",
     )
 }
@@ -74,7 +74,7 @@ impl Lifecycle {
         self.draining.load(Ordering::SeqCst).then(upgrading)
     }
 
-    /// Hands the running Facade over to the build `args` names. Answers once the handover is under
+    /// Hands the running Facade Code Framework over to the build `args` names. Answers once the handover is under
     /// way; a second request meanwhile gets the first one's answer.
     pub(crate) async fn take_over(
         self: &Arc<Self>,
@@ -94,7 +94,7 @@ impl Lifecycle {
     }
 
     /// Checks the build and the protocols, installs the build and points the launchers at it.
-    /// A step that fails leaves the running Facade as it was.
+    /// A step that fails leaves the running Facade Code Framework as it was.
     async fn prepare_takeover(
         args: &DaemonUpgradeArgs,
         activity: &impl LifecycleActivity,
@@ -103,14 +103,17 @@ impl Lifecycle {
         if !facade_base::takes_over(&args.build, &ours) {
             return Err(operation_error(
                 Reason::Refused,
-                format!("{} is not newer than this Facade, {ours}", args.build),
+                format!(
+                    "{} is not newer than this Facade Code Framework, {ours}",
+                    args.build
+                ),
             ));
         }
         if highest_common(&args.daemon_api_versions, SUPPORTED_API_VERSIONS).is_none() {
             return Err(ErrorBody::protocol_incompatible(
                 format!(
                     "{} supports daemon API versions {:?}, and the running build, {ours}, \
-                     supports {SUPPORTED_API_VERSIONS:?}. Stop the running Facade before switching builds",
+                     supports {SUPPORTED_API_VERSIONS:?}. Stop the running Facade Code Framework before switching builds",
                     args.build,
                     args.daemon_api_versions.as_slice()
                 ),

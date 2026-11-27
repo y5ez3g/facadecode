@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
+<img src="../../../extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**Bộ điều phối đa agent cho VS Code.**
+**Chạy các agent lập trình cùng nhau trong VS Code.**
 
 Chạy các CLI agent chính hãng, chỉnh sửa code và xem lại các thay đổi trong cùng một cửa sổ IDE. Sử dụng các tài khoản và gói đăng ký của riêng bạn, đồng thời để các agent cộng tác giữa các cửa sổ và máy tính.
 
@@ -35,9 +35,9 @@ Chạy các CLI agent chính hãng, chỉnh sửa code và xem lại các thay �
 code --install-extension facade.facadecode
 ```
 
-Hoặc cài đặt **Facade Code** từ [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) hoặc [Open VSX](https://open-vsx.org/extension/facade/facadecode). Tiện ích chạy trên macOS (Apple silicon), Linux (x64) và Windows (x64).
+Hoặc cài đặt **Facade Code Extension** từ [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) hoặc [Open VSX](https://open-vsx.org/extension/facade/facadecode). Tiện ích chạy trên macOS (Apple silicon), Linux (x64) và Windows (x64).
 
-Tiếp theo, hãy cài đặt và đăng nhập vào bất kỳ CLI agent được hỗ trợ nào mà bạn định sử dụng: Claude Code, Codex, Antigravity, Muse Code, OpenCode hoặc Pi. Facade Code khởi chạy từng CLI bằng tài khoản và gói đăng ký riêng của chính CLI đó.
+Tiếp theo, hãy cài đặt và đăng nhập vào bất kỳ CLI agent được hỗ trợ nào mà bạn định sử dụng: Claude Code, Codex, Antigravity, Muse Code, OpenCode hoặc Pi. Facade Code Extension khởi chạy từng CLI bằng tài khoản và gói đăng ký riêng của chính CLI đó.
 
 > **Theo mặc định, các agent chạy mà không cần hỏi phê duyệt.** Với `yolo` được bật mặc định, các agent có thể thực thi lệnh và thay đổi tệp mà không cần hỏi trước. Hãy tắt tùy chọn này để khôi phục các câu hỏi phê duyệt tiêu chuẩn của từng CLI. Xem [README tiện ích](../../../extension/README.md#install).
 
@@ -45,7 +45,7 @@ Tiếp theo, hãy cài đặt và đăng nhập vào bất kỳ CLI agent đư�
 
 **Các agent và IDE của bạn, trong cùng một cửa sổ.**
 
-Facade Code chạy các CLI agent chính hãng (Claude Code, Codex, Antigravity, Muse Code, OpenCode và Pi) trong các tab terminal biên tập bên cạnh các tệp của bạn, sử dụng các lệnh, công cụ, tài khoản và gói đăng ký riêng của từng CLI. Một thẻ trong bảng điều khiển sẽ theo dõi trạng thái của từng agent.
+Facade Code Extension chạy các CLI agent chính hãng (Claude Code, Codex, Antigravity, Muse Code, OpenCode và Pi) trong các tab terminal biên tập bên cạnh các tệp của bạn, sử dụng các lệnh, công cụ, tài khoản và gói đăng ký riêng của từng CLI. Một thẻ trong bảng điều khiển sẽ theo dõi trạng thái của từng agent.
 
 - **Làm việc ngay cạnh mã nguồn.** Mỗi agent chạy trong tab terminal riêng ở khu vực soạn thảo. Việc đóng một tab chỉ ẩn nó đi trong khi agent vẫn tiếp tục chạy; bấm vào thẻ của nó để mở lại tab.
 - **Theo dõi trạng thái giữa các agent.** Các thẻ hiển thị nội dung gần nhất được gửi tới từng agent và liệu nó đang làm việc, cần cấp quyền hay gặp lỗi, cùng phần chi tiết cho biết tiêu đề, thư mục và ai đã khởi chạy nó. Các agent vẫn tiếp tục chạy xuyên suốt quá trình tải lại cửa sổ và khởi động lại tiện ích.
@@ -57,19 +57,19 @@ Facade Code chạy các CLI agent chính hãng (Claude Code, Codex, Antigravity,
 
 Thông qua MCP và giao thức terminal, các agent có thể khởi chạy, dừng, tìm kiếm và nhắn tin cho các agent khác, đọc màn hình terminal của nhau, nhập văn bản và nhấn phím.
 
-- **Khởi chạy và dừng agent.** Một agent có thể khởi chạy các agent khác bằng bất kỳ CLI nào trong số sáu CLI, trong bất kỳ thư mục hoặc worktree mới nào thuộc các cửa sổ Facade trên máy tính này, và giao cho chúng nhiệm vụ đầu tiên. Một yêu cầu thử lại có cùng ID yêu cầu (request ID) sẽ không bao giờ khởi chạy agent thứ hai trùng lặp.
-- **Gửi tin nhắn.** Các agent trao đổi tin nhắn với nhau và có thể nhắn tin cho bạn. Facade dán toàn bộ tin nhắn một lần và gửi đi. Nếu văn bản chưa gửi hoặc câu hỏi prompt đang chắn dòng nhập, việc gửi sẽ chờ cho đến khi ô nhập sẵn sàng.
+- **Khởi chạy và dừng agent.** Một agent có thể khởi chạy các agent khác bằng bất kỳ CLI nào trong số sáu CLI, trong bất kỳ thư mục hoặc worktree mới nào thuộc các cửa sổ Facade Code Extension trên máy tính này, và giao cho chúng nhiệm vụ đầu tiên. Một yêu cầu thử lại có cùng ID yêu cầu (request ID) sẽ không bao giờ khởi chạy agent thứ hai trùng lặp.
+- **Gửi tin nhắn.** Các agent trao đổi tin nhắn với nhau và có thể nhắn tin cho bạn. Facade Code Extension dán toàn bộ tin nhắn một lần và gửi đi. Nếu văn bản chưa gửi hoặc câu hỏi prompt đang chắn dòng nhập, việc gửi sẽ chờ cho đến khi ô nhập sẵn sàng.
 - **Điều khiển terminal.** Một agent có thể đọc màn hình của agent khác, nhập lệnh và nhấn phím để trả lời prompt hoặc hỗ trợ đồng đội đang bị kẹt. Khi một agent con chờ cấp quyền, câu trả lời hoặc đăng nhập quá 20 giây, agent đã khởi chạy nó sẽ nhận được thông báo.
 
 ## Agent Mesh
 
 **Kết nối các agent giữa các cửa sổ, máy tính và địa điểm.**
 
-Facade Code kết nối các agent trong các cửa sổ Facade trên máy tính này thành một mạng lưới duy nhất. Mở một cửa sổ [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) để mở rộng sự cộng tác đó sang một máy khác.
+Facade Code Extension kết nối các agent trong các cửa sổ Facade Code Extension trên máy tính này thành một mạng lưới duy nhất. Mở một cửa sổ [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) để mở rộng sự cộng tác đó sang một máy khác.
 
-- **Giữa các cửa sổ.** Khi bật `yolo`, một agent có thể liên lạc với mọi agent trên các cửa sổ Facade ở máy tính này, cả cục bộ lẫn Remote - SSH. Khi tắt, một agent chỉ tiếp cận nhóm của chính nó: agent do bạn khởi chạy và các agent được tạo từ đó.
+- **Giữa các cửa sổ.** Khi bật `yolo`, một agent có thể liên lạc với mọi agent trên các cửa sổ Facade Code Extension ở máy tính này, cả cục bộ lẫn Remote - SSH. Khi tắt, một agent chỉ tiếp cận nhóm của chính nó: agent do bạn khởi chạy và các agent được tạo từ đó.
 - **Mở rộng qua SSH.** Trong cửa sổ [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), các agent chạy trực tiếp trên máy từ xa với đầy đủ công cụ, tệp và tài khoản ở đó. Các agent cục bộ có thể trực tiếp khởi chạy và gửi tin nhắn tới các agent trong cửa sổ Remote - SSH.
-- **Điều phối từ điện thoại.** Kết nối ứng dụng di động Claude với một phiên Claude Code trên máy tính của bạn bằng [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Phiên đó có thể điều phối các agent khác qua Facade và báo cáo tiến độ trở lại điện thoại của bạn.
+- **Điều phối từ điện thoại.** Kết nối ứng dụng di động Claude với một phiên Claude Code trên máy tính của bạn bằng [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Phiên đó có thể điều phối các agent khác qua Facade Code Extension và báo cáo tiến độ trở lại điện thoại của bạn.
 
 <sub>Remote Control yêu cầu phiên bản Claude Code được hỗ trợ, gói đăng ký đủ điều kiện và đăng nhập với đầy đủ quyền hạn. Xem [các yêu cầu thiết lập](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
@@ -97,6 +97,6 @@ IDE là một bản fork của VS Code, cài đặt độc lập bên cạnh tr�
 
 ## Giấy phép
 
-MIT, tương tự VS Code gốc. Xem [`LICENSE.txt`](../../../LICENSE.txt) để biết thông báo bản quyền của Microsoft và các tác giả đóng góp cho Facade Code.
+MIT, tương tự VS Code gốc. Xem [`LICENSE.txt`](../../../LICENSE.txt) để biết thông báo bản quyền của Microsoft và các tác giả đóng góp cho Facade Code Extension.
 
-<sub>Facade Code là một sản phẩm độc lập và không liên kết với, được xác nhận bởi, hoặc được tài trợ bởi các nhà cung cấp công cụ bên thứ ba được hiển thị. Tất cả các nhãn hiệu và logo của bên thứ ba đều thuộc về chủ sở hữu tương ứng.</sub>
+<sub>Facade Code Extension là một sản phẩm độc lập và không liên kết với, được xác nhận bởi, hoặc được tài trợ bởi các nhà cung cấp công cụ bên thứ ba được hiển thị. Tất cả các nhãn hiệu và logo của bên thứ ba đều thuộc về chủ sở hữu tương ứng.</sub>

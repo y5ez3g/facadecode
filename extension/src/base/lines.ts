@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Newline-delimited JSON as Facade's processes read it: ptyd and its windows, and a run's MCP shim with its CLI and with ptyd. Each
+// Newline-delimited JSON as Facade Code Extension's processes read it: ptyd and its windows, and a run's MCP shim with its CLI and with ptyd. Each
 // side reads whole UTF-8 lines within one bound, so that no peer makes it hold an unbounded partial line.
 
 /** The longest line a reader takes: an 8 MiB screen even with JSON's sixfold control-character escaping, plus its envelope. */

@@ -881,7 +881,7 @@ impl Daemon {
                 "the original message came from the command line, which has no reply address",
             )),
             FACADE => Err(ErrorBody::invalid_argument(
-                "the original message is a Facade notice, which takes no reply",
+                "the original message is a Facade Code Framework notice, which takes no reply",
             )),
             _ => Ok(Some((
                 reference.clone(),
@@ -1025,7 +1025,7 @@ impl Daemon {
             let work = self.lifecycle.begin(Work::Send).ok_or_else(|| {
                 ErrorBody::new(
                     Reason::Unavailable,
-                    "Facade is exiting before the send was saved",
+                    "Facade Code Framework is exiting before the send was saved",
                 )
             })?;
             (Due::now(), Some(work))

@@ -432,7 +432,7 @@ impl Drop for TestTerminal {
     }
 }
 
-/// A pseudo console of the ConPTY package that Facade's build carries, as Windows Terminal, the
+/// A pseudo console of the ConPTY package that Facade Code Framework's build carries, as Windows Terminal, the
 /// person's own terminal on Windows 11, runs one: its console host passes output on as it comes,
 /// where the system's holds it to its frame cadence.
 #[cfg(windows)]

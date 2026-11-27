@@ -1,7 +1,7 @@
 # Briefs
 
 The first message for each role. Replace every `<…>`, and send it as the agent's prompt when you start it through
-Facade. Each brief points to files, so a restarted agent can read its task again. The working files live in
+Facade Code Framework. Each brief points to files, so a restarted agent can read its task again. The working files live in
 `docs/plans/<feature>/` of the root worktree, which is never committed: `<review folder>` is its `reviews/`, and
 `<progress file>` is `progress/<island path>.md` there.
 
@@ -76,7 +76,7 @@ You own `<island path>` of `<feature>`. Your parent is `<name and agent ID>`. Yo
 
 1. Read your part of your parent's freeze, `<freeze path>`, and your island's doc, `docs/framework/islands/<crate>.md`.
 2. If your island has children: write their freeze from [the template](freeze.md) and send it to the bar raiser
-   (`freeze ready: <path>, code in <worktree>`). Once it passes, start each child through Facade in its own worktree,
+   (`freeze ready: <path>, code in <worktree>`). Once it passes, start each child through Facade Code Framework in its own worktree,
    with this brief. Write your layer's code meanwhile.
 3. Write your island's code to the frozen interface. Change only your own files; use the handles you get at creation.
 4. Deliver one commit, with only your paths: it builds, `cargo clippy -- -D warnings` passes, and your island's tests

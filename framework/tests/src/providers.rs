@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, ensure};
 use serde_json::{Value, json};
 
-/// The Facade plugin in the folder Oh My Pi's run names with `--plugin-dir`.
+/// The Facade Code Framework plugin in the folder Oh My Pi's run names with `--plugin-dir`.
 const OMP_PLUGIN: &str = "omp-facade";
 /// The session-reporting extension Oh My Pi's run names with `--extension`.
 const OMP_EXTENSION: &str = "facade-omp.mjs";
@@ -52,7 +52,7 @@ impl Native {
         }
     }
 
-    /// The Facade server this run's configuration gives the CLI, as `mcpServers.facade`: from the
+    /// The Facade Code Framework server this run's configuration gives the CLI, as `mcpServers.facade`: from the
     /// plugin, settings file or agent the CLI's arguments name, and from nowhere else.
     pub fn mcp_settings(
         self,
@@ -71,7 +71,7 @@ impl Native {
                 let plugin = in_run_folder(plugin, home)?;
                 ensure!(
                     plugin.file_name().is_some_and(|name| name == OMP_PLUGIN),
-                    "{} is not Facade's plugin",
+                    "{} is not Facade Code Framework's plugin",
                     plugin.display()
                 );
                 let manifest = json_file(&plugin.join(".claude-plugin/plugin.json"))?;
@@ -418,7 +418,7 @@ pub fn omp_report_file(arguments: &[String], home: &Path) -> anyhow::Result<Opti
         extension
             .file_name()
             .is_some_and(|name| name == OMP_EXTENSION),
-        "{} is not Facade's extension",
+        "{} is not Facade Code Framework's extension",
         extension.display()
     );
     let source = std::fs::read_to_string(&extension)?;

@@ -1,7 +1,7 @@
 Stop one or more running agents.
 
 Keeps each agent's record, final screen, and saved session so you can read
-its screen or resume it later. Connected guests cannot be stopped by Facade
+its screen or resume it later. Connected guests cannot be stopped by Facade Code Framework
 and are skipped when stopping all agents on a machine or across machines.
 
 Usage:

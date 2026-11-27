@@ -30,7 +30,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let settings: Record<string, unknown>;
 	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let front: SelectedAgent | undefined;
-	let orchestrator: boolean;
+	let framework: boolean;
 	let placesShown = true;
 	let changed: TestEmitter<PanelState>;
 	let said: TestEmitter<unknown>;
@@ -75,7 +75,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 		const { PanelView: View } = withModules({ vscode: api })<typeof import('../ui/panel')>(require.resolve('../ui/panel'));
 		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front,
-			placesShown: () => placesShown, usesOrchestrator: () => orchestrator, select };
+			placesShown: () => placesShown, usesFramework: () => framework, select };
 		const actions: PanelActions = async (what, target) => {
 			acts.push([what, target]);
 			return answer();
@@ -105,7 +105,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 
 	setup(() => {
 		posted = []; acts = []; contexts = {}; progress = 0; logged = []; motions = []; ran = [];
-		orchestrator = false;
+		framework = false;
 		settings = {};
 		configChanged = new TestEmitter();
 		state = stateOf(1);
@@ -237,9 +237,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.deepStrictEqual([before, acts, logged.length], [[], [['open', 'run-1']], 1]);
 	});
 
-	test('the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
+	test('the Facade Code Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
 		panel.dispose();
-		orchestrator = true;
+		framework = true;
 		const local = runFacts({ id: 'workstation/a1', alias: 'a1', name: 'Gauge' });
 		const peer = runFacts({ id: 'devbox/a1', alias: 'a1', name: 'Gauge' });
 		const runs = new Map([[local.id, local], [peer.id, peer]]);
@@ -338,7 +338,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.ok(words.includes('Start an agent in this workspace.') && !words.includes('<'), 'the embedded words, with no raw <');
 		assert.match(words, /"continueSession":"Continue Session"/);
 		panel.dispose();
-		orchestrator = true;
+		framework = true;
 		make();
 		assert.match(view.webview.html, /"continueSession":"Resume Agent"/);
 	});

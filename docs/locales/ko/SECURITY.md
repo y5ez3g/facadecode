@@ -1,6 +1,6 @@
 # 보안
 
-Facade Code는 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode)에서 공개적으로 개발됩니다.
+Facade Code Extension Code는 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode)에서 공개적으로 개발됩니다.
 
 ## 취약점 신고
 

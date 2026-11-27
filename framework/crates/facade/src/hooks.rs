@@ -2,7 +2,7 @@
 //! 1 MiB and for at most one second, prints its output in the format of the CLI it names, as
 //! `facade_rules::hook` gives it, and never stands in the CLI's way: it exits 0 whatever happens.
 //!
-//! Hooks of a run Facade started:
+//! Hooks of a run Facade Code Framework started:
 //!
 //! - `session-start <session-file>` saves the session the input names in the run's session file,
 //!   unless the run's environment says the session is not the run's own. The old `--skill` flag
@@ -14,7 +14,7 @@
 //!   reaches the CLI.
 //! - `instructions <cli>` prints the managed instructions that the run's start wrote in the
 //!   folder of the run's agent, where the CLI wants them at that hook.
-//! - `approve <cli>` prints an approval for a call of one of Facade's own tools, and decides
+//! - `approve <cli>` prints an approval for a call of one of Facade Code Framework's own tools, and decides
 //!   nothing about any other tool.
 //!
 //! The session-start hook skips background jobs of its session.
@@ -69,7 +69,7 @@ pub(crate) enum HookEvent {
         /// The CLI whose hook runs it: muse or agy.
         cli: String,
     },
-    /// Approve, as the CLI's hook output, a call of one of Facade's own tools that the CLI would
+    /// Approve, as the CLI's hook output, a call of one of Facade Code Framework's own tools that the CLI would
     /// ask the person about, for a CLI with no rule that approves one server's tools. Reads the
     /// hook's input from standard input and exits 0 whatever happens.
     Approve {
@@ -207,7 +207,7 @@ fn print_run_start(cli: &str, agent: Option<&str>) {
     }
 }
 
-/// `approve <cli>`: prints the approval of a call of one of Facade's own tools.
+/// `approve <cli>`: prints the approval of a call of one of Facade Code Framework's own tools.
 fn print_approval(cli: &str) {
     if let Some(output) = read_json().and_then(|input| hook::approval_output(cli, &input)) {
         print_or_end!("{output}");

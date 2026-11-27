@@ -253,7 +253,7 @@ impl Store {
             .map_err(unreadable)?;
         anyhow::ensure!(
             !has_tables || has_saved_connections,
-            "{} belongs to an older development build. Remove {} before restarting Facade.",
+            "{} belongs to an older development build. Remove {} before restarting Facade Code Framework.",
             path.display(),
             framework.display()
         );
@@ -1246,7 +1246,7 @@ pub(crate) mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "{} belongs to an older development build. Remove {} before restarting Facade.",
+                "{} belongs to an older development build. Remove {} before restarting Facade Code Framework.",
                 database.display(),
                 framework.display()
             )

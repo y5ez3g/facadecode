@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The Framework's acceptance on the extension's side (spec.md "验收"), in one window that runs on it: framework of this Facade root runs the
+// The Facade Code Framework's acceptance on the extension's side (spec.md "验收"), in one window that runs on it: framework of this Facade Code Extension root runs the
 // agents, the window's terminal reaches it with `facade`, and Stop keeps the workspace card and record for Resume Agent.
 // and a program asking its terminal's colours is told the theme's. Fake CLIs only; the window runs
 // `FACADE_IT_ONLY=framework` (or the whole suite with FACADE_IT_IMPLEMENTATION=framework) and no other part of the suite asks for these.
@@ -16,7 +16,7 @@ import { frameworkProgram, normalizeDriveLetter, until } from './editors';
 import { aliasOf, hasAgentTab, inspect, keepConversation, listed, newCard, recordOf, resumeCard, state, stop } from './frameworkWindowDriver';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
-/** The Facade root of this run: framework's home, its settings file and its programs' state, as a terminal's `FACADE_HOME` names it. */
+/** The Facade Code Extension root of this run: framework's home, its settings file and its programs' state, as a terminal's `FACADE_HOME` names it. */
 const HOME = process.env.FACADE_HOME!;
 const ON = process.env.FACADE_IT_JOURNEY === 'framework';
 
@@ -45,13 +45,13 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 	return (channel(reply[1]) + channel(reply[2]) + channel(reply[3])) / 3;
 }
 
-(ON ? suite : suite.skip)('Journey: the Framework in this window (spec 验收)', () => {
+(ON ? suite : suite.skip)('Journey: the Facade Code Framework in this window (spec 验收)', () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
 	});
 
-	test('the window uses the Framework for this Facade home', async () => {
+	test('the window uses the Facade Code Framework for this Facade home', async () => {
 		const log = path.join(HOME, 'framework', 'logs', 'daemon.log');
 		await until('framework\'s daemon of this root to run', () => fs.existsSync(log) && /listening on/.test(fs.readFileSync(log, 'utf8')) ? true : undefined);
 		assert.ok(fs.existsSync(path.join(HOME, 'framework', 'facade.db')), 'its store is in the root\'s framework folder');

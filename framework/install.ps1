@@ -17,7 +17,7 @@ if ($PSBoundParameters.ContainsKey('Version') -and $Version -notmatch "\A$versio
     throw 'Use a release version such as 0.1.6.'
 }
 if ($PSBoundParameters.ContainsKey('ExpectedBuild') -and $ExpectedBuild -cnotmatch "\A$buildPattern\z") {
-    throw 'Use a valid Facade BUILD for -ExpectedBuild.'
+    throw 'Use a valid Facade Code Framework BUILD for -ExpectedBuild.'
 }
 if (-not $InstallRoot) {
     $profileHome = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
@@ -31,7 +31,7 @@ $processor = Get-CimInstance -ClassName Win32_Processor -Property Architecture |
 $arch = switch ($processor.Architecture) {
     9 { 'x64' }
     12 { 'arm64' }
-    default { throw 'Facade is available for Windows on x64 and arm64.' }
+    default { throw 'Facade Code Framework is available for Windows on x64 and arm64.' }
 }
 $releases = 'https://github.com/y5ez3g/facadecode/releases'
 $mirror = 'https://facadecode.com'
@@ -202,7 +202,7 @@ function Update-StandalonePath {
         try {
             Remove-LegacyInstall $legacy
         } catch [IO.IOException], [UnauthorizedAccessException] {
-            Write-Warning "Could not remove all files from the old Facade installation. Close any running Shell from that installation. $($_.Exception.Message)"
+            Write-Warning "Could not remove all files from the old Facade Code Framework installation. Close any running Shell from that installation. $($_.Exception.Message)"
         }
     }
 }
@@ -222,19 +222,19 @@ try {
             if (-not (Get-Download "$releases/latest/download/facade-framework-version.txt" $versionFile) -and
                 -not (Get-Download "$mirror/facade-framework-version.txt" $versionFile)) {
                 Write-DownloadFailure
-                throw 'Could not download the stable Facade version from GitHub or facadecode.com.'
+                throw 'Could not download the stable Facade Code Framework version from GitHub or facadecode.com.'
             }
             $latestBuild = Read-Build $versionFile 'The stable release did not provide a valid BUILD.'
             $Version = ($latestBuild -split '\+', 2)[0]
         }
         if ($forPerson) {
-            Write-Host "Installing Facade $Version for Windows ($arch)..."
+            Write-Host "Installing Facade Code Framework $Version for Windows ($arch)..."
             Write-Host "Downloading $asset..."
         }
         if (-not (Get-ReleasePackage "$releases/download/extension%2F$Version") -and
             -not (Get-ReleasePackage "$mirror/releases/$Version")) {
             Write-DownloadFailure
-            $message = "Could not download $asset and its checksums for Facade $Version from GitHub or facadecode.com."
+            $message = "Could not download $asset and its checksums for Facade Code Framework $Version from GitHub or facadecode.com."
             if ($ExpectedBuild -or $latestBuild) { $message += ' Supply the matching release archive with -Package.' }
             throw $message
         }
@@ -253,16 +253,16 @@ try {
     $build = Read-Build (Join-Path $stage 'VERSION') 'The package did not provide a valid BUILD.'
     $pin = if ($ExpectedBuild) { $ExpectedBuild } else { $latestBuild }
     if ($pin -and $build -cne $pin) {
-        throw "Expected Facade build $pin, found $build in the package. Supply the matching release archive with -Package."
+        throw "Expected Facade Code Framework build $pin, found $build in the package. Supply the matching release archive with -Package."
     }
-    if ($Version -and ($build -split '\+', 2)[0] -cne $Version) { throw "Expected Facade $Version, found $build in the package." }
+    if ($Version -and ($build -split '\+', 2)[0] -cne $Version) { throw "Expected Facade Code Framework $Version, found $build in the package." }
     foreach ($program in $programs) {
         if (-not [IO.File]::Exists((Join-Path $stage $program))) { throw "The package has no $program." }
     }
     $candidate = Join-Path $stage 'facade.exe'
     $reported = & $candidate --version
     if ($LASTEXITCODE -ne 0 -or $reported -isnot [string] -or $reported -cne "facade $build") {
-        throw "The packaged executable does not report Facade build $build. Supply the matching release archive with -Package."
+        throw "The packaged executable does not report Facade Code Framework build $build. Supply the matching release archive with -Package."
     }
 
     $env:FACADE_HOME = $InstallRoot
@@ -274,10 +274,10 @@ try {
     }
     $mode = if ($NoActivate) { '--install-only' } else { '--takeover' }
     & $candidate daemon $mode
-    if ($LASTEXITCODE -ne 0) { throw "Could not select Facade $build (exit $LASTEXITCODE)." }
+    if ($LASTEXITCODE -ne 0) { throw "Could not select Facade Code Framework $build (exit $LASTEXITCODE)." }
     $reported = & $launcher --version
     if ($LASTEXITCODE -ne 0 -or $reported -isnot [string] -or -not ($reported -cmatch "\Afacade ($buildPattern)\z")) {
-        throw 'The home launcher did not report a valid Facade BUILD.'
+        throw 'The home launcher did not report a valid Facade Code Framework BUILD.'
     }
     $selected = $Matches[1]
     $upToDate = $reported -ceq $before -or $selected -cne $build
@@ -294,26 +294,26 @@ $version = ($selected -split '\+', 2)[0]
 $location = Join-Path $bin 'facade.exe'
 if (-not $forPerson) {
     if ($upToDate) {
-        Write-Output "Facade $selected is already up to date in $bin."
+        Write-Output "Facade Code Framework $selected is already up to date in $bin."
     } else {
-        Write-Output "Installed Facade $selected in $bin."
+        Write-Output "Installed Facade Code Framework $selected in $bin."
     }
 } elseif ($upToDate) {
     Write-Host ''
     Write-Host $check -ForegroundColor Green -NoNewline
-    Write-Host " Facade $version is already installed$(Get-BuildNote $selected)"
+    Write-Host " Facade Code Framework $version is already installed$(Get-BuildNote $selected)"
     Write-Host "  Location: $location"
 } else {
     $previous = if ($before -is [string]) { $before -replace '\Afacade ', '' } else { '' }
     $previousVersion = ($previous -split '\+', 2)[0]
     if (-not $previous) {
-        $headline = "Facade $version installed$(Get-BuildNote $selected)"
+        $headline = "Facade Code Framework $version installed$(Get-BuildNote $selected)"
     } elseif ($previousVersion -cne $version) {
-        $headline = "Facade updated $previousVersion $arrow $version$(Get-BuildNote $selected)"
+        $headline = "Facade Code Framework updated $previousVersion $arrow $version$(Get-BuildNote $selected)"
     } else {
         $old = (Get-BuildNote $previous) -replace '\A \(build |\)\z', ''
         $new = (Get-BuildNote $selected) -replace '\A \(build |\)\z', ''
-        $headline = "Facade $version updated (build $old $arrow $new)"
+        $headline = "Facade Code Framework $version updated (build $old $arrow $new)"
     }
     Write-Host ''
     Write-Host $check -ForegroundColor Green -NoNewline

@@ -1,7 +1,7 @@
 //! What a failed command prints: the catalog of failures whose cause the command knows, and, for
-//! every other failure of Facade's services, the service's own words without its reason code.
+//! every other failure of Facade Code Framework's services, the service's own words without its reason code.
 //! Also the words of the failures that make them up, of `machine serve`'s failures, and the line
-//! a command prints on taking over an older running Facade.
+//! a command prints on taking over an older running Facade Code Framework.
 
 use std::fmt;
 use std::io;
@@ -42,13 +42,13 @@ pub(crate) enum Problem {
         message: String,
         follow_up: &'static str,
     },
-    /// An operation wanted a running agent and the Orchestrator found an ended one.
+    /// An operation wanted a running agent and Facade Code Framework found an ended one.
     Ended { diagnostic: String, agent: String },
     /// The start command omitted the CLI name.
     MissingCli { available: Vec<String> },
-    /// Facade could not be reached or started; `log` is the log that says why, where known.
+    /// Facade Code Framework could not be reached or started; `log` is the log that says why, where known.
     Unreachable { why: String, log: Option<PathBuf> },
-    /// Facade's settings file cannot be used.
+    /// Facade Code Framework's settings file cannot be used.
     Settings { diagnostic: String },
     /// No machine has the name or ID the reader gave.
     NoMachine { given: String },
@@ -110,7 +110,7 @@ impl Problem {
                 )
             }
             Problem::Unreachable { why, log } => (
-                format!("could not connect to the Orchestrator: {why}"),
+                format!("could not connect to Facade Code Framework: {why}"),
                 log.as_ref()
                     .map(|log| format!("check '{}' for details", log.display())),
             ),
@@ -133,7 +133,7 @@ impl Problem {
             Problem::NoFacade { destination } => (
                 format!("could not find facade on {destination}"),
                 Some(format!(
-                    "run the Facade Code installer on {destination} and try again"
+                    "run the Facade Code Framework installer on {destination} and try again"
                 )),
             ),
             Problem::StartupPrints { destination } => (
@@ -663,7 +663,9 @@ fn agent_refusal(
         }
         (AgentCommand::Stop, "unsupported") if agent.kind == AgentKind::Guest => {
             return Some(Problem::OperationWithFollowUp {
-                message: format!("{target} is a guest and cannot be stopped by Facade."),
+                message: format!(
+                    "{target} is a guest and cannot be stopped by Facade Code Framework."
+                ),
                 follow_up: STOP_GUEST,
             });
         }
@@ -681,7 +683,7 @@ fn agent_refusal(
             )
         }
         (AgentCommand::Resume, "unsupported") if agent.kind == AgentKind::Guest => {
-            format!("{target} is a guest and cannot be resumed by Facade.")
+            format!("{target} is a guest and cannot be resumed by Facade Code Framework.")
         }
         (AgentCommand::Resume, _)
             if diagnostic.contains("session")
@@ -788,7 +790,7 @@ pub(crate) fn send_failed(
         let reason = body.data.reason.as_str();
         if reason == "invalid_argument" && body.message.contains("unknown field `wait_for`") {
             return Problem::Operation(format!(
-                "The Facade build handling this request refused the requested send mode. {}",
+                "The Facade Code Framework build handling this request refused the requested send mode. {}",
                 service_words(&body.message)
             ))
             .into();
@@ -827,7 +829,7 @@ pub(crate) fn send_failed(
         if receipt_unknown {
             let target = single_line(input);
             return Problem::Operation(format!(
-                "Could not confirm that Facade saved the message in {target}'s inbox."
+                "Could not confirm that Facade Code Framework saved the message in {target}'s inbox."
             ))
             .into();
         }
@@ -840,7 +842,7 @@ pub(crate) fn type_failed(input: &str, sequence: bool, error: anyhow::Error) -> 
         match body.data.reason.as_str() {
             "invalid_argument" if body.message.contains("unknown variant `sequence`") => {
                 return Problem::Operation(format!(
-                    "The Facade build handling this request refused ordered terminal input. {}",
+                    "The Facade Code Framework build handling this request refused ordered terminal input. {}",
                     service_words(&body.message)
                 ))
                 .into();
@@ -902,7 +904,7 @@ pub(crate) fn delivery_receipt(
             )
         }
         Some(DeliveryFailure::Unsupported) if recipient.is_some() => format!(
-            "Facade has no input rule configured for {}.\n{open} to type directly.",
+            "Facade Code Framework has no input rule configured for {}.\n{open} to type directly.",
             quoted(recipient.expect("resolved recipient").cli.as_str()),
         ),
         Some(DeliveryFailure::Timeout)
@@ -926,7 +928,7 @@ pub(crate) fn delivery_receipt(
     )))
 }
 
-/// Preserves the Orchestrator's lookup diagnostic and adds a command where it can help.
+/// Preserves Facade Code Framework's lookup diagnostic and adds a command where it can help.
 pub(crate) fn about_agent(given: &str, error: anyhow::Error) -> anyhow::Error {
     let Some(body) = service_error(&error) else {
         return error;
@@ -1209,21 +1211,24 @@ pub(crate) fn serve_copy_ended(to_daemon: bool, error: &io::Error) -> String {
     )
 }
 
-/// Why Facade could not be reached where the keeper exited before it reported: the last line of
+/// Why Facade Code Framework could not be reached where the keeper exited before it reported: the last line of
 /// its log, where it logged one.
 pub(crate) fn keeper_exited(line: Option<&str>) -> String {
     match line {
-        Some(line) => format!("the Orchestrator keeper exited before it started, saying: {line}"),
-        None => "the Orchestrator keeper exited before it started and logged nothing".to_string(),
+        Some(line) => {
+            format!("the Facade Code Framework keeper exited before it started, saying: {line}")
+        }
+        None => "the Facade Code Framework keeper exited before it started and logged nothing"
+            .to_string(),
     }
 }
 
-/// Why Facade could not be reached in `seconds`: a daemon that runs but is not ready, or none.
+/// Why Facade Code Framework could not be reached in `seconds`: a daemon that runs but is not ready, or none.
 pub(crate) fn daemon_slow(daemon_runs: bool, seconds: u64) -> String {
     if daemon_runs {
-        "Orchestrator is still starting".to_string()
+        "Facade Code Framework is still starting".to_string()
     } else {
-        format!("the Orchestrator daemon did not start within {seconds} seconds")
+        format!("the Facade Code Framework daemon did not start within {seconds} seconds")
     }
 }
 
@@ -1234,13 +1239,13 @@ pub(crate) fn see_log(why: &str, log: &Path) -> String {
 
 /// The context of a takeover after which this build's daemon did not respond in `seconds`.
 pub(crate) fn takeover_silent(ours: &str, seconds: u64) -> String {
-    format!("Orchestrator {ours} did not respond within {seconds} seconds of taking over")
+    format!("Facade Code Framework {ours} did not respond within {seconds} seconds of taking over")
 }
 
-/// Why this build could not take over from the running Orchestrator.
+/// Why this build could not take over from the running Facade Code Framework.
 pub(crate) fn takeover_refused(ours: &str, theirs: &str, error: &anyhow::Error) -> String {
     format!(
-        "could not upgrade Orchestrator {theirs} to {ours}: {}",
+        "could not upgrade Facade Code Framework {theirs} to {ours}: {}",
         cause(error)
     )
 }
@@ -1256,9 +1261,9 @@ pub(crate) fn took_over(
 ) -> String {
     if hidden {
         return format!(
-            "facade: Orchestrator {ours} took over from {from}. {agents} kept running ({:.1} s)",
+            "facade: Facade Code Framework {ours} took over from {from}. {agents} kept running ({:.1} s)",
             took.as_secs_f64()
         );
     }
-    format!("note: upgraded Orchestrator {from} to {ours}. {agents} kept running")
+    format!("note: upgraded Facade Code Framework {from} to {ours}. {agents} kept running")
 }

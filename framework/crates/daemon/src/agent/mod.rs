@@ -186,7 +186,7 @@ pub(crate) enum AgentCommand {
     Inspect {
         reply: oneshot::Sender<Inspection>,
     },
-    /// Run `run` ended, `stopped` where Facade stopped it. An earlier run's exit is ignored; the
+    /// Run `run` ended, `stopped` where Facade Code Framework stopped it. An earlier run's exit is ignored; the
     /// exit of a run still being installed waits until it is.
     ProcessExited {
         run: u64,
@@ -238,7 +238,7 @@ pub(crate) enum AgentCommand {
         run: u64,
         prompt: Option<MessageTyping>,
     },
-    /// A newer Facade takes over: stop typing and reading the terminal, write the state's last
+    /// A newer Facade Code Framework takes over: stop typing and reading the terminal, write the state's last
     /// facts, and reply once no read is under way, what the last reads brought went through the
     /// screen log, and the queued input is written.
     Quiesce {
@@ -249,7 +249,7 @@ pub(crate) enum AgentCommand {
     LetGoBeforeStop {
         reply: oneshot::Sender<()>,
     },
-    /// A newer Facade takes over: begin no paste, and reply once a begun paste is settled.
+    /// A newer Facade Code Framework takes over: begin no paste, and reply once a begun paste is settled.
     SettlePaste {
         reply: oneshot::Sender<()>,
     },
@@ -410,7 +410,7 @@ pub(crate) struct AgentHandle {
 
 impl AgentHandle {
     /// The handle of guest `info`, a session the person started in a terminal that is not
-    /// Facade's. No actor answers it: whatever is sent finds the channel closed.
+    /// Facade Code Framework's. No actor answers it: whatever is sent finds the channel closed.
     pub(crate) fn guest(info: ManagedAgent) -> AgentHandle {
         let (commands, _) = mpsc::channel(1);
         AgentHandle {
@@ -553,7 +553,7 @@ impl AgentHandle {
     }
 }
 
-/// What the agent's CLI has completed with the Facade server.
+/// What the agent's CLI has completed with the Facade Code Framework server.
 #[derive(Clone, Copy)]
 pub(crate) enum ToolsStage {
     Initialized,

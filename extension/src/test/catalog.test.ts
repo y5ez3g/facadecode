@@ -19,7 +19,7 @@ const english = (value: string) => value.replace(/^%(.+)%$/, (_, key) => nls[key
 
 /** The catalog of UX-3.1 (public) and UX-3.2 (context only) of this build: ID, English title, icon. */
 const PUBLIC: readonly [string, string, string?][] = [
-	// Facade's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1)
+	// Facade Code Extension's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1)
 	['facade.newAgent', 'New Agent...', '$(facade-new-agent)'],
 	['facade.resumeAgent', 'Resume Agent...', '$(history)'],
 	['facade.continueSession', 'Continue Session...', '$(history)'],
@@ -57,22 +57,22 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 
 	test('one view container and webview, startup activation, native New Agent and CLI icons; no keybindings or languages (PANEL-1.1, LIFECYCLE-2.2, UX-2.1, 2.3)', () => {
 		assert.deepStrictEqual([Object.keys(contributes), manifest.activationEvents], [['viewsContainers', 'views', 'commands', 'menus', 'icons', 'configuration', 'jsonValidation'], ['onStartupFinished']]);
-		// Facade's own copy of codicons' `new-session`, at its codicon's code point in the font beside the manifest
+		// Facade Code Extension's own copy of codicons' `new-session`, at its codicon's code point in the font beside the manifest
 		assert.deepStrictEqual(contributes.icons['facade-new-agent'], { description: '%icon.newAgent%', default: { fontPath: './media/new-agent.woff', fontCharacter: '\\EC84' } });
-		// Besides New Agent's, each built-in's logo and each of Facade's robots, for terminal tabs (CONFIGURATION-2.4)
+		// Besides New Agent's, each built-in's logo and each of Facade Code Extension's robots, for terminal tabs (CONFIGURATION-2.4)
 		assert.deepStrictEqual(Object.keys(contributes.icons).sort(), ['facade-new-agent', ...['claude', 'codex', 'agy', 'muse', 'opencode', 'pi', 'devin', 'agent', 'kiro-cli', 'qoder', 'omp', 'copilot'].map(cli => `facade-cli-${cli}`), ...ROBOTS.map(robot => `facade-robot-${robot}`)].sort());
 		assert.ok(fs.statSync(path.join(ROOT, 'media', 'new-agent.woff')).isFile());
 		assert.strictEqual(english('%icon.newAgent%'), 'New Agent icon');
 		assert.deepStrictEqual(contributes.viewsContainers, { activitybar: [{ id: 'facade', title: '%view.container%', icon: 'media/facade.svg' }] });
 		assert.deepStrictEqual(contributes.views, { facade: [{ type: 'webview', id: 'facade.agents', name: '%view.container%' }] });
-		assert.strictEqual(english('%view.container%'), 'Facade Code');
+		assert.strictEqual(english('%view.container%'), 'Facade Code Extension');
 	});
 
-	test('every command has one catalog ID and its title in the Facade Code category (UX-3.1, UX-6.1)', () => {
+	test('every command has one catalog ID and its title in the Facade Code Extension category (UX-3.1, UX-6.1)', () => {
 		const commands = contributes.commands.map((each: { command: string; title: string; category: string; icon?: string }) => [each.command, english(each.title), ...each.icon ? [each.icon] : []]);
 		assert.deepStrictEqual(commands, [...PUBLIC, ...HIDDEN].map(([id, title, icon]) => [id, title, ...icon ? [icon] : []]));
 		assert.deepStrictEqual(commands.map(([id]: string[]) => id).sort(), Object.values(COMMANDS).sort());
-		assert.ok(contributes.commands.every((each: { category: string }) => english(each.category) === 'Facade Code'));
+		assert.ok(contributes.commands.every((each: { category: string }) => english(each.category) === 'Facade Code Extension'));
 		const text = JSON.stringify(manifest);
 		// Gone in this step too: Refresh, New Agent Here, the working-location commands and their context keys
 		for (const retired of ['facadeDots', 'facade.closeAgent', 'facade.history', 'facade.showActiveAgents', 'facade.nextAgent', 'facade.startAgent', 'ChatRoom', 'deleteWorktree', 'facade.refresh', 'facade.newAgentHere', 'webviewHere',
@@ -81,12 +81,12 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		}
 	});
 
-	test('menus expose Framework actions and hide retired legacy actions (PANEL-2.2, PANEL-4.2)', () => {
+	test('menus expose Facade Code Framework actions and hide retired legacy actions (PANEL-2.2, PANEL-4.2)', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		const running = CONTEXT.agentSelectedRunning;
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
-				// A Framework window can always filter its cards (PANEL-4.3)
+				// A Facade Code Framework window can always filter its cards (PANEL-4.3)
 				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered && facade.implementation == framework', group: 'navigation@1' },
 				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered && facade.implementation == framework', group: 'navigation@1' },
 				{ command: 'facade.resumeAgent', when: 'view == facade.agents && facade.implementation == framework', group: 'navigation@2' },
@@ -135,19 +135,19 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 	});
 
 	test('settings retain Facade Home, link to facade.json, and keep its schema (CONFIGURATION-7.1, UX-6.2)', () => {
-		assert.deepStrictEqual(contributes.configuration.map((section: { id: string; title: string; order: number }) => [section.id, english(section.title), section.order]), [['facade.agents', 'Facade Code', 2]]);
+		assert.deepStrictEqual(contributes.configuration.map((section: { id: string; title: string; order: number }) => [section.id, english(section.title), section.order]), [['facade.agents', 'Facade Code Extension', 2]]);
 		const settings: Record<string, { type: string; default: unknown; scope: string; order?: number; pattern?: string; patternErrorMessage?: string; markdownDescription: string }> = contributes.configuration[0].properties;
 		// A real setting, a path: the box VS Code draws for it has no Edit in settings.json button; a workspace cannot set it
 		assert.deepStrictEqual(settings['facade.home'], { type: 'string', default: '~/.facade', scope: 'machine', order: 0, pattern: '^$|^(~[\\\\/]|/|[A-Za-z]:[\\\\/]|\\\\\\\\)', patternErrorMessage: '%config.home.pattern%', markdownDescription: '%config.home%' });
 		const usable = new RegExp(settings['facade.home'].pattern!);
-		assert.deepStrictEqual(['', '~/.facade', '/Volumes/Data/facade', 'D:\\Facade', 'D:/Facade', '\\\\server\\share', 'facade', './facade', '~', 'D:Facade'].map(value => usable.test(value)),
+		assert.deepStrictEqual(['', '~/.facade', '/Volumes/Data/facade', 'D:\\Facade Code Extension', 'D:/Facade Code Extension', '\\\\server\\share', 'facade', './facade', '~', 'D:Facade Code Extension'].map(value => usable.test(value)),
 			[true, true, true, true, true, true, false, false, false, false]);
 		assert.strictEqual(english(settings['facade.home'].markdownDescription), 'The Facade home this window uses for settings, agent records, and legacy migration. '
 			+ 'A path here takes precedence over `FACADE_HOME` and the `~/.facade` default.\n\n'
 			+ '[Edit in facade.json](command:facade.openSettingsFile) to change YOLO, suggested names, and how CLIs start.');
 		assert.strictEqual(english('%config.home.pattern%'), 'The path must start with ~/ or be absolute.');
 		assert.deepStrictEqual(Object.keys(settings), ['facade.home']);
-		// facade.json is checked against its schema wherever the Facade home is: the file's name is Facade's own
+		// facade.json is checked against its schema wherever the Facade home is: the file's name is Facade Code Extension's own
 		assert.deepStrictEqual(contributes.jsonValidation, [{ fileMatch: ['**/facade.json'], url: './media/settings.schema.json' }]);
 		assert.ok(fs.existsSync(path.join(ROOT, 'media', 'settings.schema.json')));
 		// Every description resolves; no retired setting survives
@@ -175,9 +175,9 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			};
 			(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 			try {
-				const { registerOrchestratorUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
+				const { registerFrameworkUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 				const emitter = new TestEmitter<never>();
-				const disposables = registerOrchestratorUi({
+				const disposables = registerFrameworkUi({
 					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, pins: () => [], reorderPins: () => undefined,
 						open: async () => false, stop: async () => undefined, remove: async () => undefined,
 						setPinned: async () => undefined, rename: async () => undefined },
@@ -196,7 +196,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the Framework panel registers exactly its UI commands from the manifest (UX-3.2, E03)', () => {
+		test('the Facade Code Framework panel registers exactly its UI commands from the manifest (UX-3.2, E03)', () => {
 			const expected = [...PUBLIC, ...HIDDEN].map(([id]) => id).filter(id => !OUTSIDE_PANEL.has(id));
 			assert.deepStrictEqual(registered(false).sort(), expected.sort());
 		});

@@ -860,7 +860,7 @@ fn recorded_paste(cli: &str, label: &str) -> (String, Result<String, String>) {
     (text, draft)
 }
 
-/// The installed CLIs draw a paste as a placeholder Facade takes for the draft of that message:
+/// The installed CLIs draw a paste as a placeholder Facade Code Framework takes for the draft of that message:
 /// Claude Code's `[Pasted text #N]` for one line of over 800 characters, Antigravity's `[Pasted
 /// text #N M chars]` once a line passes about 1000 characters, and OpenCode's `[Pasted ~N lines]`,
 /// which counts the lines of the message trimmed, at 40 columns as at 120.

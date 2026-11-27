@@ -1,8 +1,8 @@
 Remove a saved SSH connection.
 
-Removes the local saved connection and revokes local Facade SSH
+Removes the local saved connection and revokes local Facade Code Framework SSH
 authorization for the other machine. Use '--bidirectional' to remove the
-saved return connection and revoke Facade SSH authorization there.
+saved return connection and revoke Facade Code Framework SSH authorization there.
 Agents on both machines keep running.
 
 Usage: facade machine remove [--bidirectional] <MACHINE>

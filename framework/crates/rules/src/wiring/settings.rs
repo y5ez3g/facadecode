@@ -1,4 +1,4 @@
-//! What Facade adds to a CLI's own settings for a run, merged with the person's: Antigravity's
+//! What Facade Code Framework adds to a CLI's own settings for a run, merged with the person's: Antigravity's
 //! `--settings` and Muse Code's `-c hooks=`, which each replace what the person's settings hold.
 
 use std::collections::BTreeMap;
@@ -47,7 +47,7 @@ const AGY_SETTINGS_FILE: &str = "settings.json";
 /// hold keys, never show on the command line. Each key of `--settings` replaces the person's
 /// settings file's for the session, so: their `--settings` arguments, each JSON or a file relative
 /// to `cwd`, merged in order; their permission rules, from those or else from their settings file,
-/// with Facade's after them; any other setting `wiring` adds, as YOLO's trusted folders, merged the
+/// with Facade Code Framework's after them; any other setting `wiring` adds, as YOLO's trusted folders, merged the
 /// same way into theirs; and their title settings, from both, with the title command of the run's
 /// session report, which runs their own title command after it with the same input. None where
 /// something of theirs cannot be read, or their title command cannot go through Antigravity's shell.
@@ -118,8 +118,8 @@ pub(super) fn agy_settings(
             .get("command")
             .and_then(Value::as_str)
             .filter(|_| enabled);
-        // A title command cmd.exe cannot carry stays with Antigravity. As with settings Facade
-        // cannot read, Facade adds nothing to the run's settings and gets no session this way.
+        // A title command cmd.exe cannot carry stays with Antigravity. As with settings Facade Code Framework
+        // cannot read, Facade Code Framework adds nothing to the run's settings and gets no session this way.
         if SYSTEM == System::Windows
             && theirs.is_some_and(|command| command.contains(['"', '\r', '\n']))
         {
@@ -145,8 +145,8 @@ pub(super) fn agy_settings(
     })
 }
 
-/// Muse Code's `-c hooks=` with Facade's hooks `ours`, each an event and its command, after the
-/// person's own: those of their own `-c hooks=` argument, or else their settings file's. Facade's
+/// Muse Code's `-c hooks=` with Facade Code Framework's hooks `ours`, each an event and its command, after the
+/// person's own: those of their own `-c hooks=` argument, or else their settings file's. Facade Code Framework's
 /// guest hooks among them are left out: Muse Code would run them in the run without its
 /// `FACADE_AGENT`, and they would take the run's session for a guest's. None where the person's
 /// hooks cannot be read.

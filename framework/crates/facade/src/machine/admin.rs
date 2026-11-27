@@ -221,7 +221,9 @@ impl AdminClient {
             result => {
                 session.finish(true)?;
                 result?;
-                anyhow::bail!("the SSH helper did not report a full Facade machine ID");
+                anyhow::bail!(
+                    "the SSH helper did not report a full Facade Code Framework machine ID"
+                );
             }
         }
     }
@@ -249,7 +251,7 @@ impl AdminClient {
         match read_frame(&mut session.output)? {
             Some(Reply::Error { detail }) => anyhow::bail!("{detail}"),
             Some(reply) => Ok(reply),
-            None => anyhow::bail!("SSH closed before Facade confirmed the result"),
+            None => anyhow::bail!("SSH closed before Facade Code Framework confirmed the result"),
         }
     }
 
@@ -274,7 +276,7 @@ impl Drop for AdminClient {
 fn different_machine(id: &str, local: &Greeting) -> anyhow::Result<()> {
     ensure!(
         is_full_id(id) && !id.eq_ignore_ascii_case(&local.machine_id),
-        "expected the full ID of another Facade machine"
+        "expected the full ID of another Facade Code Framework machine"
     );
     Ok(())
 }
@@ -338,7 +340,7 @@ impl AdminState {
     ) -> anyhow::Result<Reply> {
         ensure!(
             request.expected_machine_id == self.local.machine_id,
-            "unexpected Facade machine ID"
+            "unexpected Facade Code Framework machine ID"
         );
         match request.operation {
             Operation::InstallKey {
@@ -732,7 +734,7 @@ fn save_forward(target: &SshTarget, connect: &Connect<'_>) -> anyhow::Result<For
     });
     let installed_key = (inserted && authorization_failure.is_none()).then(|| {
         format!(
-            "Installed Facade SSH key on {} (allows {} on {} to log in to {} without a password).",
+            "Installed Facade Code Framework SSH key on {} (allows {} on {} to log in to {} without a password).",
             display_name(&connected.machine.name),
             single_line(&local.account),
             display_name(&local.name),
@@ -854,7 +856,7 @@ fn enroll_return(
             destination: confirmed,
         }) if confirmed == destination => {
             let installed_key = change.is_some().then(|| format!(
-                "Installed {remote_name}'s Facade SSH key on {local_name} (allows {} on {remote_name} to log in to {} without a password).",
+                "Installed {remote_name}'s Facade Code Framework SSH key on {local_name} (allows {} on {remote_name} to log in to {} without a password).",
                 single_line(&admin.machine.account),
                 scope.target(&destination)
             ));
@@ -969,7 +971,7 @@ fn remove_exactly(
         Ok(removed) => {
             ensure!(
                 removed.machine_id == machine_id,
-                "the Orchestrator reported a different removed machine ID"
+                "Facade Code Framework reported a different removed machine ID"
             );
             Ok(Some(removed))
         }

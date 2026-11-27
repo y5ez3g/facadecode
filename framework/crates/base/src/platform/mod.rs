@@ -1,4 +1,4 @@
-//! What Facade asks of the operating system: processes, terminals, the services' sockets, locks and
+//! What Facade Code Framework asks of the operating system: processes, terminals, the services' sockets, locks and
 //! start, the installed programs, private files, the person's console and open-file limits. Every
 //! branch by system in this crate is here: each module's public items are the same on every system
 //! unless their documentation says otherwise, and the code of each system sits beside them.

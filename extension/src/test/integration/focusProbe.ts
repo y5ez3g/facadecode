@@ -4,12 +4,12 @@
 
 // The focus probe (FACADE_IT_ONLY=probe; LIFECYCLE-2.2, 3.4, 3.5): evidence, not a gate, about keys typed while a mark has borrowed
 // the focus and about covered fronts that cannot be brought back. Each of its sessions is an isolated official VS Code - user data,
-// extensions, shared data and a Facade root of its own, fake CLIs only - opened with `--remote-debugging-port` on a free port of this
+// extensions, shared data and a Facade Code Extension root of its own, fake CLIs only - opened with `--remote-debugging-port` on a free port of this
 // computer's loopback, where focusProbeDriver.ts, beside it, types CDP-injected keyboard events into that window's own workbench page:
-// `native` with the driver alone for the editor's own behaviour, `facade` and `reload` beside Facade Code. Never OS-level keyboard or
+// `native` with the driver alone for the editor's own behaviour, `facade` and `reload` beside Facade Code Extension. Never OS-level keyboard or
 // IME input, which this does not cover. It writes probe-evidence.json and probe-summary.md to FACADE_IT_PROBE_OUT, else to the temporary
 // folder's facade-it-probe; FACADE_IT_PROBE_CASES, such as `N1,N3,F2`, runs some cases alone. Each case's verdict is the driver's
-// (focusProbeDriver.ts): a native method's, or Facade's by the rules as they stand; the run itself fails only where the probe could not
+// (focusProbeDriver.ts): a native method's, or Facade Code Extension's by the rules as they stand; the run itself fails only where the probe could not
 // run.
 
 import { spawn } from 'child_process';
@@ -22,13 +22,13 @@ import { EDITOR_FLAGS, editorProfile, endEditors } from './editors';
 
 export interface FocusProbeContext {
 	readonly executable: string;
-	/** The run's temporary folder, and the parent of each session's Facade root. */
+	/** The run's temporary folder, and the parent of each session's Facade Code Extension root. */
 	readonly root: string;
 	readonly home: string;
 	readonly endMatching: (text: string) => void;
 	/** The suite's editor settings. */
 	readonly settings: { readonly [setting: string]: unknown };
-	/** Writes Facade's settings file in a session's Facade root: the built-ins but Claude Code's turned off (CONFIGURATION-1.1). */
+	/** Writes Facade Code Extension's settings file in a session's Facade Code Extension root: the built-ins but Claude Code's turned off (CONFIGURATION-1.1). */
 	readonly facadeSettings: (facade: string) => void;
 	readonly extension: string;
 	readonly windowComponent: string;
@@ -36,7 +36,7 @@ export interface FocusProbeContext {
 	readonly claudeConfig: string;
 	readonly fake: string;
 	/**
-	 * The FACADE_IT_PROBE_* variables the runner was given, read before it clears Facade's from its environment: _OUT, where the
+	 * The FACADE_IT_PROBE_* variables the runner was given, read before it clears Facade Code Extension's from its environment: _OUT, where the
 	 * evidence goes; _CASES, a comma-separated subset of the cases; _KEYS=char, each key as keyDown, char and keyUp (cdpInput.ts).
 	 */
 	readonly env: { readonly [name: string]: string | undefined };
@@ -86,7 +86,7 @@ async function session(ctx: FocusProbeContext, name: string, short: string, with
 	}
 	fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...ctx.settings, ...PROBE_SETTINGS }));
 	ctx.facadeSettings(facade);
-	// Activated at once: after a reload it types before Facade's restoration begins
+	// Activated at once: after a reload it types before Facade Code Extension's restoration begins
 	fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'focus-probe-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['*'], main: './extension.js' }));
 	fs.copyFileSync(path.join(__dirname, 'focusProbeDriver.js'), path.join(driver, 'extension.js'));
 	fs.copyFileSync(path.join(__dirname, 'cdpInput.js'), path.join(driver, 'cdpInput.js'));
@@ -173,7 +173,7 @@ function summary(evidence: { generatedAt: string; input: string; snapshot: objec
 		}).join(' | ')} |`;
 	});
 	return [
-		`# Facade focus probe`,
+		`# Facade Code Extension focus probe`,
 		'',
 		`Generated ${evidence.generatedAt}. Editor: VS Code ${cell(meta.vscode)} on ${cell(meta.platform)}, each session an isolated profile with fake CLIs only.`,
 		'',
@@ -181,7 +181,7 @@ function summary(evidence: { generatedAt: string; input: string; snapshot: objec
 		'',
 		`Build: ${cell(JSON.stringify(evidence.snapshot))}.`,
 		'',
-		'A native case (N) judges its method: a lost or misdirected key, or a front not brought back, is a FAILURE. Facade\'s cases (F) are judged by the rules as they stand (LIFECYCLE-3.4, 3.5): the person\'s own Pin or Unpin shows its agent\'s tab with the focus, as a click on its card does, and the keys after it are that agent\'s CLI\'s; a reload brings back the pinned agents\' tabs alone, one at a time in the Pins\' order, each marked before the next opens, nothing given back, the last in front of the active group with the panel\'s selection on it; a key reaching anything the person did not type into, or a front not as those rules leave it, is a FAILURE; a reload\'s lost keys, which reached nothing and which the owner accepts, are counted apart from misdirected ones. BLOCKED means the case could not be measured.',
+		'A native case (N) judges its method: a lost or misdirected key, or a front not brought back, is a FAILURE. Facade Code Extension\'s cases (F) are judged by the rules as they stand (LIFECYCLE-3.4, 3.5): the person\'s own Pin or Unpin shows its agent\'s tab with the focus, as a click on its card does, and the keys after it are that agent\'s CLI\'s; a reload brings back the pinned agents\' tabs alone, one at a time in the Pins\' order, each marked before the next opens, nothing given back, the last in front of the active group with the panel\'s selection on it; a key reaching anything the person did not type into, or a front not as those rules leave it, is a FAILURE; a reload\'s lost keys, which reached nothing and which the owner accepts, are counted apart from misdirected ones. BLOCKED means the case could not be measured.',
 		'',
 		'| Case | Question | Done | Measured | Verdict |',
 		'| --- | --- | --- | --- | --- |',

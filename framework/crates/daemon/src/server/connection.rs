@@ -135,7 +135,7 @@ pub(super) struct Connection<S: Service> {
     writer: AbortHandle,
     /// Told when the client answers `closing`.
     pub(super) answered: Arc<Notify>,
-    /// Tells the client `closing` once a newer Facade takes over.
+    /// Tells the client `closing` once a newer Facade Code Framework takes over.
     pub(super) teller: Option<JoinHandle<()>>,
 }
 
@@ -730,7 +730,7 @@ impl<S: Service> Connection<S> {
             .await;
     }
 
-    /// Once a newer Facade takes over, tells the client `closing`. What it sent before answering,
+    /// Once a newer Facade Code Framework takes over, tells the client `closing`. What it sent before answering,
     /// or within 0.2 seconds, still runs; then its reading ends.
     pub(super) fn tell_closing(&self) -> JoinHandle<()> {
         let mut closing = self.service.closing();

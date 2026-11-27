@@ -1,7 +1,7 @@
-//! The normal path of each CLI Facade starts by name, with the test CLI standing in for it: it is
-//! listed, gets Facade's tools and instructions, takes its first message and a
+//! The normal path of each CLI Facade Code Framework starts by name, with the test CLI standing in for it: it is
+//! listed, gets Facade Code Framework's tools and instructions, takes its first message and a
 //! message of any writing, reports its session, and is resumed in exactly that session, as is a
-//! session saved outside Facade. The stand-in reads what the run was given where its CLI reads it
+//! session saved outside Facade Code Framework. The stand-in reads what the run was given where its CLI reads it
 //! and starts nothing when that is missing.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ struct Provider {
     yolo: [&'static [&'static str]; 2],
     /// The ID of a session of the CLI's, as it spells one.
     id: fn(&str) -> String,
-    /// Checks that the run's configuration approves Facade's own tools and nothing else.
+    /// Checks that the run's configuration approves Facade Code Framework's own tools and nothing else.
     approves_only_facade: fn(&Given),
     /// Files of the person's own settings, from their home.
     own_settings: &'static [(&'static str, &'static str)],
@@ -60,7 +60,7 @@ impl Given<'_> {
         facade_scenarios::serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
     }
 
-    /// The Facade server, as `mcpServers.facade`.
+    /// The Facade Code Framework server, as `mcpServers.facade`.
     fn server(&self, provider: &Provider) -> Value {
         let devin_config =
             option_value(self.args, "--config").and_then(|path| Path::new(path).ancestors().nth(2));
@@ -72,7 +72,7 @@ impl Given<'_> {
             .clone()
     }
 
-    /// The words that start Facade's relay: the server's own, or the run's script's.
+    /// The words that start Facade Code Framework's relay: the server's own, or the run's script's.
     fn relay(&self, provider: &Provider) -> String {
         let server = self.server(provider);
         let words = server["args"].to_string();
@@ -158,7 +158,7 @@ const DEVIN: Provider = Provider {
         assert_eq!(
             config["permissions"],
             json!({ "allow": ["Read(docs/**)", "mcp__facade__*"], "deny": ["Exec(rm)"] }),
-            "the person's own rules and Facade's one"
+            "the person's own rules and Facade Code Framework's one"
         );
         let trusts = given
             .args
@@ -344,7 +344,7 @@ fn save_omp_session(place: &Place, id: &str, head: &str) {
 
 const PROVIDERS: [&Provider; 5] = [&DEVIN, &CURSOR, &KIRO, &QODER, &OMP];
 
-/// The names of the tools Facade gives a run.
+/// The names of the tools Facade Code Framework gives a run.
 fn facade_tools() -> Vec<String> {
     let definitions: Vec<Value> =
         facade_scenarios::serde_json::from_str(facade_base::tools::DEFINITIONS).unwrap();
@@ -762,7 +762,7 @@ fn files_in(folder: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// A launch with YOLO off gets its words, and Facade's own tools stay the only ones approved.
+/// A launch with YOLO off gets its words, and Facade Code Framework's own tools stay the only ones approved.
 fn asks_with_yolo_off(provider: &'static Provider) {
     let stand = Stand::new(provider, "asks");
     stand.write_own_settings();
@@ -781,7 +781,7 @@ fn saved_sessions(wire: &mut DaemonTestClient, folder: &Path) -> Vec<Value> {
     list["items"].as_array().unwrap().clone()
 }
 
-/// A session the person saved outside Facade is listed for its folder alone, under its native name,
+/// A session the person saved outside Facade Code Framework is listed for its folder alone, under its native name,
 /// and resumed exactly.
 fn resumes_a_session_saved_outside(provider: &'static Provider) {
     resume_external_session(provider, None);
@@ -829,7 +829,7 @@ fn resume_external_session(provider: &'static Provider, profile: Option<&str>) {
     assert_eq!(words_found(&args, &[resume, &session]), 1, "{args:?}");
     if provider.native == Native::Kiro && profile.is_none() {
         // The vendor's own limit: a session keeps the agent it was started with, so one started
-        // outside Facade has none of Facade's tools, and its record says so.
+        // outside Facade Code Framework has none of Facade Code Framework's tools, and its record says so.
         assert!(
             wait_until(secs(10), || stand.row_of(agent)["tools_state"]
                 == "unavailable"),
@@ -1245,7 +1245,7 @@ fn a_session_an_older_oh_my_pi_saved_is_listed() {
 }
 
 /// The extension a run gives Oh My Pi, run with Node where there is one: what it reports on each
-/// event is what Facade's screen reads, and a session without a file clears the report.
+/// event is what Facade Code Framework's screen reads, and a session without a file clears the report.
 #[test]
 fn oh_my_pi_s_extension_reports_its_turns_and_its_session() {
     let stand = Stand::new(&OMP, "extension");
@@ -1316,7 +1316,7 @@ fn oh_my_pi_s_extension_reports_its_turns_and_its_session() {
 }
 
 /// A draft that fills Oh My Pi's composer may have rows out of sight, which nothing shows, so
-/// Facade does not know what it holds: a message waits, and goes in alone once the draft is gone.
+/// Facade Code Framework does not know what it holds: a message waits, and goes in alone once the draft is gone.
 #[test]
 fn a_draft_that_fills_oh_my_pi_s_composer_is_never_typed_over() {
     // The default band shows 11 content rows at 80 by 24. Two smaller pastes stay visible.
@@ -1399,7 +1399,7 @@ fn messages_of_every_size_arrive(provider: &'static Provider) {
 }
 
 /// Devin reads a configuration folder of the run's own, where its commands find the person's other
-/// programs' settings. An agent it starts through Facade's tools gets the person's folder.
+/// programs' settings. An agent it starts through Facade Code Framework's tools gets the person's folder.
 #[cfg(unix)]
 #[test]
 fn an_agent_devin_starts_gets_the_person_s_configuration_folder() {

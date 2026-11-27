@@ -85,12 +85,12 @@ pub enum LocationKind {
     Unknown,
 }
 
-/// A logical window on a Facade machine.
+/// A logical window on a Facade Code Framework machine.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct WindowRef {
-    /// The Facade machine's ID, a lowercase UUID version 4.
+    /// The Facade Code Framework machine's ID, a lowercase UUID version 4.
     pub machine_id: String,
     /// The logical window's ID, or `terminal` for that machine's terminal window.
     pub window_id: String,

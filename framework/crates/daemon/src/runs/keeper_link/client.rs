@@ -64,7 +64,7 @@ impl ConnectError {
     pub fn refusal(pid: u32) -> String {
         format!(
             "keeper {pid} uses an incompatible Keeper API; end that process and stop the running \
-                 Facade before switching builds"
+                 Facade Code Framework before switching builds"
         )
     }
 }

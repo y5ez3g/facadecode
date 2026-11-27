@@ -3,9 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Facade's built-in agent names (LIFECYCLE-2.1): what a new facade.json lists under `names`, and what a name is picked from where
+ * Facade Code Extension's built-in agent names (LIFECYCLE-2.1): what a new facade.json lists under `names`, and what a name is picked from where
  * the file has no `names`. Short machine words: plain ASCII, easy to type after `@`, no two sharing their first three letters, none
- * a key name, a Facade word or a built-in CLI's ID or name.
+ * a key name, a Facade Code Extension word or a built-in CLI's ID or name.
  */
 export const BUILT_IN_NAMES: readonly string[] = [
 	'Abacus', 'Alloy', 'Anvil', 'Arc', 'Atom', 'Axle', 'Baud', 'Beacon', 'Bit', 'Blip', 'Bolt', 'Boson', 'Brace', 'Buzz', 'Byte',

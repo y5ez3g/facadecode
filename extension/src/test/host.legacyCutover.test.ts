@@ -119,7 +119,7 @@ suite('Scoped legacy cutover', () => {
 		};
 		let retry: (() => void) | undefined;
 		const timer = { unref: () => undefined };
-		const { OrchestratorAgents } = withModules({
+		const { FrameworkAgents } = withModules({
 			vscode: { env: {}, workspace: {}, EventEmitter: TestEmitter, l10n: { t: (text: string) => text } },
 		}, {
 			setTimeout: (callback: () => void) => { retry = callback; return timer; },
@@ -128,7 +128,7 @@ suite('Scoped legacy cutover', () => {
 		const disposal = () => ({ dispose: () => undefined });
 		const saved: FrameworkPin[] = [];
 		const inspected: unknown[] = [];
-		const agents = new OrchestratorAgents({
+		const agents = new FrameworkAgents({
 			link: {
 				machineId: REFERENCE.machine_id, onDidConnect: disposal, watch: disposal,
 				call: async (operation: string, { target }: { readonly target: unknown }) => {
@@ -313,7 +313,7 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('opens Framework while an exact uncertain local exit keeps its Pin pending (ARCHITECTURE-1.4)', async () => {
+	test('opens Facade Code Framework while an exact uncertain local exit keeps its Pin pending (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {
 			const scope = { owner: A };
@@ -577,7 +577,7 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('reconciles a lost exact Framework resume only after that reference starts a newer run (RULES-6.4)', async function () {
+	test('reconciles a lost exact Facade Code Framework resume only after that reference starts a newer run (RULES-6.4)', async function () {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
 		try {

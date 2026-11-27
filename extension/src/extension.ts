@@ -7,7 +7,7 @@ import { activateFacade, sayActivationFailed } from './host/service';
 
 let deactivating: (() => Promise<void>) | undefined;
 
-/** Facade Code: a panel of this window's agents, each CLI in its own editor terminal (PRODUCT-1.1). */
+/** Facade Code Extension: a panel of this window's agents, each CLI in its own editor terminal (PRODUCT-1.1). */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	try {
 		deactivating = await activateFacade(context);
@@ -17,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 }
 
-/** Detaches from the agents' processes: they keep running in Framework and can reconnect on reload (RULES-4.1). */
+/** Detaches from the agents' processes: they keep running in Facade Code Framework and can reconnect on reload (RULES-4.1). */
 export function deactivate(): Promise<void> | undefined {
 	return deactivating?.();
 }

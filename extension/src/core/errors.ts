@@ -4,7 +4,7 @@
 
 import type { FacadeReason } from './ports';
 
-/** The error codes of every Facade failure, an agent's tool result among them (MCP-1.2). */
+/** The error codes of every Facade Code Extension failure, an agent's tool result among them (MCP-1.2). */
 export type ErrorCode = 'INVALID' | 'NOT_FOUND' | 'REFUSED' | 'UNAVAILABLE' | 'FAILED';
 
 /**

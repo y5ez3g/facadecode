@@ -115,7 +115,7 @@ fn receipt_id(home: &TestHome, agent: &str, message: &str) -> String {
     format!("{message}@{machine}")
 }
 
-/// The fake CLI agent `agent`'s own Facade tools.
+/// The fake CLI agent `agent`'s own Facade Code Framework tools.
 fn delivered(home: &TestHome, agent: &str, message: &str) -> String {
     let record = home.agent_record(agent).expect("the recipient");
     let address = record["address"].as_str().unwrap();
@@ -145,7 +145,7 @@ fn ids(messages: &[Value]) -> Vec<&str> {
 }
 
 /// Waits until message `number` is kept and waits for its recipient's input. Read from `facade.db`
-/// itself: a read through Facade would deliver it, and a send's receipt comes only once it is
+/// itself: a read through Facade Code Framework would deliver it, and a send's receipt comes only once it is
 /// settled.
 fn wait_pending(home: &TestHome, number: u64) {
     assert!(
@@ -408,7 +408,7 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     assert_eq!(
         refused["message"],
         "read_messages cannot wait in this managed run. This call did not check your inbox. \
-         End this turn so Facade can deliver incoming messages to your input."
+         End this turn so Facade Code Framework can deliver incoming messages to your input."
     );
     let read = read_messages(&mut tools, json!({}));
     assert_eq!(
@@ -1066,7 +1066,7 @@ fn a_message_too_long_for_any_cli_is_refused_before_it_is_kept() {
 
 /// What the store keeps of message `number`: its status, its reason, how much of it was typed, how
 /// it was delivered, and the paste it went in. None where it is not kept, or only its outcome is,
-/// for a repeat of its send. Read from `facade.db` itself, since a read through Facade would
+/// for a repeat of its send. Read from `facade.db` itself, since a read through Facade Code Framework would
 /// deliver the message.
 type Kept = (String, Option<String>, String, Option<String>, Option<i64>);
 
@@ -1430,7 +1430,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
 
 /// A message whose recipient ended while no daemon ran fails as ended in the next daemon. The
 /// keeper, holding no CLI once the recipient ended, exits with the daemon; the next command starts
-/// Facade again, and the agent is ended there, its terminal closed.
+/// Facade Code Framework again, and the agent is ended there, its terminal closed.
 #[test]
 fn a_message_whose_recipient_ended_while_no_daemon_ran_fails_as_ended() {
     let home = TestHome::new("restartended");

@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code: execute agentes de programação com IA juntos",
 	"description": "O ponto de acesso ao Facade Code no VS Code. Inicie agentes de programação nas suas máquinas e abra os terminais deles ao lado dos seus arquivos.",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "Novo Agente...",
 	"command.openTerminal": "Abrir terminal",
 	"command.renameAgent": "Renomear Agente...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "Mover para Cima",
 	"command.moveDown": "Mover para Baixo",
 	"command.revealAgent": "Mostrar Agente",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Componente de Janela do Facade Code",
-	"windowDescription": "Fecha as abas de terminal antigas do Facade Code após a reconexão de uma janela remota ou a reinicialização da extensão.",
+	"windowDescription": "Fecha as abas de terminal antigas do Facade Code Extension após a reconexão de uma janela remota ou a reinicialização da extensão.",
 	"command.filter": "Filtrar agentes...",
 	"command.showAgentLaunch": "Mostrar Linha de Comando do Agente...",
 	"command.showAgentsLog": "Mostrar Log dos Agentes",
@@ -41,6 +41,6 @@
 	"command.continueSession": "Continuar sessão...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "A pasta do Facade que esta janela usa para configurações, registros de agentes e migração de versões anteriores. Um caminho definido aqui tem prioridade sobre `FACADE_HOME` e sobre o padrão `~/.facade`.\n\n[Editar no facade.json](command:facade.openSettingsFile) para alterar o YOLO, os nomes sugeridos e como as CLIs são iniciadas.",
+	"config.home": "A pasta do Facade Code Extension que esta janela usa para configurações, registros de agentes e migração de versões anteriores. Um caminho definido aqui tem prioridade sobre `FACADE_HOME` e sobre o padrão `~/.facade`.\n\n[Editar no facade.json](command:facade.openSettingsFile) para alterar o YOLO, os nomes sugeridos e como as CLIs são iniciadas.",
 	"config.home.pattern": "O caminho deve começar com ~/ ou ser absoluto."
 }

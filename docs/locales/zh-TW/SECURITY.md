@@ -1,6 +1,6 @@
 # 安全性
 
-Facade Code 在 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) 上公開開發。
+Facade Code Extension 在 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) 上公開開發。
 
 ## 回報漏洞
 

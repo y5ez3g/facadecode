@@ -2,7 +2,7 @@
 //! their sessions and mark their runs.
 //!
 //! Every run's folder has a session file. A CLI's hook (`facade hook session-start`), or the
-//! plugin or extension Facade gives the run, reports the session the CLI picked, and the file
+//! plugin or extension Facade Code Framework gives the run, reports the session the CLI picked, and the file
 //! records it: the ID on the first line, and on the second, for a CLI that says where it keeps the
 //! session, that file's path. An empty file means no session is picked.
 //!
@@ -34,7 +34,7 @@ use crate::Rule;
 /// For each CLI, the variables it sets for the commands its model runs, and for MCP servers that
 /// inherit its environment, to name its session: the session itself first, then, for a CLI that
 /// has threads, the current thread. `facade` commands use them to find which agent's terminal they
-/// run in; a guest's server reads only its own CLI's; agents Facade starts never inherit them.
+/// run in; a guest's server reads only its own CLI's; agents Facade Code Framework starts never inherit them.
 pub const SESSION_VARIABLES: [(&str, &[&str]); 10] = [
     ("claude", &["CLAUDE_CODE_SESSION_ID"]),
     ("codex", &["CODEX_SESSION_ID", "CODEX_THREAD_ID"]),
@@ -104,7 +104,7 @@ fn same_name(one: &str, other: &str) -> bool {
 /// What the session file is called inside a run's folder.
 pub const SESSION_FILE: &str = "session";
 
-/// The folder of `agent`'s run under `runs` (Facade's `framework/runs/`), if exactly one is there. Runs
+/// The folder of `agent`'s run under `runs` (Facade Code Framework's `framework/runs/`), if exactly one is there. Runs
 /// live in `<agent>/<run>/`; a resume clears the agent's older folders before making its own.
 pub fn run_folder(runs: &Path, agent: &str) -> Option<PathBuf> {
     let folders: Vec<PathBuf> = std::fs::read_dir(runs.join(agent))

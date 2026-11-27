@@ -22,7 +22,7 @@ fs.rmSync(windowStage, { recursive: true, force: true });
 fs.mkdirSync(path.join(windowStage, 'l10n'), { recursive: true });
 fs.mkdirSync(path.join(windowStage, 'media'), { recursive: true });
 
-// JavaScript dependencies are bundled. Framework programs are staged by the package build.
+// JavaScript dependencies are bundled. Facade Code Framework programs are staged by the package build.
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 delete manifest.scripts;
 delete manifest.devDependencies;
@@ -51,7 +51,7 @@ const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 fs.writeFileSync(path.join(stage, 'README.md'), packageReadme(readme));
 // The Marketplace shows it as the extension's Changelog
 fs.copyFileSync(path.join(root, 'CHANGELOG.md'), path.join(stage, 'CHANGELOG.md'));
-// The window component's own page sends people to Facade Code, which installs it
+// The window component's own page sends people to Facade Code Extension, which installs it
 fs.copyFileSync(path.join(root, 'window', 'README.md'), path.join(windowStage, 'README.md'));
 fs.copyFileSync(path.join(root, 'media', 'icon.png'), path.join(windowStage, 'media', 'icon.png'));
 fs.cpSync(path.join(root, 'media'), path.join(stage, 'media'), { recursive: true, filter: source => path.basename(source) !== '.DS_Store' });

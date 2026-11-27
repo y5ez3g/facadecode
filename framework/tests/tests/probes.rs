@@ -23,7 +23,7 @@ fn keys_file(home: &TestHome, name: &str) -> PathBuf {
     home.project.parent().unwrap().join(format!("{name}.keys"))
 }
 
-/// The keys the test CLI read outside bracketed pastes: what Facade pressed and the person typed,
+/// The keys the test CLI read outside bracketed pastes: what Facade Code Framework pressed and the person typed,
 /// without the messages it pasted.
 fn pressed(file: &Path) -> Vec<u8> {
     let bytes = std::fs::read(file).unwrap_or_default();

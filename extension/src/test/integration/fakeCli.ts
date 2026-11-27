@@ -3,12 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The integration suite's agent CLI, run as Node in an agent's terminal in place of each built-in. It records its working directory,
-// its arguments and the variables of Facade's it was given, and takes part in the Program Status Protocol (OSC 7501) as the built-ins
+// its arguments and the variables of Facade Code Extension's it was given, and takes part in the Program Status Protocol (OSC 7501) as the built-ins
 // do: it asks whether its terminal takes reports and, once answered, reports that it is idle. It waits as an agent does, drawing its
-// input the way the built-in FACADE_IT_AS names draws its own - Claude Code's by default - so that Facade's reader for that CLI
+// input the way the built-in FACADE_IT_AS names draws its own - Claude Code's by default - so that Facade Code Extension's reader for that CLI
 // recognizes it (CLIS-2.1). Typed or pasted text is a draft; Enter submits it, clearing the box, printing what it got and appending
 // it to `<record>.received.<agent>`; Ctrl+U clears it. A native prompt after `--`, or OpenCode's `--prompt`, is taken as its first
-// message. It finds the Facade server where that built-in finds it (CLIS-2.2), starts it as the CLI would - Antigravity's only once
+// message. It finds the Facade Code Extension server where that built-in finds it (CLIS-2.2), starts it as the CLI would - Antigravity's only once
 // its MCP panel opens, by `/mcp`, or its first turn - and runs each `<record>.mcp-script.<agent>` that appears, in turn, writing
 // every answer to `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that name, and
 // `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows: it
@@ -43,7 +43,7 @@ const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '').split('@')[0]}`;
 const args = process.argv.slice(2);
 const redactCredential = (text: string) => text.replace(/("--run-credential"\s*,\s*)"[^"]+"/g, '$1"<redacted>"');
 const recordedArgs = args.map((word, index) => args[index - 1] === '--run-credential' ? '<redacted>' : redactCredential(word));
-// With the variables of Facade's that reach it: the run's own, and OpenCode's inline configuration
+// With the variables of Facade Code Extension's that reach it: the run's own, and OpenCode's inline configuration
 const facadeEnv = Object.fromEntries(Object.entries(process.env)
 	.filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name))
 	.map(([name, value]) => [name, value && redactCredential(value)]));
@@ -82,7 +82,7 @@ if (sessionFile) {
 	}
 	fs.writeFileSync(sessionFile, JSON.stringify({ session_id: session, cwd: process.cwd(), source: 'startup' }));
 	// Claude Code keeps its conversation where it always does, whoever learns its session: a journey that resumes a legacy session on
-	// Framework (the legacy cutover) asks for it, others keep their Resume lists as they were
+	// Facade Code Framework (the legacy cutover) asks for it, others keep their Resume lists as they were
 	if (process.env.FACADE_IT_CLAUDE_TRANSCRIPT === '1' && (process.env.FACADE_IT_AS ?? 'claude') === 'claude') {
 		const transcript = path.join(process.env.CLAUDE_CONFIG_DIR ?? process.cwd(), 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`);
 		fs.mkdirSync(path.dirname(transcript), { recursive: true });
@@ -91,8 +91,8 @@ if (sessionFile) {
 		}
 	}
 }
-// Claude Code names its conversation to Facade's SessionStart hook, from the settings it was started with, as it starts (CLIS-2.2): the
-// Framework learns the session so, where the legacy implementation's file above says it. A resumed conversation keeps its ID; a new one has one.
+// Claude Code names its conversation to Facade Code Extension's SessionStart hook, from the settings it was started with, as it starts (CLIS-2.2): the
+// Facade Code Framework learns the session so, where the legacy implementation's file above says it. A resumed conversation keeps its ID; a new one has one.
 {
 	const given = args.indexOf('--settings');
 	let hook: string | undefined;
@@ -475,7 +475,7 @@ function tomlValue(text: string): unknown {
 }
 
 /**
- * The Facade server it was given, found where each built-in finds it (CLIS-2.2): Claude Code's `--mcp-config`, Codex's
+ * The Facade Code Extension server it was given, found where each built-in finds it (CLIS-2.2): Claude Code's `--mcp-config`, Codex's
  * `-c mcp_servers.facade.*`, Pi's `-e` extension, OpenCode's inline configuration, Antigravity's plugin in its folder, Muse Code's
  * entry in the folder's `.mcp.json` with its `${NAME:-}` references read from its environment. None where it was given none.
  */
@@ -523,7 +523,7 @@ async function serverOf(): Promise<Server | undefined> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// Its Facade tools: the server `--mcp-config` names, and each script that appears for this agent
+// Its Facade Code Framework tools: the server `--mcp-config` names, and each script that appears for this agent
 
 interface Step {
 	readonly tool: string;
@@ -601,7 +601,7 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 				const { to, text } = args;
 				const home = server.env.FACADE_HOME;
 				if (step.tool !== 'send_message' || typeof to !== 'string' || typeof text !== 'string' || !home) {
-					throw new Error('Cancellation requires a Framework send in the isolated fixture');
+					throw new Error('Cancellation requires a Facade Code Framework send in the isolated fixture');
 				}
 				const messageNumber = await pendingSend(home, to, text);
 				shim.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId } })}\n`);

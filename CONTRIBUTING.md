@@ -1,6 +1,6 @@
-# Contributing to Facade Code
+# Contributing
 
-Thank you for helping. Facade Code is developed in the open at
+Thank you for helping. Facade Code Framework and Facade Code Extension are developed in the open at
 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Bugs and ideas
@@ -16,8 +16,8 @@ Security vulnerabilities are not reported in issues; see [`SECURITY.md`](SECURIT
 
 ## Code
 
-Start with the [repository instructions](AGENTS.md). Use [Framework engineering](docs/framework/ENGINEERING.md)
-for the Framework and [the standalone extension instructions](extension/AGENTS.md) for editor work. The
+Start with the [repository instructions](AGENTS.md). Use [Facade Code Framework engineering](docs/framework/ENGINEERING.md)
+for Facade Code Framework and [the standalone extension instructions](extension/AGENTS.md) for editor work. The
 [product guide](docs/PRODUCT.md) describes the shared behavior.
 
 For IDE work, open `ide/`, run its development commands there and follow [IDE engineering](docs/ide/ENGINEERING.md).
@@ -25,7 +25,7 @@ The rules below apply to IDE changes.
 
 - Branch from `main` as `feature/<number>-<name>`.
 - Merge, never rebase: a feature lands on `main` with `--no-ff`, after review.
-- Keep Facade Code's files together, and in VS Code's files add optional hooks rather than
+- Keep Facade Code IDE's files together, and in VS Code's files add optional hooks rather than
   rewriting their logic, so that merging a newer VS Code stays cheap.
 - Every feature has a switch, and off means stock VS Code.
 - Every change lands with tests.

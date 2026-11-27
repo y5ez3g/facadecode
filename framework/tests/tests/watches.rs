@@ -303,7 +303,7 @@ fn a_screen_read_marks_the_screen_s_styles() {
     assert!(
         screen["text"]
             .as_str()
-            .is_some_and(|text| text.contains("fakecli {{(Facade test CLI)}}")),
+            .is_some_and(|text| text.contains("fakecli {{(Facade Code Framework test CLI)}}")),
         "{read}"
     );
     assert_eq!(

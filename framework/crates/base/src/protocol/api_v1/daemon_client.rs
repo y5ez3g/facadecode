@@ -129,11 +129,11 @@ impl DaemonClient {
 
         let response = match read_frame(&mut reader, &mut line, until)? {
             Some(ServerMessage::Response(response)) if answers(&response, HELLO_ID) => response,
-            Some(_) => anyhow::bail!("the Orchestrator did not respond to hello"),
+            Some(_) => anyhow::bail!("Facade Code Framework did not respond to hello"),
             None => {
                 return Err(io::Error::new(
                     ErrorKind::UnexpectedEof,
-                    "the Orchestrator closed before hello",
+                    "Facade Code Framework closed before hello",
                 )
                 .into());
             }
@@ -297,7 +297,7 @@ impl DaemonClient {
                     .is_some_and(|error| error.kind() == ErrorKind::TimedOut) =>
             {
                 anyhow::bail!(
-                    "the Orchestrator did not respond within {} seconds of a newer build taking over",
+                    "Facade Code Framework did not respond within {} seconds of a newer build taking over",
                     timeout.as_secs()
                 );
             }

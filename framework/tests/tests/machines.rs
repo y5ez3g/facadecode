@@ -1,4 +1,4 @@
-//! Machine connections through the Facade command and its SSH transport.
+//! Machine connections through the Facade Code Framework command and its SSH transport.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -240,7 +240,7 @@ fn ssh_refuses_a_newer_remote_home_before_serving() {
     );
     assert!(
         stderr(&output).contains("is newer than local build")
-            && stderr(&output).contains("Upgrade local Facade"),
+            && stderr(&output).contains("Upgrade local Facade Code Framework"),
         "{}",
         stderr(&output)
     );
@@ -1545,7 +1545,7 @@ fn check_remote_worktree(
             &remote.project,
             &[
                 "-c",
-                "user.name=Facade QA",
+                "user.name=Facade Code Framework QA",
                 "-c",
                 "user.email=qa@example.invalid",
                 "commit",
@@ -1838,7 +1838,7 @@ fn a_remote_worktree_is_shared_by_the_shell_and_editor() {
     git(&["add", "keep.txt"]);
     git(&[
         "-c",
-        "user.name=Facade QA",
+        "user.name=Facade Code Framework QA",
         "-c",
         "user.email=qa@example.invalid",
         "commit",
@@ -1962,7 +1962,7 @@ fn run_using(home: &TestHome, program: &Path, args: &[&str]) -> std::process::Ou
         .args(args)
         .stdin(Stdio::null())
         .output()
-        .expect("could not run Facade")
+        .expect("could not run Facade Code Framework")
 }
 
 fn run_using_ok(home: &TestHome, program: &Path, args: &[&str]) -> String {
@@ -1976,12 +1976,13 @@ fn run_using_ok(home: &TestHome, program: &Path, args: &[&str]) -> String {
     stdout(&output)
 }
 
-/// Each independently compiled Framework build dials the other and forwards input.
+/// Each independently compiled Facade Code Framework build dials the other and forwards input.
 #[test]
-#[ignore = "requires the separately built Framework CLI in FACADE_TEST_FRAMEWORK_PEER"]
+#[ignore = "requires the separately built Facade Code Framework CLI in FACADE_TEST_FRAMEWORK_PEER"]
 fn two_framework_builds_cold_dial_each_other() {
     let peer = std::path::PathBuf::from(
-        std::env::var_os("FACADE_TEST_FRAMEWORK_PEER").expect("the peer Framework artifact"),
+        std::env::var_os("FACADE_TEST_FRAMEWORK_PEER")
+            .expect("the peer Facade Code Framework artifact"),
     );
     let programs = test_binaries();
     assert!(peer.is_absolute() && peer.is_file() && peer != programs.facade);
@@ -2000,7 +2001,7 @@ fn two_framework_builds_cold_dial_each_other() {
             run_using_ok(home, program, &["machine", "list"]);
             let hello = home
                 .hello_result()
-                .expect("the Framework daemon is listening");
+                .expect("the Facade Code Framework daemon is listening");
             assert_eq!(hello["api_version"], 1, "{hello}");
             let id = hello["machine_id"].as_str().unwrap();
             run_using_ok(home, program, &["machine", "rename", id, name]);
@@ -2009,7 +2010,7 @@ fn two_framework_builds_cold_dial_each_other() {
         assert_ne!(
             start_machine(caller, &source, "caller"),
             start_machine(holder, &remote, "holder"),
-            "provide a different Framework build ID"
+            "provide a different Facade Code Framework build ID"
         );
         remote.add_custom_cli("qa-fake", &programs.fakecli);
         let started = run_using_ok(
@@ -2065,10 +2066,11 @@ fn bare_agent_names_find_peers_over_a_saved_route() {
 }
 
 #[test]
-#[ignore = "requires the separately built 146 Framework CLI in FACADE_TEST_FRAMEWORK_PEER"]
+#[ignore = "requires the separately built 146 Facade Code Framework CLI in FACADE_TEST_FRAMEWORK_PEER"]
 fn bare_agent_names_find_a_146_peer_over_a_saved_route() {
     let peer = std::path::PathBuf::from(
-        std::env::var_os("FACADE_TEST_FRAMEWORK_PEER").expect("the 146 Framework artifact"),
+        std::env::var_os("FACADE_TEST_FRAMEWORK_PEER")
+            .expect("the 146 Facade Code Framework artifact"),
     );
     assert!(peer.is_absolute() && peer.is_file() && peer != test_binaries().facade);
     assert!(
@@ -2285,11 +2287,12 @@ mod authorization {
         let lines: Vec<_> = receipts.lines().collect();
         assert_eq!(lines.len(), 4, "{receipts}");
         assert!(
-            lines[0].starts_with("Installed Facade SSH key on devbox (allows "),
+            lines[0].starts_with("Installed Facade Code Framework SSH key on devbox (allows "),
             "{receipts}"
         );
         assert!(
-            lines[1].starts_with("Installed devbox's Facade SSH key on laptop (allows "),
+            lines[1]
+                .starts_with("Installed devbox's Facade Code Framework SSH key on laptop (allows "),
             "{receipts}"
         );
         assert!(
@@ -3228,11 +3231,11 @@ fn an_unwaited_peer_failure_reports_one_qualified_notice_after_retry() {
 
 /// A v1 peer without notice support rejects the notice and continues to serve the authenticated link.
 #[test]
-#[ignore = "requires a Framework v1 peer without notice support in FACADE_TEST_FRAMEWORK_PEER_WITHOUT_NOTICE"]
+#[ignore = "requires a Facade Code Framework v1 peer without notice support in FACADE_TEST_FRAMEWORK_PEER_WITHOUT_NOTICE"]
 fn a_v1_peer_without_notice_support_keeps_the_link() {
     let peer_program = std::path::PathBuf::from(
         std::env::var_os("FACADE_TEST_FRAMEWORK_PEER_WITHOUT_NOTICE")
-            .expect("the absolute path to the Framework peer binary"),
+            .expect("the absolute path to the Facade Code Framework peer binary"),
     );
     assert!(
         peer_program.is_absolute() && peer_program.is_file(),

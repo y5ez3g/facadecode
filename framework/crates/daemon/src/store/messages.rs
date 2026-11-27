@@ -1198,15 +1198,15 @@ mod tests {
     use crate::messages::tests::message;
 
     /// A test's own framework folder, deleted when it is dropped.
-    struct Framework(PathBuf);
+    struct Facade(PathBuf);
 
-    impl Framework {
-        fn new(test: &str) -> Framework {
+    impl Facade {
+        fn new(test: &str) -> Facade {
             let dir =
                 std::env::temp_dir().join(format!("facade-messages-{test}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
-            Framework(dir)
+            Facade(dir)
         }
 
         fn open(&self) -> Arc<Store> {
@@ -1214,7 +1214,7 @@ mod tests {
         }
     }
 
-    impl Drop for Framework {
+    impl Drop for Facade {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn a_request_id_keeps_one_message_per_sender_and_recipient_within_the_hour() {
-        let framework = Framework::new("send-request");
+        let framework = Facade::new("send-request");
         let route = SendRoute {
             recipient: AgentRef {
                 machine_id: "remote-machine".into(),
@@ -1435,7 +1435,7 @@ mod tests {
     /// Every field of a message, its delivery and its paste survive a reopen.
     #[test]
     fn a_message_its_delivery_and_its_paste_survive_a_reopen() {
-        let framework = Framework::new("reopen");
+        let framework = Facade::new("reopen");
         let store = framework.open();
         let command = Message {
             from: "command_line".into(),
@@ -1650,7 +1650,7 @@ mod tests {
     /// delivers it with no second result. The result, its call and its facts survive a reopen.
     #[test]
     fn a_prompt_owes_one_result_written_in_the_transaction_that_settles_it() {
-        let framework = Framework::new("prompt");
+        let framework = Facade::new("prompt");
         let store = framework.open();
         store.insert(&crate::store::tests::record("a1")).unwrap();
         let (kept, owed_number) = store

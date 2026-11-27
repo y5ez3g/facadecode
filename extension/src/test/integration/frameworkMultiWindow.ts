@@ -147,7 +147,7 @@ export async function missingSessionUnpin(open: OpenWindow, folder: string, env:
 	const home = env.FACADE_HOME!;
 	const first = await open(folder, 'pins');
 	assert.strictEqual(normalizeDriveLetter(first.ready.home), normalizeDriveLetter(home));
-	assert.ok(first.ready.machineId && first.ready.remote === null, 'the local window observed the real Framework machine');
+	assert.ok(first.ready.machineId && first.ready.remote === null, 'the local window observed the real Facade Code Framework machine');
 	const missing = await first.act<RunningAgent>({ kind: 'start' });
 	const unpinned = await first.act<RunningAgent>({ kind: 'start' });
 	assert.notStrictEqual(missing.session, unpinned.session);
@@ -166,9 +166,9 @@ export async function missingSessionUnpin(open: OpenWindow, folder: string, env:
 	await first.act({ kind: 'unpin', agent: unpinned.id });
 	assert.deepStrictEqual(pins(), [missing.id], 'only the other Pin remains on disk before reopening');
 	await first.close();
-	await until('the isolated Framework daemon to idle out before aging the fixture', () => !frameworkListens(home) || undefined, 45_000);
+	await until('the isolated Facade Code Framework daemon to idle out before aging the fixture', () => !frameworkListens(home) || undefined, 45_000);
 
-	// Change only the stopped fixture's timestamp while its own daemon is down. Framework writes the expiry record on startup.
+	// Change only the stopped fixture's timestamp while its own daemon is down. Facade Code Framework writes the expiry record on startup.
 	const { DatabaseSync } = await import('node:sqlite');
 	const db = new DatabaseSync(path.join(home, 'framework', 'facade.db'));
 	try {
@@ -219,7 +219,7 @@ export async function missingSessionUnpin(open: OpenWindow, folder: string, env:
 		JSON.stringify({ home, expired: missing.id, unpinned: unpinned.id, notice, launches: original }));
 }
 
-/** A Framework startup refusal reports the cause and leaves every launch unavailable. */
+/** A Facade Code Framework startup refusal reports the cause and leaves every launch unavailable. */
 export async function activationFailure(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv, faultProgram: string): Promise<void> {
 	const home = env.FACADE_HOME!;
 	const record = env.FACADE_IT_RECORD!;
@@ -230,7 +230,7 @@ export async function activationFailure(open: OpenWindow, folder: string, env: N
 	const workbench = await window.workbench();
 	try {
 		await window.act({ kind: 'show-notifications' });
-		const message = await until('the startup failure naming the Framework executable', async () =>
+		const message = await until('the startup failure naming the Facade Code Framework executable', async () =>
 			workbench.cdp.evaluate<string | undefined>(`Array.from(document.querySelectorAll('.notification-list-item-message'))
 				.map(node => node.textContent?.trim()).find(text => text?.includes(${JSON.stringify(faultProgram)}))`));
 		assert.match(message, /Could not start|Could not run/u);
@@ -239,10 +239,10 @@ export async function activationFailure(open: OpenWindow, folder: string, env: N
 	}
 	assert.deepStrictEqual(fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`)), []);
 	await window.close();
-	console.log('  ✔ Framework startup failed visibly and started no agent.');
+	console.log('  ✔ Facade Code Framework startup failed visibly and started no agent.');
 }
 
-/** An incompatible hello refuses activation, including the actual Facade webview and commands. */
+/** An incompatible hello refuses activation, including the actual Facade Code Extension webview and commands. */
 export async function incompatibleActivation(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
 	const home = env.FACADE_HOME!;
 	const endpoint = frameworkSocket(home);
@@ -294,14 +294,14 @@ export async function incompatibleActivation(open: OpenWindow, folder: string, e
 		try {
 			const facadeFrame = `Array.from(document.querySelectorAll('iframe.webview')).find(frame => frame.getClientRects().length
 				&& getComputedStyle(frame).visibility === 'visible' && new URL(frame.src).searchParams.get('extensionId') === 'facade.facadecode')?.src`;
-			const viewUrl = await until('the visible Facade webview frame', () => workbench.cdp.evaluate<string | undefined>(facadeFrame));
-			const target = await until('the Facade webview target in this isolated workbench', async () => {
+			const viewUrl = await until('the visible Facade Code Extension webview frame', () => workbench.cdp.evaluate<string | undefined>(facadeFrame));
+			const target = await until('the Facade Code Extension webview target in this isolated workbench', async () => {
 				const listed = await workbench.cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>('Target.getTargets');
 				return listed.targetInfos.find(each => each.type === 'iframe' && each.url === viewUrl);
 			});
 			const { sessionId } = await workbench.cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: target.targetId, flatten: true });
 			try {
-				await until('the exact activation error rendered inside the Facade panel', async () => {
+				await until('the exact activation error rendered inside the Facade Code Extension panel', async () => {
 					const body = await workbench.cdp.evaluate<string | undefined>(
 						"document.querySelector('#active-frame')?.contentDocument?.body?.innerText.trim()", sessionId);
 					return body === reason ? body : undefined;
@@ -330,7 +330,7 @@ export async function incompatibleActivation(open: OpenWindow, folder: string, e
 		assert.ok(!fs.existsSync(path.join(home, 'framework', 'facade.db')) && !fs.existsSync(path.join(home, 'extension', 'ptyd')));
 		const record = env.FACADE_IT_RECORD!;
 		assert.deepStrictEqual(fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`)), []);
-		console.log('  ✔ The incompatible hello was refused by the real Facade panel and New Agent. ' +
+		console.log('  ✔ The incompatible hello was refused by the real Facade Code Extension panel and New Agent. ' +
 			JSON.stringify({ home, endpoint, offered: offered.api_versions, selected: incompatible.api_version, panel: reason,
 				newAgent: 'refused', fallback: false, launches: 0 }));
 	} finally {
@@ -402,7 +402,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	await until('the other window to see the same workspace card', () => cardIn(peerWindow));
 	await pinWindow.act({ kind: 'shell-pin', name, set: true, verifyOpen: address });
 	assert.deepStrictEqual(starts(), launchPids, 'Open Terminal did not launch a second fake CLI');
-	console.log('  ✔ Open Terminal attached the exact Framework run with a new native tab and the original PID');
+	console.log('  ✔ Open Terminal attached the exact Facade Code Framework run with a new native tab and the original PID');
 	await until('Pin to be visible in the other window', async () => (await cardIn(peerWindow))?.pinned || undefined);
 	await Promise.all([pinWindow.close(), peerWindow.close()]);
 	// Pin recovery groups live extension hosts. Let both hosts exit before the next opening.
@@ -478,7 +478,7 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 	const name = 'shell-attach';
 	const address = detachedStartReference(run(facade, 'start', '-d', '--name', name, 'qa-fake'), name);
 	const inspect = async () => (await frameworkCall(home, 'agent.inspect', { target: address })).agent;
-	const before = expectedSession ? await until('the original Framework to report the exact CLI session', async () => {
+	const before = expectedSession ? await until('the original Facade Code Framework to report the exact CLI session', async () => {
 		const agent = await inspect();
 		return agent.session === expectedSession ? agent : undefined;
 	}) : await inspect();
@@ -490,7 +490,7 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 		const version = (program: string) => /^facade (\d+\.\d+\.\d+(?:\+\d+\.[a-f0-9]{40})?)$/u.exec(run(program, '--version').trim())?.[1];
 		const old = version(facade);
 		const next = version(replacement);
-		assert.ok(old && next && old !== next, 'Select two distinct Framework builds.');
+		assert.ok(old && next && old !== next, 'Select two distinct Facade Code Framework builds.');
 		const lock = (service: 'daemon' | 'keeper') =>
 			JSON.parse(fs.readFileSync(path.join(home, 'framework', `${service}.lock`), 'utf8')) as { pid: number; birth: string };
 		const accepted = async () => {

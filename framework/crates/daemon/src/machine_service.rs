@@ -218,7 +218,7 @@ impl Daemon {
     fn hold_machine_handoff(&self) -> Result<WorkGuard, api_v1::ErrorBody> {
         self.lifecycle
             .begin(Work::Call)
-            .ok_or_else(|| api::error("unavailable", "Facade is exiting"))
+            .ok_or_else(|| api::error("unavailable", "Facade Code Framework is exiting"))
     }
 
     pub(crate) async fn serve_machine_stream(

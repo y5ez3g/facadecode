@@ -170,7 +170,7 @@ fn list_tools(relay: &Relay) -> Value {
 }
 
 /// The answer to `tools/call`: the tool's envelope, as the text the model reads and as structured
-/// content. A call its client cancelled, which wrote nothing or whose message Facade withdrew, is
+/// content. A call its client cancelled, which wrote nothing or whose message Facade Code Framework withdrew, is
 /// answered too, so that every request has one answer and the relay holds no call open; MCP has its
 /// client ignore it.
 fn call_tool(

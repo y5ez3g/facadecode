@@ -14,7 +14,7 @@ import { plainText } from '../presentation';
 import { BACK, Flow, StepAction } from './stepping';
 
 /**
- * Why a new worktree cannot be made, in the person's language where Facade says it (UX-2.4) - from an error or an unavailable
+ * Why a new worktree cannot be made, in the person's language where Facade Code Extension says it (UX-2.4) - from an error or an unavailable
  * answer that carries its problem - Git's and the editor's own diagnostics as they said them; `otherwise` where there is no problem.
  */
 export function worktreeProblemText(value: unknown, otherwise: string): string {
@@ -253,7 +253,7 @@ export interface LocationDeps extends FolderStepDeps {
 	readonly worktrees: WorktreePort;
 	/** A deleted worktree's agents are closed first (WORKTREES-3.2, 3.3). */
 	readonly agents: Pick<Agents, 'list' | 'close'>;
-	/** Framework finds affected agents by location source, including those without a card in this window. */
+	/** Facade Code Framework finds affected agents by location source, including those without a card in this window. */
 	readonly worktreeAgents?: {
 		count(path: string): number;
 		close(path: string): Promise<boolean>;

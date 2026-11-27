@@ -14,7 +14,7 @@ import { linesOf, placeOf } from './detailLines';
 import type { Card } from '../webview/protocol';
 
 const WORDS: CardWords = {
-	orchestrator: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
+	framework: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
 		session: value => `Session: ${value}`, name: value => `Name: ${value}`, address: value => `Agent reference: ${value}` },
 	title: value => `Title: ${value}`,
 	location: value => `Location: ${value}`,
@@ -35,14 +35,14 @@ const WORDS: CardWords = {
 	error: reason => `Error · ${reason}`,
 	activityUnavailable: 'State unavailable · check terminal',
 	activityUnknown: why => `State ${why} · check terminal`,
-	needsAttention: 'Attention needed', toolsConnecting: 'Facade tools not connected yet',
+	needsAttention: 'Attention needed', toolsConnecting: 'Facade Code Framework tools not connected yet',
 	needsPermission: 'Permission needed',
 	needsSignIn: 'Sign-in needed',
 	hasQuestion: 'Answer needed',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
-	toolsUnavailable: problem => problem === 'disconnected' ? 'Facade tools disconnected' : `Facade tools unavailable · ${problem}`,
-	saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
+	toolsUnavailable: problem => problem === 'disconnected' ? 'Facade Code Framework tools disconnected' : `Facade Code Framework tools unavailable · ${problem}`,
+	saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Last input: ${line}`, saidByFacade: (line: string) => `Facade Code Framework result: ${line}`,
 	exitUnknown: 'Getrennt: Exit-Ursache unbekannt',
 	startFailed: reason => `Start failed · ${reason}`,
 	worktreeFailed: reason => `Worktree failed · ${reason}`
@@ -76,7 +76,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.strictEqual(disconnected.stateText, WORDS.connectionLost);
 		const title = '  The daemon TITLE  ';
 		const address = 'a1@3f9a2c1d';
-		const workspaceCard = cardOf(run({ remoteMachine: 'gpu (3f9a2c1d)', orchestrator: { reference, state: 'idle', machine: 'gpu' },
+		const workspaceCard = cardOf(run({ remoteMachine: 'gpu (3f9a2c1d)', framework: { reference, state: 'idle', machine: 'gpu' },
 			title, address, sessionId: 'saved-session', pin: 'pin-1', said: 'Last submission' }), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([workspaceCard.alias, workspaceCard.runningOn, workspaceCard.pinned, workspaceCard.line,
 			workspaceCard.details.summary, workspaceCard.details.nameLabel, workspaceCard.details.address, workspaceCard.label], [
@@ -87,7 +87,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.strictEqual(workspaceCard.details.description.place, 'Path: /app');
 	});
 
-	test('RULES-3.2, RULES-6.2: both implementations expose state in color and in words; Framework details prioritize errors and blockers', () => {
+	test('RULES-3.2, RULES-6.2: both implementations expose state in color and in words; Facade Code Framework details prioritize errors and blockers', () => {
 		const shown = (facts: RunFacts) => {
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
 			return [card.dot, card.stateText, card.line, card.label.split(', ').includes(card.stateText)];
@@ -110,22 +110,22 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			['none', 'Idle', '🧑‍💻 fix the login bug', true],
 			['none', 'State unavailable · check terminal', '🧑‍💻 fix the login bug', true],
 			['none', 'Permission needed', 'Permission needed · Run npm test?', true],
-			['error', 'Facade tools not connected yet', 'Facade tools not connected yet', true],
+			['error', 'Facade Code Framework tools not connected yet', 'Facade Code Framework tools not connected yet', true],
 			['error', 'CLI has not reported activity', 'CLI has not reported activity', true],
-			['error', 'Facade tools unavailable · conflict', 'Facade tools unavailable · conflict', true],
+			['error', 'Facade Code Framework tools unavailable · conflict', 'Facade Code Framework tools unavailable · conflict', true],
 			['error', 'Error · Failed', 'Failed', true]
 		]);
 		const expected = {
 			starting: ['none', 'Starting'], working: ['working', 'Working'], waiting_for_you: ['none', 'Waiting for you', 'Waiting for you'],
 			just_done: ['just_done', 'Just done'], idle: ['none', 'Idle'], ended: ['none', 'Ended'], unknown: ['none', 'Unknown'], error: ['error', 'Error']
-		} satisfies Record<NonNullable<RunFacts['orchestrator']>['state'], string[]>;
+		} satisfies Record<NonNullable<RunFacts['framework']>['state'], string[]>;
 		for (const [state, [dot, label, line = 'Terminal text']] of Object.entries(expected) as [keyof typeof expected, string[]][]) {
-			assert.deepStrictEqual(shown(run({ orchestrator: { reference, state }, title: 'Daemon TITLE', said: 'Terminal text' })),
+			assert.deepStrictEqual(shown(run({ framework: { reference, state }, title: 'Daemon TITLE', said: 'Terminal text' })),
 				[dot, label, line, true], state);
 		}
-		assert.deepStrictEqual(shown(run({ orchestrator: { reference, state: 'ended' }, lifecycle: 'ended', title: 'Daemon TITLE',
+		assert.deepStrictEqual(shown(run({ framework: { reference, state: 'ended' }, lifecycle: 'ended', title: 'Daemon TITLE',
 			error: { source: 'resume', reason: 'Session is in use', at: 1 } })), ['error', 'Error', 'Session is in use', true]);
-		assert.deepStrictEqual(shown(run({ orchestrator: { reference, state: 'waiting_for_you' }, said: 'Terminal text',
+		assert.deepStrictEqual(shown(run({ framework: { reference, state: 'waiting_for_you' }, said: 'Terminal text',
 			blocker: { kind: 'permission', text: 'Run npm test?' } })), ['none', 'Waiting for you', 'Permission needed · Run npm test?', true]);
 	});
 
@@ -144,7 +144,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		], ['New session started', '🧑‍💻 /clear', '📨 Implement the parser', '🧑‍💻 and the tests', 'Agent resumed', 'Session continued', '🧑‍💻 go on', '', '🧑‍💻 go on']);
 	});
 
-	test('PANEL-1.4: the second line is one of three kinds - the person\'s input after 🧑‍💻 and a space, another agent\'s message after 📨 and a space, Facade\'s own with no mark: a result without the 🔔 it is typed to its agent with, a notable state while it lasts and then the last message again, or how its run began - never a title, Working, Idle or State unavailable · check terminal', () => {
+	test('PANEL-1.4: the second line is one of three kinds - the person\'s input after 🧑‍💻 and a space, another agent\'s message after 📨 and a space, Facade Code Extension\'s own with no mark: a result without the 🔔 it is typed to its agent with, a notable state while it lasts and then the last message again, or how its run began - never a title, Working, Idle or State unavailable · check terminal', () => {
 		const typed = { said: 'fix the login bug' };
 		const sent = { said: 'Review the parser', saidSource: { kind: 'agent', name: 'Lead', alias: '#a2' } } as const;
 		const task = { promptLine: 'Implement the parser', origin: 'agent', creatorLabel: 'Lead #a2' } as const;
@@ -165,8 +165,8 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			[{ ...typed, blocker: { kind: 'unknown', text: 'Check the terminal' } }, 'Attention needed · Check the terminal'],
 			// Why it is red, without `Error · `: the red dot says that
 			[{ ...typed, error: { reason: 'Rate limited', source: 'cli', at: 1 } }, 'Rate limited'],
-			[{ ...typed, tools: 'unavailable', toolsProblem: 'conflict', toolsFile: 'SKILL.md' }, 'Facade tools unavailable · conflict'],
-			[{ ...typed, tools: 'connecting', notReady: true }, 'Facade tools not connected yet'],
+			[{ ...typed, tools: 'unavailable', toolsProblem: 'conflict', toolsFile: 'SKILL.md' }, 'Facade Code Framework tools unavailable · conflict'],
+			[{ ...typed, tools: 'connecting', notReady: true }, 'Facade Code Framework tools not connected yet'],
 			[{ ...typed, ...red, activity: 'unknown' }, 'CLI has not reported activity'],
 			// None any more: its last message again; before any, how its run began
 			[{ ...typed, activity: 'working' }, '🧑‍💻 fix the login bug'],
@@ -179,7 +179,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.deepStrictEqual(lines.filter(line => /^\u{1F514}/u.test(line) || /Secret title|Working|Idle|State unavailable · check terminal/.test(line)), []);
 	});
 
-	test('PANEL-1.4, 1.5: another agent\'s message is marked 📨 by who its record says sent it - never by its text - its sender and source in words for a screen reader; the person\'s input and a Facade result name none', () => {
+	test('PANEL-1.4, 1.5: another agent\'s message is marked 📨 by who its record says sent it - never by its text - its sender and source in words for a screen reader; the person\'s input and a Facade Code Framework result name none', () => {
 		const cardWith = (facts: Partial<RunFacts>) => cardOf(run({ activity: 'not_working', ...facts }), { place, selected: false, menu, words: WORDS });
 		const agent = cardWith({ said: 'Fix the login', saidSource: { kind: 'agent', name: 'Time-pi-3', alias: '#a65' } });
 		assert.strictEqual(agent.line, '📨 Fix the login');
@@ -189,7 +189,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const person = cardWith({ said: '📨 a person typed this' });
 		assert.deepStrictEqual([person.line, person.label.endsWith('Last input: 📨 a person typed this')], ['🧑‍💻 📨 a person typed this', true]);
 		const result = cardWith({ said: '🔔 Your message #m42 has been passed on.', saidSource: { kind: 'facade' } });
-		assert.deepStrictEqual([result.line, result.label.endsWith('Facade result: Your message #m42 has been passed on.')], ['Your message #m42 has been passed on.', true]);
+		assert.deepStrictEqual([result.line, result.label.endsWith('Facade Code Framework result: Your message #m42 has been passed on.')], ['Your message #m42 has been passed on.', true]);
 		// A creation prompt is its creator's message, on either path; the details say who started it (PANEL-1.5)
 		const task = cardWith({ promptLine: 'Implement the parser', origin: 'agent', creatorLabel: 'Maker #a7' });
 		assert.deepStrictEqual([task.line, task.label.endsWith('Last message from agent Maker (#a7): Implement the parser'), task.details.startedBy], ['📨 Implement the parser', true, 'Maker #a7']);
@@ -253,18 +253,18 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.deepStrictEqual(labels, [
 			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State screen_reset · check terminal',
 			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State waiting · check terminal',
-			'Ada, #a1, Starting, shop · main, Claude Code, Starting Claude Code..., Facade tools not connected yet',
-			'Ada, #a1, Working, shop · main, Claude Code, New session started, Facade tools not connected yet',
-			'Ada, #a1, Facade tools not connected yet, shop · main, Claude Code',
+			'Ada, #a1, Starting, shop · main, Claude Code, Starting Claude Code..., Facade Code Framework tools not connected yet',
+			'Ada, #a1, Working, shop · main, Claude Code, New session started, Facade Code Framework tools not connected yet',
+			'Ada, #a1, Facade Code Framework tools not connected yet, shop · main, Claude Code',
 			'Ada, #a1, Working, shop · main, Claude Code, New session started',
-			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State screen_reset · check terminal, Facade tools not connected yet',
+			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State screen_reset · check terminal, Facade Code Framework tools not connected yet',
 			'Ada, #a1, Error · Beendet mit Code 1, shop · main, Claude Code'
 		]);
 		assert.ok(labels.every(each => each.split(', ').length === new Set(each.split(', ')).size), 'no part twice');
 		assert.strictEqual(Object.keys(cardOf(run(reset), { place, selected: false, menu, words: WORDS }).details).filter(key => ['summary', 'untitled', 'startedBy', 'location', 'path'].includes(key)).length, 3);
 	});
 
-	test('PANEL-1.5, CLIS-2.4: an absent or blank title keeps its Title: label - No title yet while its CLI has not saved one, Title unavailable where Facade has no history reader for its CLI - and the description says the same first fact', () => {
+	test('PANEL-1.5, CLIS-2.4: an absent or blank title keeps its Title: label - No title yet while its CLI has not saved one, Title unavailable where Facade Code Extension has no history reader for its CLI - and the description says the same first fact', () => {
 		const details = (more: Partial<RunFacts>, readsTitles?: boolean) => cardOf(run(more), { place, selected: false, menu, words: WORDS, ...readsTitles === undefined ? {} : { readsTitles } }).details;
 		const shown = (each: Card['details']) => [each.summary?.value, each.untitled, each.titleLabel, each.description.title];
 		assert.deepStrictEqual([details({}), details({ title: '  ' }), details({}, true), details({ cli: 'my-cli', displayName: 'my-cli' }, false), details({ title: 'Fix login' }, false)].map(shown), [
@@ -292,7 +292,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const ended = cardOf(run({ ...lost, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
 		const live = cardOf(run({ ...lost, activity: 'not_working', reporting: true }), { place, selected: false, menu, words: WORDS });
 		const never = cardOf(run({ tools: 'unavailable', toolsProblem: 'conflict', lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
-		const said = (card: Pick<Card, 'line' | 'label'>) => card.line === 'Facade tools disconnected' && card.label.includes(card.line);
+		const said = (card: Pick<Card, 'line' | 'label'>) => card.line === 'Facade Code Framework tools disconnected' && card.label.includes(card.line);
 		assert.deepStrictEqual([said(ended), said(live), said(never), ended.line, never.line], [false, true, false, 'Beendet mit Code 1', 'Beendet mit Code 1']);
 	});
 
@@ -438,7 +438,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.strictEqual(cardOf(run({ lifecycle: 'starting', phase: 'launching_cli', startedAt: undefined, pid: undefined }), { place, selected: false, menu, words: WORDS }).startedAt, 1000);
 	});
 
-	test('Facade\'s own exit words come from how the process ended, in the person\'s language; another error\'s reason as it was given (UX-2.4, RULES-3.3)', () => {
+	test('Facade Code Extension\'s own exit words come from how the process ended, in the person\'s language; another error\'s reason as it was given (UX-2.4, RULES-3.3)', () => {
 		const ended = (end: RunFacts['end'], reason: string, source = 'exit') => statusOf(run({ lifecycle: 'ended', end, error: { reason, source, at: 3 } }), WORDS).line;
 		assert.deepStrictEqual([
 			ended({ kind: 'abnormal', code: 137, at: 3 }, 'Exited with code 137'),
@@ -526,7 +526,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.deepStrictEqual(images.flatMap(image => [image.light?.fsPath, image.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
 		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'facade-sky') as unknown as Images).dark.fsPath, path.join(media, 'agents', 'robot-sky.svg'));
 		assert.deepStrictEqual(cliIcon({ fsPath: media } as never, 'qwen codex'), cliIcon({ fsPath: media } as never, 'facade-pearl'));
-		// Tabs: a registered glyph for each - a built-in's logo, or a robot at its code point in Facade's robot font, which
+		// Tabs: a registered glyph for each - a built-in's logo, or a robot at its code point in Facade Code Extension's robot font, which
 		// scripts/robot-icons.py draws in ROBOTS' order - and no letter font left
 		const manifest = JSON.parse(fs.readFileSync(path.join(media, '..', 'package.json'), 'utf8'));
 		for (const cli of builtIns) {

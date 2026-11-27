@@ -1,6 +1,6 @@
 Start an agent from a coding CLI.
 
-Facade options come before the CLI name. Everything after the CLI name is
+Facade Code Framework options come before the CLI name. Everything after the CLI name is
 passed to that CLI unchanged. Use that CLI's own flags for model, reasoning,
 and prompts. Run 'facade status' to see the CLIs you can start.
 
@@ -18,7 +18,7 @@ Arguments
   [CLI_ARGS]...  Arguments passed to the CLI unchanged
 
 Options
-  -n, --name <NAME>          Name this agent (default: chosen by Facade)
+  -n, --name <NAME>          Name this agent (default: chosen by Facade Code Framework)
       --machine <MACHINE>    Run on this machine (default: {machine})
       --workdir <DIRECTORY>  Working directory (default: current directory locally,
                              login directory remotely)

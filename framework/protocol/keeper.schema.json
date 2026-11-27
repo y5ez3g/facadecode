@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Facade keeper API",
+  "title": "Facade Code Framework keeper API",
   "description": "A single JSON-RPC 2.0 frame. Success result and change types are selected by the corresponding request or watch.",
   "api_versions": [
     1
@@ -472,7 +472,7 @@
         },
         "at": {
           "type": "string",
-          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade Code Framework noticed it."
         }
       },
       "required": [

@@ -1,5 +1,5 @@
 //! The command line that starts or resumes a run's CLI, put together in order from the rule's own
-//! arguments, YOLO's, what gives the CLI Facade's tools and has it report its session, and the
+//! arguments, YOLO's, what gives the CLI Facade Code Framework's tools and has it report its session, and the
 //! person's words.
 
 use std::collections::BTreeMap;
@@ -28,7 +28,7 @@ pub struct LaunchPolicy<'a> {
 }
 
 impl<'a> LaunchPolicy<'a> {
-    /// The folder when Facade may handle startup trust and notices for this run.
+    /// The folder when Facade Code Framework may handle startup trust and notices for this run.
     pub fn startup_folder(self) -> Option<&'a Path> {
         self.yolo.filter(|_| self.origin == LaunchOrigin::Agent)
     }
@@ -39,7 +39,7 @@ impl<'a> LaunchPolicy<'a> {
 pub struct CommandLine {
     /// The program, then its arguments.
     pub command: Vec<String>,
-    /// Variables for session reporting and Facade's tools.
+    /// Variables for session reporting and Facade Code Framework's tools.
     pub env: Vec<(String, String)>,
     /// Run-local updater and startup settings. Their changes are undone on inheritance.
     pub launch_env: BTreeMap<String, String>,
@@ -55,7 +55,7 @@ pub struct CommandLine {
     pub plugin: Vec<(String, String)>,
     /// A native configuration file named relative to the workspace and owned by this run.
     pub workspace_file: Option<(PathBuf, String)>,
-    /// How the CLI was given Facade's tools.
+    /// How the CLI was given Facade Code Framework's tools.
     pub tools: Tools,
     /// The run's credential is present in the relay configuration this command will load.
     pub uses_run_credential: bool,
@@ -73,7 +73,7 @@ impl fmt::Debug for CommandLine {
 }
 
 /// The command line that starts `rule`'s CLI, in order: the program, the rule's arguments, YOLO's,
-/// the arguments that give Facade's tools, those that carry what the tools and YOLO add to the
+/// the arguments that give Facade Code Framework's tools, those that carry what the tools and YOLO add to the
 /// CLI's own settings, those that have the CLI report its session, then the person's `words`.
 ///
 /// An option of the tools' that takes every value up to the next option never comes right before
@@ -141,8 +141,8 @@ pub fn start_managed_launch_command(
 
 /// The command line that resumes session `id` of `rule`'s CLI, in order: the program, the resume
 /// arguments, the rule's arguments, YOLO's, the arguments that have the CLI report its session,
-/// those that give Facade's tools and carry what the tools and YOLO add to its settings, then the
-/// person's saved `words`, which join Facade's hooks and settings as a start's do.
+/// those that give Facade Code Framework's tools and carry what the tools and YOLO add to its settings, then the
+/// person's saved `words`, which join Facade Code Framework's hooks and settings as a start's do.
 /// See [`start_managed_launch_command`] for `session`, `server`, `environment` and `policy`.
 /// Returns `None` for a rule that does not resume sessions.
 pub fn resume_managed_launch_command(
@@ -196,7 +196,7 @@ pub fn resume_managed_launch_command(
     })
 }
 
-/// Facade's tools for the run, as `server` gives them, with what YOLO adds to the run's settings
+/// Facade Code Framework's tools for the run, as `server` gives them, with what YOLO adds to the run's settings
 /// merged into theirs. Without a server, no tools.
 fn wire(
     rule: &Rule,

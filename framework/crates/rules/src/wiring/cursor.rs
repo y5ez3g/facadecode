@@ -1,4 +1,4 @@
-//! Cursor Agent takes Facade's MCP server, rules and hooks in a per-run local plugin.
+//! Cursor Agent takes Facade Code Framework's MCP server, rules and hooks in a per-run local plugin.
 
 use std::path::Path;
 
@@ -49,7 +49,7 @@ pub(super) fn report(wiring: &mut Wiring, session: &SessionReport, server: Optio
 fn manifest() -> (String, String) {
     let manifest = json!({
         "name": "facade-code",
-        "description": "Facade Code’s managed tools for this run",
+        "description": "Facade Code Framework’s managed tools for this run",
         "version": facade_base::version(),
         "mcpServers": "./.mcp.json",
     });

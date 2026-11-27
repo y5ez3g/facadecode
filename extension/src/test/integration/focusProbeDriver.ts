@@ -2,14 +2,14 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The focus probe's driver (FACADE_IT_ONLY=probe; LIFECYCLE-2.2, 3.4, 3.5): measured facts about the two residuals of Facade's marks -
+// The focus probe's driver (FACADE_IT_ONLY=probe; LIFECYCLE-2.2, 3.4, 3.5): measured facts about the two residuals of Facade Code Extension's marks -
 // keys typed while a mark has borrowed the focus, and covered fronts that cannot be brought back. It runs in an isolated editor that
-// runs no tests: alone for the editor's native behaviour (phase `native`), beside Facade Code for its marks (`facade`, and `reload`,
+// runs no tests: alone for the editor's native behaviour (phase `native`), beside Facade Code Extension for its marks (`facade`, and `reload`,
 // whose window reloads). Its input is CDP-injected keyboard events (cdpInput.ts) into its own workbench page, which go wherever that
 // page's DOM focus is - not OS-level keyboard or IME input, which this does not cover. Each case is a line of FACADE_IT_PROBE for the
 // runner (focusProbe.ts): what was done, when each key was injected relative to the steps, what received it - a terminal's CLI by
 // the input it logs, a text document by its changes, or nothing - and a verdict. A native case's is its method's: a lost or
-// misdirected key, or a front not brought back, is a FAILURE. Facade's are judged by the rules as they stand (LIFECYCLE-3.4, 3.5): the
+// misdirected key, or a front not brought back, is a FAILURE. Facade Code Extension's are judged by the rules as they stand (LIFECYCLE-3.4, 3.5): the
 // person's own Pin or Unpin shows its agent's tab with the focus, as a click on its card does, the keys after it that agent's CLI's; a
 // reload brings back the pinned agents' tabs alone, one at a time in the Pins' order, each marked before the next opens, nothing given
 // back, the last in front of the active group with the panel's selection on it; a key reaching anything the person did not type into,
@@ -410,7 +410,7 @@ async function showFile(name: string, column: number, focus = true): Promise<voi
 
 const terminals = new Map<string, vscode.Terminal>();
 
-/** A terminal running the suite's fake CLI, which logs its input as `<record>.stdin.<id>`: no Facade's, a person's own. */
+/** A terminal running the suite's fake CLI, which logs its input as `<record>.stdin.<id>`: no Facade Code Extension's, a person's own. */
 async function fakeTerminal(id: string, location: vscode.TerminalEditorLocationOptions | vscode.TerminalLocation): Promise<vscode.Terminal> {
 	const terminal = vscode.window.createTerminal({ name: id, shellPath: FAKE, env: { FACADE_IT_RECORD: RECORD, FACADE_AGENT: id }, location });
 	terminals.set(id, terminal);
@@ -460,7 +460,7 @@ function report(result: CaseResult): void {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// N1-N5: the editor's own behaviour, no Facade
+// N1-N5: the editor's own behaviour, no Facade Code Extension
 
 /**
  * N1: `terminal.show(true)` - a mark's first step - then typing: `behind`, the terminal's tab behind the text file focused in the
@@ -570,7 +570,7 @@ const showOptions = { viewColumn: COLUMN, preserveFocus: true, preview: false };
 /** The ways a covered front may be brought back (N3): resource-based without focus, and the editor's own commands in the active group. */
 const METHODS: readonly Method[] = [
 	{
-		name: '(a) as Facade shows a covered front back now (agentTerminals.ts showBack)', inActiveGroup: false,
+		name: '(a) as Facade Code Extension shows a covered front back now (agentTerminals.ts showBack)', inActiveGroup: false,
 		run: async covered => {
 			if (covered.kind === 'terminal') {
 				return undefined;
@@ -787,7 +787,7 @@ async function n3(): Promise<CaseResult[]> {
 			measured: trials.map(trial => {
 				const each = trial as { method?: string; outcome: string; focusKept?: boolean; activeGroupBefore?: number; activeGroupAfter?: number; drawnActiveGroupAfter?: number; focusBefore?: string; focusAfter?: string };
 				const method = each.method ?? '';
-				const short = `${method.split(' ')[0]} ${method.includes('Facade') ? 'Facade-now' : method.includes('(extra)') ? 'by-kind+refocus' : method.includes('kind') ? 'by-kind' : method.includes('Index') ? 'index' : method.includes('Previous') ? 'MRU' : ''}`;
+				const short = `${method.split(' ')[0]} ${method.includes('Facade Code Extension') ? 'Facade Code Extension-now' : method.includes('(extra)') ? 'by-kind+refocus' : method.includes('kind') ? 'by-kind' : method.includes('Index') ? 'index' : method.includes('Previous') ? 'MRU' : ''}`;
 				const moved = each.focusKept === false ? ` (active group ${each.activeGroupBefore} → ${each.activeGroupAfter} by the API, ${each.drawnActiveGroupAfter} as drawn; DOM focus ${each.focusBefore === each.focusAfter ? 'stayed' : `${each.focusBefore} → ${each.focusAfter}`})` : '';
 				return `${short}: ${each.outcome}${moved}`;
 			}).join(' | '),
@@ -949,7 +949,7 @@ async function n4(): Promise<CaseResult[]> {
 		id: 'N4-missing', title: 'focusNthEditorGroup where that group does not exist',
 		done: created.map(each => each.step).join('; '),
 		measured: created.map(each => `${each.step}: groups ${each.groupsBefore} → ${each.groupsAfter}, active ${each.activeGroup}`).join('; '),
-		// A fact for Facade's give-back, not a key or a front: PASS where no command made a group it was not asked for
+		// A fact for Facade Code Extension's give-back, not a key or a front: PASS where no command made a group it was not asked for
 		verdict: created.every(each => each.groupsAfter === each.groupsBefore) ? 'PASS' : 'FAILURE', created
 	});
 	return results;
@@ -1015,7 +1015,7 @@ async function n5(): Promise<CaseResult[]> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// F1-F4: Facade's marks
+// F1-F4: Facade Code Extension's marks
 
 interface Card { readonly runId: string; readonly alias: string; readonly name: string }
 
@@ -1061,7 +1061,7 @@ async function resetFacade(): Promise<void> {
 	await reset();
 }
 
-/** The Facade log's lines since `since`: a mark's own reports of what it could not do among them. */
+/** The Facade Code Extension log's lines since `since`: a mark's own reports of what it could not do among them. */
 function facadeLog(since: number): string[] {
 	const dir = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
 	const files = fs.existsSync(dir) ? fs.readdirSync(dir).map(key => path.join(dir, key, 'agents.log')).filter(each => fs.existsSync(each)) : [];
@@ -1081,7 +1081,7 @@ function frontsNow(): { [column: string]: string } {
 }
 
 /**
- * How the person pins: `card`, from the card's menu - its run given, their focus at Facade's panel, as a click on the card leaves it;
+ * How the person pins: `card`, from the card's menu - its run given, their focus at Facade Code Extension's panel, as a click on the card leaves it;
  * `palette`, from the Command Palette or a key - no run given, the selected agent's, their focus where it was.
  */
 type Via = 'card' | 'palette';
@@ -1150,7 +1150,7 @@ function turnsOf(host: readonly HostEvent[], agents: readonly Card[]): { readonl
 
 /**
  * A key that reached what it was not typed into: an agent's CLI or a file other than the one the focus was in as it was typed. One
- * that reached nothing - as Facade holds the focus for a mark, or the focus moves - is a reload's loss, which the owner accepts.
+ * that reached nothing - as Facade Code Extension holds the focus for a mark, or the focus moves - is a reload's loss, which the owner accepts.
  */
 function misdirected(key: Placed, agents: readonly Card[]): boolean {
 	if (lostKey(key)) {
@@ -1297,7 +1297,7 @@ async function f2(variant: 'card' | 'palette' | 'same-card' | 'same-palette', ro
 }
 
 /**
- * F4: a shortcut of the person's as their Pin shows its agent's tab and marks it - Cmd+1, Cmd+3 or Ctrl+Tab - and whether Facade
+ * F4: a shortcut of the person's as their Pin shows its agent's tab and marks it - Cmd+1, Cmd+3 or Ctrl+Tab - and whether Facade Code Extension
  * overrides it; the Pin by the palette, the person in their file, or by the card, the person at the panel.
  */
 async function f4(variant: 'cmd1' | 'cmd3' | 'ctrltab', via: Via): Promise<CaseResult> {
@@ -1352,7 +1352,7 @@ async function f4(variant: 'cmd1' | 'cmd3' | 'ctrltab', via: Via): Promise<CaseR
 	const navigated = settled.d.where === 'code-editor' && settled.d.group === targetGroup && whereName(settled.d).includes(target);
 	const bad = got.placed.filter(key => key.to !== intent);
 	const borrow = borrowOf(got.focus, t0, whereName(person.d), t0);
-	// The agent's tab, which the Pin showed in front of its group: left there by Facade - but where the person's Ctrl+Tab brought back what
+	// The agent's tab, which the Pin showed in front of its group: left there by Facade Code Extension - but where the person's Ctrl+Tab brought back what
 	// was in front of it
 	const shownStays = variant === 'ctrltab' || isAgentLabel(frontsSettled.g2, agent);
 	// The person's shortcut came before the mark could go on where the Pin showed its tab: it waits for that tab's next showing
@@ -1367,7 +1367,7 @@ async function f4(variant: 'cmd1' | 'cmd3' | 'ctrltab', via: Via): Promise<CaseR
 	return {
 		id: `F4-${variant}${via === 'card' ? '-card' : ''}`, title: `${chord.replace('cmd', 'Cmd').replace('ctrl', 'Ctrl').replace('tab', 'Tab')} while a mark is under way (a ${via} Pin of an agent behind in group 2)`,
 		done: `the person at ${whereName(person.d)}; ${pinCall(via)} at 0 ms; the CDP-injected shortcut at ${fired ? `${fired.at - t0} ms (${fired.why})` : 'never'}; 3 keys typed 2.5 s after the mark`,
-		measured: `mark on at ${pinned === undefined ? 'never' : `${pinned - t0} ms`}; shortcut sent ${fired ? `${fired.at - t0}-${(fired.acked ?? fired.at) - t0} ms` : 'never'}; focus path: ${borrow.path.join(' → ') || 'unchanged'}; settled at ${whereName(settled.d)} (active group ${groupSettled}): the person's navigation ${navigated ? 'kept' : 'not kept'}; fronts ${JSON.stringify(frontsBefore)} → ${JSON.stringify(frontsSettled)}: group 2's front ${shownStays ? 'as the Pin and the person left it' : 'changed by Facade'}; the 3 keys: ${tally(got.placed)}${pinned === undefined ? `; the mark waited, the person's shortcut first, and went on ${markedLater === undefined ? 'never' : `${markedLater} ms`} after they showed its tab again` : ''}`,
+		measured: `mark on at ${pinned === undefined ? 'never' : `${pinned - t0} ms`}; shortcut sent ${fired ? `${fired.at - t0}-${(fired.acked ?? fired.at) - t0} ms` : 'never'}; focus path: ${borrow.path.join(' → ') || 'unchanged'}; settled at ${whereName(settled.d)} (active group ${groupSettled}): the person's navigation ${navigated ? 'kept' : 'not kept'}; fronts ${JSON.stringify(frontsBefore)} → ${JSON.stringify(frontsSettled)}: group 2's front ${shownStays ? 'as the Pin and the person left it' : 'changed by Facade Code Extension'}; the 3 keys: ${tally(got.placed)}${pinned === undefined ? `; the mark waited, the person's shortcut first, and went on ${markedLater === undefined ? 'never' : `${markedLater} ms`} after they showed its tab again` : ''}`,
 		verdict: navigated && !bad.length && shownStays && (pinned !== undefined || markedLater !== undefined) ? 'PASS' : 'FAILURE',
 		navigated, shownStays, markedLaterMs: markedLater ?? null, agent, via, intent, wanted: `editor g${targetGroup} ${target}`, shortcut: fired ? { atMs: fired.at - t0, ackMs: fired.acked === undefined ? null : fired.acked - t0, why: fired.why } : null,
 		pinnedMs: pinned === undefined ? null : pinned - t0, settled: whereName(settled.d), frontsBefore, frontsSettled, borrow, texts: got.texts,
@@ -1377,7 +1377,7 @@ async function f4(variant: 'cmd1' | 'cmd3' | 'ctrltab', via: Via): Promise<CaseR
 
 /**
  * F3 before its reload: six pinned agents in three groups; group 3 with its file in front, group 2 an agent, group 1 its file focused.
- * `settled`: each of those fronts arranged more than 4 s after Facade's last action - past the 3 s in which Facade takes a change of
+ * `settled`: each of those fronts arranged more than 4 s after Facade Code Extension's last action - past the 3 s in which Facade Code Extension takes a change of
  * the front for its own (agentTerminals.ts EXPECT_MS) - where `quick` arranges them at once, as the old probe did.
  */
 async function f3Setup(variant: 'quick' | 'settled'): Promise<void> {
@@ -1430,7 +1430,7 @@ async function f3After(activatedAt: number): Promise<CaseResult> {
 	const typist = new Typist();
 	const since = Date.now();
 	const stream = typist.stream(100);
-	const activeAt = await until('Facade active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
+	const activeAt = await until('Facade Code Extension active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
 	await until('the panel state', async () => (await state().catch(() => undefined))?.loading === false ? true : undefined, 90_000, 200).catch(() => undefined);
 	const back = await until('the six tabs back with their marks', () => setup.agents.every(agent => agentTab(agent)?.isPinned) ? Date.now() : undefined, 60_000, 25).catch(() => undefined);
 	await sleep(5_000);
@@ -1460,9 +1460,9 @@ async function f3After(activatedAt: number): Promise<CaseResult> {
 	for (const key of got.placed) { const second = Math.floor((key.sent - since) / 1_000); seconds.set(second, [...seconds.get(second) ?? [], key]); }
 	return {
 		id: setup.variant === 'settled' ? 'F3-settled' : 'F3',
-		title: `type during a reload that restores 6 pinned agents across 3 groups${setup.variant === 'settled' ? ', the fronts arranged more than 4 s after Facade\'s last action' : ''}`,
-		done: `before the reload: ${JSON.stringify(setup.fronts)}, focus ${setup.person}, arranged ${setup.pauseMs ? `${setup.pauseMs} ms apart, past Facade's 3 s` : 'at once after the marks'}; marks ${JSON.stringify(setup.marks)}; after it the driver typed a key every 100 ms from ${since - reloadedAt} ms after the reload request until 5 s after every mark was back`,
-		measured: `driver up ${activatedAt - reloadedAt} ms, typing from ${since - reloadedAt} ms (focus then ${whereName(person.d)}), Facade active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, all marks back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}); keys: ${tally(got.placed)} - lost ${lost.length} (accepted), misdirected ${bad.length}; each group's fronts in turn: ${Object.entries(sequence).map(([group, fronts]) => `${group} ${fronts.join(' → ')}`).join('; ') || 'none seen'}; fronts after: ${JSON.stringify(frontsAfter)}${frontsWrong.length ? ` (not as LIFECYCLE-3.5 leaves them: ${frontsWrong.join('; ')})` : ''}; active group ${activeGroup}; the selection ${selected ? 'on' : 'not on'} ${last.alias}; focus at the end ${whereName(end.d)}`,
+		title: `type during a reload that restores 6 pinned agents across 3 groups${setup.variant === 'settled' ? ', the fronts arranged more than 4 s after Facade Code Extension\'s last action' : ''}`,
+		done: `before the reload: ${JSON.stringify(setup.fronts)}, focus ${setup.person}, arranged ${setup.pauseMs ? `${setup.pauseMs} ms apart, past Facade Code Extension's 3 s` : 'at once after the marks'}; marks ${JSON.stringify(setup.marks)}; after it the driver typed a key every 100 ms from ${since - reloadedAt} ms after the reload request until 5 s after every mark was back`,
+		measured: `driver up ${activatedAt - reloadedAt} ms, typing from ${since - reloadedAt} ms (focus then ${whereName(person.d)}), Facade Code Extension active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, all marks back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}); keys: ${tally(got.placed)} - lost ${lost.length} (accepted), misdirected ${bad.length}; each group's fronts in turn: ${Object.entries(sequence).map(([group, fronts]) => `${group} ${fronts.join(' → ')}`).join('; ') || 'none seen'}; fronts after: ${JSON.stringify(frontsAfter)}${frontsWrong.length ? ` (not as LIFECYCLE-3.5 leaves them: ${frontsWrong.join('; ')})` : ''}; active group ${activeGroup}; the selection ${selected ? 'on' : 'not on'} ${last.alias}; focus at the end ${whereName(end.d)}`,
 		verdict: bad.length || frontsWrong.length || back === undefined || !inOrder || turns.unmarkedBefore.length || activeGroup !== last.group || !selected ? 'FAILURE' : 'PASS',
 		agents: setup.agents, intent, frontsBefore: setup.fronts, frontsAfter, frontsWrong, marks, order: turns.order, unmarkedBefore: turns.unmarkedBefore, activeGroup, selected,
 		lost: lost.length, misdirected: bad.length, sequence, focusEnd: whereName(end.d), readyMs: ready - reloadedAt, borrow, texts: got.texts,
@@ -1515,7 +1515,7 @@ async function f7After(activatedAt: number): Promise<CaseResult> {
 	const lines = said();
 	const setup = lines.filter(line => line.phase === 'f7-setup').pop() as Line & { variant: string; agents: Card[]; pinned: string[]; lastActive: string[]; fronts: { [column: string]: string }; person: string; marks: string[] };
 	const reloadedAt = lines.filter(line => line.phase === 'reloading').pop()!.at!;
-	const activeAt = await until('Facade active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
+	const activeAt = await until('Facade Code Extension active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
 	await until('the panel state', async () => (await state().catch(() => undefined))?.loading === false ? true : undefined, 90_000, 200).catch(() => undefined);
 	const pinnedCards = setup.pinned.map(alias => setup.agents.find(agent => agent.alias === alias)!);
 	const back = await until('the pinned tabs back and marked', () => pinnedCards.every(agent => agentTab(agent)?.isPinned) ? Date.now() : undefined, 60_000, 25).catch(() => undefined);
@@ -1541,7 +1541,7 @@ async function f7After(activatedAt: number): Promise<CaseResult> {
 		id: setup.variant === 'pinned-front' ? 'F7-pinned-front' : 'F7',
 		title: `a reload of six agents in one group, two of them pinned${setup.variant === 'pinned-front' ? ' and the group\'s front pinned too' : ''}: the pinned ones' tabs alone, the order they come to the front in`,
 		done: `before the reload: fronts ${JSON.stringify(setup.fronts)}, last active in the order ${setup.lastActive.join(', ')}, pinned ${setup.pinned.join(', ')}; marks ${JSON.stringify(setup.marks)}; no file of the person's`,
-		measured: `driver up ${activatedAt - reloadedAt} ms, Facade active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, the pinned tabs back and marked ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'as' : 'not as'} LIFECYCLE-3.5's ${expected.join(' → ')}${once ? '' : '; one more than once'}${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}); group 1's fronts in turn: ${sequence.join(' → ') || 'none seen'}; front after ${frontsAfter.g1}; marks ${JSON.stringify(marks)}; the selection ${selected ? 'on' : 'not on'} ${last.alias}; focus at the end ${whereName(end.d)}`,
+		measured: `driver up ${activatedAt - reloadedAt} ms, Facade Code Extension active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, the pinned tabs back and marked ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'as' : 'not as'} LIFECYCLE-3.5's ${expected.join(' → ')}${once ? '' : '; one more than once'}${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}); group 1's fronts in turn: ${sequence.join(' → ') || 'none seen'}; front after ${frontsAfter.g1}; marks ${JSON.stringify(marks)}; the selection ${selected ? 'on' : 'not on'} ${last.alias}; focus at the end ${whereName(end.d)}`,
 		verdict: inOrder && once && !turns.unmarkedBefore.length && lastFront && marksRight && selected ? 'PASS' : 'FAILURE',
 		agents: setup.agents, pinned: setup.pinned, lastActive: setup.lastActive, expected, order: turns.order, unmarkedBefore: turns.unmarkedBefore, sequence, once, inOrder,
 		frontsBefore: setup.fronts, frontsAfter, marks, marksRight, lastFront, selected, focusEnd: whereName(end.d), host: hostRows(host, reloadedAt), log: facadeLog(reloadedAt)
@@ -1620,7 +1620,7 @@ async function f8After(activatedAt: number): Promise<CaseResult> {
 		void press('cmd+3');
 		setTimeout(() => void press('cmd+2'), 40);
 	});
-	const activeAt = await until('Facade active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
+	const activeAt = await until('Facade Code Extension active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
 	await until('the panel state', async () => (await state().catch(() => undefined))?.loading === false ? true : undefined, 90_000, 200).catch(() => undefined);
 	const back = await until('every pinned tab back and marked', () => setup.agents.every(agent => agentTab(agent)?.isPinned) ? Date.now() : undefined, 60_000, 25).catch(() => undefined);
 	await sleep(4_000);
@@ -1656,7 +1656,7 @@ async function f8After(activatedAt: number): Promise<CaseResult> {
 		id: setup.variant === 'agent' ? 'F8-agent' : 'F8',
 		title: `the person goes to group 3, then to group 2, as a reload's pinned tabs open in group 1${setup.variant === 'agent' ? ', group 2\'s pinned agent opened first' : ''}: the later tabs still open in turn, nothing given back, the last in front of the active group`,
 		done: `before the reload: fronts ${JSON.stringify(setup.fronts)}, group 1's pinned agents ${setup.groupOne.join(', ')}${setup.theirs ? `, group 2's pinned agent ${setup.theirs} behind its file, pinned first` : ''}; after it, as group 1's first tab opened, ${chords.map(each => `${each.chord} at ${each.at - reloadedAt} ms`).join(', ') || 'no move'}; then 3 keys typed`,
-		measured: `driver up ${activatedAt - reloadedAt} ms, Facade active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, every pinned tab back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}); the person's last move took at ${movedAt === undefined ? 'never' : `${movedAt - reloadedAt} ms`}; group 1's tabs after it: ${later.join(', ') || 'none'}; active group at the end ${activeGroup}; fronts ${JSON.stringify(frontsAfter)}; the selection ${selected ? 'on' : 'not on'} ${lastPinned.alias}; focus ${whereName(end.d)}; the next keys: ${tally(got.placed)}`,
+		measured: `driver up ${activatedAt - reloadedAt} ms, Facade Code Extension active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, every pinned tab back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}); the person's last move took at ${movedAt === undefined ? 'never' : `${movedAt - reloadedAt} ms`}; group 1's tabs after it: ${later.join(', ') || 'none'}; active group at the end ${activeGroup}; fronts ${JSON.stringify(frontsAfter)}; the selection ${selected ? 'on' : 'not on'} ${lastPinned.alias}; focus ${whereName(end.d)}; the next keys: ${tally(got.placed)}`,
 		verdict: chords.length < 2 || !later.length ? 'BLOCKED' : ok ? 'PASS' : 'FAILURE',
 		agents: setup.agents, chords: chords.map(each => ({ chord: each.chord, atMs: each.at - reloadedAt, ackMs: each.acked === undefined ? null : each.acked - reloadedAt })), later, activeGroup,
 		order: turns.order, unmarkedBefore: turns.unmarkedBefore, frontsBefore: setup.fronts, frontsAfter, lastFront, othersLeft, keysRight, marked, selected, focusEnd: whereName(end.d), texts: got.texts,
@@ -1714,7 +1714,7 @@ async function f9After(activatedAt: number): Promise<CaseResult> {
 		started = true;
 		void vscode.window.showTextDocument(file('f9-x.txt'), { viewColumn: 2, preview: false }).then(() => { opened = Date.now(); }, err => notes.push(`f9-x.txt did not open: ${messageOf(err)}`));
 	});
-	const activeAt = await until('Facade active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
+	const activeAt = await until('Facade Code Extension active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
 	await until('the panel state', async () => (await state().catch(() => undefined))?.loading === false ? true : undefined, 90_000, 200).catch(() => undefined);
 	const back = await until('both tabs back and marked', () => setup.agents.every(agent => agentTab(agent)?.isPinned) ? Date.now() : undefined, 60_000, 25).catch(() => undefined);
 	await sleep(4_000);
@@ -1741,7 +1741,7 @@ async function f9After(activatedAt: number): Promise<CaseResult> {
 	return {
 		id: 'F9', title: 'the person opens a file in group 2 as a reload\'s first pinned tab opens in group 1, group 2\'s pinned agent then opening over it: nothing given back, the next keys reach that agent\'s CLI or nothing',
 		done: `before the reload: fronts ${JSON.stringify(setup.fronts)}, marks ${JSON.stringify(setup.marks)}; after it, as ${one.alias}'s tab opened in group 1, f9-x.txt opened in group 2 with the focus${opened === undefined ? ' - never' : ` at ${opened - reloadedAt} ms`}; then 3 keys typed`,
-		measured: `driver up ${activatedAt - reloadedAt} ms, Facade active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, both tabs back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order); group 2's agent opening after their file: ${over.join(', ') || 'none'}; active group at the end ${activeGroup}; fronts ${JSON.stringify(frontsAfter)}; the selection ${selected ? 'on' : 'not on'} ${two.alias}; focus ${whereName(end.d)}; the next keys: ${tally(got.placed)} - misdirected ${misdirectedKeys.length}`,
+		measured: `driver up ${activatedAt - reloadedAt} ms, Facade Code Extension active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, both tabs back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; tabs opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order); group 2's agent opening after their file: ${over.join(', ') || 'none'}; active group at the end ${activeGroup}; fronts ${JSON.stringify(frontsAfter)}; the selection ${selected ? 'on' : 'not on'} ${two.alias}; focus ${whereName(end.d)}; the next keys: ${tally(got.placed)} - misdirected ${misdirectedKeys.length}`,
 		verdict: opened === undefined || !over.length ? 'BLOCKED' : ok ? 'PASS' : 'FAILURE',
 		agents: setup.agents, over, activeGroup, order: turns.order, unmarkedBefore: turns.unmarkedBefore, frontsBefore: setup.fronts, frontsAfter, selected, misdirected: misdirectedKeys.length, focusEnd: whereName(end.d), texts: got.texts,
 		keys: keyRows(got.placed, since, key => key.to === intent || lostKey(key)), focus: focusRows(got.focus, reloadedAt), host: hostRows(hostEvents.filter(each => each.t >= reloadedAt), reloadedAt), log: facadeLog(reloadedAt)
@@ -1816,7 +1816,7 @@ async function f6(kind: 'webview' | 'settings'): Promise<CaseResult> {
 
 /**
  * A floating editor window made of `agent`'s tab, in front of group 1, moved into it (moveEditorToNewWindow) as a person moves a tab
- * out - Facade opens an agent's tab in the main window's active group, never in a floating one - and `name` opened over it there.
+ * out - Facade Code Extension opens an agent's tab in the main window's active group, never in a floating one - and `name` opened over it there.
  */
 async function floatingGroup(agent: Card, name: string): Promise<vscode.TabGroup> {
 	await cmd('facade.revealAgent', { run_id: agent.runId });
@@ -1824,7 +1824,7 @@ async function floatingGroup(agent: Card, name: string): Promise<vscode.TabGroup
 	await cmd('workbench.action.moveEditorToNewWindow');
 	const group = await until(`${agent.alias}'s tab in a floating window`, () => { const tab = agentTab(agent); return tab && tab.group.viewColumn !== 1 ? tab.group : undefined; }, 8_000);
 	await sleep(800);
-	// Active there with its terminal once: Facade knows a moved tab again so (LIFECYCLE-2.2)
+	// Active there with its terminal once: Facade Code Extension knows a moved tab again so (LIFECYCLE-2.2)
 	await cmd('facade.revealAgent', { run_id: agent.runId });
 	await sleep(1_000);
 	revealedIn = { activeTabGroup: vscode.window.tabGroups.activeTabGroup.viewColumn, activeTab: brief(vscode.window.tabGroups.activeTabGroup.activeTab), activeTerminal: vscode.window.activeTerminal ? unspun(vscode.window.activeTerminal.name) : null, agentTabActive: !!agentTab(agent)?.isActive };
@@ -1957,7 +1957,7 @@ async function f5ReloadAfter(activatedAt: number): Promise<CaseResult> {
 	const typist = new Typist();
 	const since = Date.now();
 	const stream = typist.stream(100);
-	const activeAt = await until('Facade active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
+	const activeAt = await until('Facade Code Extension active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
 	await until('the panel state', async () => (await state().catch(() => undefined))?.loading === false ? true : undefined, 90_000, 200).catch(() => undefined);
 	const back = await until('both tabs back', () => setup.agents.every(agent => agentTab(agent)) ? Date.now() : undefined, 45_000, 25).catch(() => undefined);
 	await until('both marks', () => setup.agents.every(agent => agentTab(agent)?.isPinned) || undefined, 10_000, 25).catch(() => undefined);
@@ -1990,7 +1990,7 @@ async function f5ReloadAfter(activatedAt: number): Promise<CaseResult> {
 	return {
 		id: 'F5-reload', title: 'a reload with a floating editor window: a pinned agent behind its file there, another behind the person\'s file in group 1',
 		done: `before the reload: fronts ${JSON.stringify(setup.fronts)}, marks ${JSON.stringify(setup.marks)}, pages ${JSON.stringify(setup.pages)}, focus ${setup.person}; after it a key every 100 ms from ${since - reloadedAt} ms`,
-		measured: `driver up ${activatedAt - reloadedAt} ms, typing from ${since - reloadedAt} ms after the reload request; pages after ${JSON.stringify(pages)}; floating window's file ${floatGroup ? `in group ${floatGroup.viewColumn}, its front ${floatFront}` : 'not open'}; tabs back ${back === undefined ? 'not all' : `${back - reloadedAt} ms`} after the reload request, opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}), marks ${JSON.stringify(marks)}${moved.length ? ` (not where LIFECYCLE-3.5 puts them: ${moved.join('; ')})` : ' (the floating window\'s back in the main window, as LIFECYCLE-3.5 puts it)'}; fronts ${JSON.stringify(setup.fronts)} → ${JSON.stringify(frontsAfter)}; active group ${activeGroup}; the selection ${selected ? 'on' : 'not on'} ${main.alias}; Facade active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}; focus away from the person ${borrow.ms === undefined ? (borrow.leftMs === undefined ? 'never' : `from ${borrow.leftMs} ms, not back`) : `${borrow.ms} ms (${borrow.leftMs} → ${borrow.backMs} ms)`}; keys: ${tally(got.placed)} - lost ${lost.length} (accepted), misdirected ${bad.length}; focus at the end ${whereName(end.d)}`,
+		measured: `driver up ${activatedAt - reloadedAt} ms, typing from ${since - reloadedAt} ms after the reload request; pages after ${JSON.stringify(pages)}; floating window's file ${floatGroup ? `in group ${floatGroup.viewColumn}, its front ${floatFront}` : 'not open'}; tabs back ${back === undefined ? 'not all' : `${back - reloadedAt} ms`} after the reload request, opened ${turns.order.join(' → ') || 'none'} (${inOrder ? 'in' : 'not in'} the Pins' order${turns.unmarkedBefore.length ? `; ${turns.unmarkedBefore.join(', ')} before the one before was marked` : ''}), marks ${JSON.stringify(marks)}${moved.length ? ` (not where LIFECYCLE-3.5 puts them: ${moved.join('; ')})` : ' (the floating window\'s back in the main window, as LIFECYCLE-3.5 puts it)'}; fronts ${JSON.stringify(setup.fronts)} → ${JSON.stringify(frontsAfter)}; active group ${activeGroup}; the selection ${selected ? 'on' : 'not on'} ${main.alias}; Facade Code Extension active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}; focus away from the person ${borrow.ms === undefined ? (borrow.leftMs === undefined ? 'never' : `from ${borrow.leftMs} ms, not back`) : `${borrow.ms} ms (${borrow.leftMs} → ${borrow.backMs} ms)`}; keys: ${tally(got.placed)} - lost ${lost.length} (accepted), misdirected ${bad.length}; focus at the end ${whereName(end.d)}`,
 		verdict: ok ? 'PASS' : 'FAILURE',
 		agents: setup.agents, intent, order: turns.order, unmarkedBefore: turns.unmarkedBefore, activeGroup, selected, frontsBefore: setup.fronts, frontsAfter, marks, moved, lost: lost.length, misdirected: bad.length, pagesBefore: setup.pages, pagesAfter: pages, readyMs: ready - reloadedAt, borrow, texts: got.texts, focusEnd: whereName(end.d),
 		keys: keyRows(got.placed, reloadedAt, key => !misdirected(key, setup.agents)), focus: focusRows(got.focus, reloadedAt), host: hostRows(got.host, reloadedAt), foreign: got.foreign, log: facadeLog(reloadedAt)

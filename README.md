@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="extension/media/icon.png" alt="Facade Code" width="112">
+<img src="extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**The multi-agent orchestrator for VS Code.**
+**Run coding agents together in VS Code.**
 
 Run native agent CLIs, edit code, and review changes in the same IDE window. Use your own accounts and coding plans, and let agents collaborate across windows and machines.
 
@@ -35,9 +35,9 @@ Run native agent CLIs, edit code, and review changes in the same IDE window. Use
 code --install-extension facade.facadecode
 ```
 
-Or install **Facade Code** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). It runs on macOS (Apple silicon), Linux (x64), and Windows (x64).
+Or install **Facade Code Extension** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). It runs on macOS (Apple silicon), Linux (x64), and Windows (x64).
 
-Next, install and sign in to any supported agent CLIs you plan to use: Claude Code, Codex, Antigravity, Muse Code, OpenCode, or Pi. Facade Code starts each CLI using its own sign-in and account plans.
+Next, install and sign in to any supported agent CLIs you plan to use: Claude Code, Codex, Antigravity, Muse Code, OpenCode, or Pi. Facade Code Extension starts each CLI using its own sign-in and account plans.
 
 > **Agents run without approval prompts by default.** With `yolo` enabled by default, agents can run commands and change files without asking first. Turn it off to restore each CLI's standard approval prompts. See the [extension README](extension/README.md#install).
 
@@ -45,7 +45,7 @@ Next, install and sign in to any supported agent CLIs you plan to use: Claude Co
 
 **Your agents and your IDE, in the same window.**
 
-Facade Code runs native agent CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi) in editor terminal tabs beside your files, using each CLI's own commands, tools, accounts, and coding plans. A card in the panel tracks each agent's status.
+Facade Code Extension runs native agent CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi) in editor terminal tabs beside your files, using each CLI's own commands, tools, accounts, and coding plans. A card in the panel tracks each agent's status.
 
 - **Work beside your code.** Each agent runs in its own terminal tab in the editor area. Closing a tab hides it while the agent keeps running; clicking its card opens it again.
 - **Track status across agents.** Cards show what was last sent to each agent and whether it is working, needs permission, or encountered an error, with details showing its title, folder, and who started it. Agents keep running through window reloads and extension restarts.
@@ -57,19 +57,19 @@ Facade Code runs native agent CLIs (Claude Code, Codex, Antigravity, Muse Code, 
 
 Through MCP and a terminal protocol, agents can start, stop, find, and message other agents, read their terminal screens, type text, and press keys.
 
-- **Start and stop agents.** An agent can start other agents with any of the six CLIs, in any folder or new worktree of your Facade windows on this computer, and give them their first task. A retried request with the same request ID never starts a second agent.
-- **Send messages.** Agents exchange messages with each other and can message you. Facade pastes the whole message once and sends it. If unsent text or a prompt question is in the way, delivery waits until the input is clear.
+- **Start and stop agents.** An agent can start other agents with any of the six CLIs, in any folder or new worktree of your Facade Code Extension windows on this computer, and give them their first task. A retried request with the same request ID never starts a second agent.
+- **Send messages.** Agents exchange messages with each other and can message you. Facade Code Extension pastes the whole message once and sends it. If unsent text or a prompt question is in the way, delivery waits until the input is clear.
 - **Terminal control.** An agent can read another agent's screen, type commands, and press keys to answer prompts or help a stuck peer. When a child agent waits 20 seconds for permission, an answer, or sign-in, the agent that started it is notified.
 
 ## Agent Mesh
 
 **Connect agents across windows, machines, and locations.**
 
-Facade Code connects agents across your Facade windows on this computer into one network. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
+Facade Code Extension connects agents across your Facade Code Extension windows on this computer into one network. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
 
-- **Across windows.** With `yolo` on, an agent reaches every agent across your Facade windows on this computer, local and Remote - SSH alike. With it off, an agent reaches only its own group: the agent you started and those started from it.
+- **Across windows.** With `yolo` on, an agent reaches every agent across your Facade Code Extension windows on this computer, local and Remote - SSH alike. With it off, an agent reaches only its own group: the agent you started and those started from it.
 - **Extend over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with the tools, files, and accounts there. Local agents can start and message agents in Remote - SSH windows directly.
-- **Coordinate from your phone.** Connect the Claude mobile app to a Claude Code session on your computer using [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). That session can coordinate other agents through Facade and report progress back to your phone.
+- **Coordinate from your phone.** Connect the Claude mobile app to a Claude Code session on your computer using [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). That session can coordinate other agents through Facade Code Extension and report progress back to your phone.
 
 <sub>Remote Control requires a supported Claude Code version, an eligible plan, and full-scope sign-in. See its [setup requirements](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
@@ -97,6 +97,6 @@ For contribution guidelines and branch discipline, see [`CONTRIBUTING.md`](CONTR
 
 ## License
 
-MIT, matching upstream VS Code. See [`LICENSE.txt`](LICENSE.txt) for Microsoft's copyright notice and Facade Code contributors' notices.
+MIT, matching upstream VS Code. See [`LICENSE.txt`](LICENSE.txt) for Microsoft's copyright notice and Facade Code Extension contributors' notices.
 
-<sub>Facade Code is an independent product and is not affiliated with, endorsed by, or sponsored by the providers of the third-party tools shown. All third-party trademarks and logos belong to their respective owners.</sub>
+<sub>Facade Code Extension is an independent product and is not affiliated with, endorsed by, or sponsored by the providers of the third-party tools shown. All third-party trademarks and logos belong to their respective owners.</sub>

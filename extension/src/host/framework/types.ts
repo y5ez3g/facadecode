@@ -25,8 +25,8 @@ export interface AttachListener extends Omit<WatchListener<DaemonTopics['attach'
 	snapshot(screen: DaemonTopics['attach']['snapshot'], resize: ResizeAttach): void;
 }
 
-export interface OrchestratorLink extends Disposable {
-	/** The last verified Orchestrator's full machine ID. */
+export interface FrameworkLink extends Disposable {
+	/** The last verified Facade Code Framework's full machine ID. */
 	readonly machineId: string;
 	readonly connected: boolean;
 	/** Fires after installing a connection and before asking for watch snapshots. */

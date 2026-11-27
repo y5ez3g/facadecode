@@ -9,7 +9,7 @@ import type { AgentRef, DaemonTopics } from '../../base/frameworkProtocol';
 import type { Disposable, PairFacts, RunId } from '../../core/ports';
 import type { ScreenBinding } from '../terminal/agentPty';
 import { AgentTerminals, type AgentTerminal } from '../terminal/agentTerminals';
-import { encodeTerminalInput, type OrchestratorLink, type ResizeAttach } from './types';
+import { encodeTerminalInput, type FrameworkLink, type ResizeAttach } from './types';
 
 type TerminalOptions = ConstructorParameters<typeof AgentTerminals>[0];
 type Options = Pick<TerminalOptions, 'media' | 'icon' | 'log' | 'colours' | 'terminalOwner'> & { readonly viewer: string };
@@ -48,14 +48,14 @@ interface View {
 }
 
 /** One editor's Attach views. Each native tab holds its own watch (RULES-6.3, LIFECYCLE-5.3). */
-export class OrchestratorTerminals implements vscode.Disposable {
+export class FrameworkTerminals implements vscode.Disposable {
 	private readonly terminals: AgentTerminals;
 	private readonly pairs = new Map<RunId, Pair>();
 	private readonly activations = new vscode.EventEmitter<RunId | undefined>();
 	readonly onDidActivate = this.activations.event;
 	private readonly colourChanges?: Disposable;
 
-	constructor(private readonly link: OrchestratorLink, private readonly options: Options) {
+	constructor(private readonly link: FrameworkLink, private readonly options: Options) {
 		this.terminals = new AgentTerminals({
 			...options,
 			activated: run => this.activations.fire(run),

@@ -1,6 +1,6 @@
-# Facade Code에 기여하기
+# Facade Code Extension Code에 기여하기
 
-도와주셔서 고맙습니다. Facade Code는 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode)에서 공개적으로 개발됩니다.
+도와주셔서 고맙습니다. Facade Code Extension Code는 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode)에서 공개적으로 개발됩니다.
 
 ## 버그와 아이디어
 
@@ -18,7 +18,7 @@
 
 - `main`에서 `feature/<number>-<name>` 이름으로 브랜치를 만듭니다.
 - rebase하지 않고 항상 merge합니다. 기능은 리뷰를 거쳐 `--no-ff`로 `main`에 들어갑니다.
-- Facade Code의 파일은 한곳에 모으고, VS Code의 파일에는 로직을 다시 쓰는 대신 선택적인 훅을 추가합니다. 그래야 새 VS Code를 병합하는 비용이 낮게 유지됩니다.
+- Facade Code Extension Code의 파일은 한곳에 모으고, VS Code의 파일에는 로직을 다시 쓰는 대신 선택적인 훅을 추가합니다. 그래야 새 VS Code를 병합하는 비용이 낮게 유지됩니다.
 - 모든 기능에는 스위치가 있고, 끄면 순정 VS Code입니다.
 - 모든 변경에는 테스트를 포함합니다.
 - 문서, 주석, 커밋 메시지는 모두 영어로 씁니다.

@@ -80,12 +80,12 @@ fn words(line: &[&str]) -> Vec<String> {
     line.iter().map(|word| word.to_string()).collect()
 }
 
-/// Starts `cli` with Facade's server, in an environment holding `environment`.
+/// Starts `cli` with Facade Code Framework's server, in an environment holding `environment`.
 fn launch(cli: &str, given: &[&str], environment: &[(&str, &str)]) -> CommandLine {
     launch_in(Path::new("/nowhere/project"), cli, given, environment)
 }
 
-/// Starts `cli` in `cwd` with Facade's server, in an environment holding `environment`.
+/// Starts `cli` in `cwd` with Facade Code Framework's server, in an environment holding `environment`.
 fn launch_in(cwd: &Path, cli: &str, given: &[&str], environment: &[(&str, &str)]) -> CommandLine {
     let env = run_variables();
     let folder = PathBuf::from("/home/.facade/framework/runs/a3/1f");
@@ -116,13 +116,13 @@ fn test_server<'a>(cwd: &'a Path, folder: &'a Path, env: &'a [(String, String)])
         program: "/opt/facade-mcp",
         env,
         folder,
-        instructions: "You are Facade agent #a3.",
+        instructions: "You are Facade Code Framework agent #a3.",
         cwd,
         facade: "/opt/facade",
     }
 }
 
-/// The variables of the run, which Facade sets in its CLI's environment besides what the launch
+/// The variables of the run, which Facade Code Framework sets in its CLI's environment besides what the launch
 /// adds.
 fn run_variables() -> [(String, String); 2] {
     [
@@ -294,10 +294,10 @@ fn opencode_gets_the_server_in_the_person_s_own_inline_configuration_after_their
     assert_eq!(
         serde_json::to_string(&own["permission"]).unwrap(),
         r#"{"*":"ask","facade_*":"allow"}"#,
-        "Facade's rule comes after the person's own"
+        "Facade Code Framework's rule comes after the person's own"
     );
     assert!(own["mcp"]["mine"].is_object() && own["mcp"]["facade"].is_object());
-    // A permission given as one string is one rule for every tool, and Facade's goes after it,
+    // A permission given as one string is one rule for every tool, and Facade Code Framework's goes after it,
     // as after any rule of the person's, a `facade_*` of theirs too.
     let one = launch(
         "opencode",
@@ -352,7 +352,10 @@ fn opencode_gets_the_server_in_the_person_s_own_inline_configuration_after_their
     let unreadable = launch("opencode", &[], &[("OPENCODE_CONFIG_CONTENT", "{not json")]);
     assert_eq!(
         unreadable.tools,
-        Tools::NotGiven("its OPENCODE_CONFIG_CONTENT is not a JSON object Facade can read".into())
+        Tools::NotGiven(
+            "its OPENCODE_CONFIG_CONTENT is not a JSON object Facade Code Framework can read"
+                .into()
+        )
     );
     assert!(
         !unreadable
@@ -397,13 +400,13 @@ fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instruction
     );
     assert!(
         text.contains(
-            r#"event.systemPromptOptions.sections.facade = "You are Facade agent #a3.";"#
+            r#"event.systemPromptOptions.sections.facade = "You are Facade Code Framework agent #a3.";"#
         ),
         "{text}"
     );
 }
 
-/// OpenCode keeps the person's instructions and removes Facade's old run skill from inherited
+/// OpenCode keeps the person's instructions and removes Facade Code Framework's old run skill from inherited
 /// configuration.
 #[test]
 fn opencode_keeps_the_person_s_instructions_and_unwires_the_old_skill() {
@@ -466,7 +469,7 @@ fn codex_s_session_hook_only_reports_the_session() {
 }
 
 /// What a launch added to its CLI's environment comes out again, and what the person set stays:
-/// the rule's defaults where they still hold, the hook's and the tools' variables, and Facade's
+/// the rule's defaults where they still hold, the hook's and the tools' variables, and Facade Code Framework's
 /// server in the person's own OpenCode configuration.
 #[test]
 fn what_a_launch_added_to_the_environment_comes_out_again() {
@@ -576,7 +579,7 @@ fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment(
     assert_eq!(
         config(&muse, "hooks"),
         json!({ "SessionStart": [ours, session], "PermissionRequest": [approves] }),
-        "Facade's tools approved where Muse Code would ask, and the run's session reported"
+        "Facade Code Framework's tools approved where Muse Code would ask, and the run's session reported"
     );
     assert_eq!(
         muse.command[muse.command.len() - 2..],
@@ -585,7 +588,7 @@ fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment(
     );
     let given = [(
         INSTRUCTIONS_FILE.to_string(),
-        "You are Facade agent #a3.".to_string(),
+        "You are Facade Code Framework agent #a3.".to_string(),
     )];
     assert_eq!(
         muse.files, given,
@@ -596,7 +599,7 @@ fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment(
         "nothing else, written nowhere"
     );
 
-    // The person's own hooks stay, before Facade's: those of their settings file, comments and
+    // The person's own hooks stay, before Facade Code Framework's: those of their settings file, comments and
     // all, or else those they pass.
     let home = scratch("musehooks");
     let theirs = json!({ "hooks": [{ "type": "command", "command": "mine" }] });
@@ -642,8 +645,8 @@ fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment(
         passed.command
     );
     assert_eq!(passed.command.last().unwrap(), "go");
-    // Hooks Facade cannot read stay as they are, for Muse Code to say what is wrong: the run
-    // then has no hook of Facade's.
+    // Hooks Facade Code Framework cannot read stay as they are, for Muse Code to say what is wrong: the run
+    // then has no hook of Facade Code Framework's.
     let twice = launch("muse", &["-c", "hooks={}", "-c", "hooks={}"], &environment);
     assert_eq!(
         twice
@@ -665,9 +668,9 @@ fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment(
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// Where the person's settings hold Facade's guest entry, beside which Muse Code would refuse a
+/// Where the person's settings hold Facade Code Framework's guest entry, beside which Muse Code would refuse a
 /// run's own server, that entry serves the run: the run adds no server, and carries none of
-/// Facade's guest hooks, which Muse Code would run with none of the run's variables.
+/// Facade Code Framework's guest hooks, which Muse Code would run with none of the run's variables.
 #[test]
 fn muse_code_s_run_is_served_by_facade_s_guest_entry_where_the_settings_hold_it() {
     assert!(guest_entry_serves_run("muse"));
@@ -724,7 +727,7 @@ fn muse_code_s_run_is_served_by_facade_s_guest_entry_where_the_settings_hold_it(
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// Muse Code refuses to run with Facade's server beside a `facade` server of the person's
+/// Muse Code refuses to run with Facade Code Framework's server beside a `facade` server of the person's
 /// settings or of a project MCP file it reads - in each folder up to the top of the run's
 /// repository - and beside a project MCP file it cannot load. Such a run is not given the
 /// tools, and no file is changed.
@@ -797,7 +800,7 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             text,
-            "Facade changes nothing"
+            "Facade Code Framework changes nothing"
         );
         std::fs::remove_file(&file).unwrap();
     }
@@ -821,10 +824,10 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
 }
 
 /// A conflicting `facade` server of the person's own, in any configuration the CLI reads, leaves
-/// the run without Facade's tools, says why, and stays as it is. Antigravity names a plugin's
-/// server after the plugin, so Facade's is `facade_facade`, and its run is given the tools beside a
+/// the run without Facade Code Framework's tools, says why, and stays as it is. Antigravity names a plugin's
+/// server after the plugin, so Facade Code Framework's is `facade_facade`, and its run is given the tools beside a
 /// `facade` server. A `facade` server that runs `facade-mcp`, and Pi's guest extension, are
-/// Facade's own and allow the run to receive its tools.
+/// Facade Code Framework's own and allow the run to receive its tools.
 #[test]
 fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts() {
     let root = scratch("ownserver");
@@ -839,7 +842,7 @@ fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts()
             Tools::NotGiven(why) => assert!(
                 why.replace('\\', "/")
                     .contains(&expected.replace('\\', "/"))
-                    && why.ends_with("the run has no Facade tools"),
+                    && why.ends_with("the run has no Facade Code Framework tools"),
                 "{cli}: {why}"
             ),
             other => panic!("{cli} given the tools beside {expected}: {other:?}"),
@@ -869,7 +872,7 @@ fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts()
         )
     };
     let mine = r#"{ "command": "mine", "args": [] }"#;
-    // A `facade` server that runs facade-mcp is Facade's.
+    // A `facade` server that runs facade-mcp is Facade Code Framework's.
     let facade_mcp = r#"{ "command": "/usr/local/bin/facade-mcp", "args": [] }"#;
     let servers = |key: &str, entry: &str| format!("{{ \"{key}\": {{ \"facade\": {entry} }} }}");
 
@@ -890,7 +893,7 @@ fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts()
         assert_eq!(
             std::fs::read_to_string(&claude).unwrap(),
             text,
-            "Facade changes nothing"
+            "Facade Code Framework changes nothing"
         );
     }
     write(claude.clone(), &servers("mcpServers", facade_mcp));
@@ -986,8 +989,8 @@ fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts()
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// The guest extension `facade integration add pi` writes, as it writes it, registers Facade's
-/// server only where Facade did not start Pi: a run beside it is given the tools.
+/// The guest extension `facade integration add pi` writes, as it writes it, registers Facade Code Framework's
+/// server only where Facade Code Framework did not start Pi: a run beside it is given the tools.
 #[test]
 fn a_pi_run_beside_the_guest_extension_is_given_the_tools() {
     let root = scratch("piguest");
@@ -1096,7 +1099,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
         agy.files[0],
         (
             INSTRUCTIONS_FILE.to_string(),
-            "You are Facade agent #a3.".to_string()
+            "You are Facade Code Framework agent #a3.".to_string()
         ),
         "the run's instructions, which the hook gives"
     );
@@ -1157,7 +1160,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
         passed.command
     );
     assert_eq!(passed.command.last().unwrap(), "go");
-    // Settings Facade cannot read stay as they are, without Facade's rule.
+    // Settings Facade Code Framework cannot read stay as they are, without Facade Code Framework's rule.
     let unread = launch_in(&cwd, "agy", &["--settings", "missing.json"], &environment);
     assert_eq!(
         unread.command[unread.command.len() - 2..],
@@ -1247,7 +1250,7 @@ fn antigravity_s_settings_reach_it_in_a_file_of_the_run_s_never_on_its_command_l
 }
 
 /// The merges read the person's words as their CLI reads them (CLIS-3.1): Antigravity's
-/// `-settings` and `-settings=` are its `--settings`, merged into the one Facade passes; Muse
+/// `-settings` and `-settings=` are its `--settings`, merged into the one Facade Code Framework passes; Muse
 /// Code's `-chooks=` is its `-c hooks=`; Claude Code's; and a `--settings` that is another
 /// option's value is that option's, and stays.
 #[test]
@@ -1326,7 +1329,7 @@ fn the_merges_read_the_person_s_words_as_their_cli_reads_them() {
 
 /// Antigravity reports its conversation through the title command of its `--settings`, whose
 /// input names the conversation it shows. The person's own title settings stay, and their own
-/// title command, where it is on, runs after Facade's with the same input: from their
+/// title command, where it is on, runs after Facade Code Framework's with the same input: from their
 /// `--settings`, or else their settings file.
 #[test]
 fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_person_s_own() {
@@ -1394,7 +1397,7 @@ fn copilot_is_given_the_tools_beside_a_selected_plugin_that_is_not_on_the_machin
     assert_eq!(launch.tools, Tools::Injected, "{:?}", launch.tools);
 }
 
-/// Devin loads a folder's `.mcp.json` and `.cursor/mcp.json` ahead of the configuration Facade
+/// Devin loads a folder's `.mcp.json` and `.cursor/mcp.json` ahead of the configuration Facade Code Framework
 /// gives it, so a facade server in either keeps the run's server from serving it.
 #[test]
 fn devin_is_not_given_the_tools_beside_a_facade_server_in_another_tool_s_project_file() {

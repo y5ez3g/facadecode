@@ -1,4 +1,4 @@
-//! A headless terminal: the screen Facade keeps for each agent.
+//! A headless terminal: the screen Facade Code Framework keeps for each agent.
 //!
 //! Everything the CLI writes goes through [`Screen::feed`]. The screen answers the terminal
 //! queries it can, passes the rest of the output on for viewers with every query taken out, and

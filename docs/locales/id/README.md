@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
+<img src="../../../extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**Orkestrator multi-agen untuk VS Code.**
+**Jalankan agen pengodean bersama di VS Code.**
 
 Jalankan CLI agen native, edit kode, dan tinjau perubahan dalam jendela IDE yang sama. Gunakan akun dan langganan Anda sendiri, dan biarkan agen berkolaborasi lintas jendela dan mesin.
 
@@ -35,9 +35,9 @@ Jalankan CLI agen native, edit kode, dan tinjau perubahan dalam jendela IDE yang
 code --install-extension facade.facadecode
 ```
 
-Atau pasang **Facade Code** dari [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) atau [Open VSX](https://open-vsx.org/extension/facade/facadecode). Ekstensi ini dapat dijalankan di macOS (Apple silicon), Linux (x64), dan Windows (x64).
+Atau pasang **Facade Code Extension** dari [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) atau [Open VSX](https://open-vsx.org/extension/facade/facadecode). Ekstensi ini dapat dijalankan di macOS (Apple silicon), Linux (x64), dan Windows (x64).
 
-Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan: Claude Code, Codex, Antigravity, Muse Code, OpenCode, atau Pi. Facade Code menjalankan setiap CLI menggunakan akun dan langganan miliknya sendiri.
+Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan: Claude Code, Codex, Antigravity, Muse Code, OpenCode, atau Pi. Facade Code Extension menjalankan setiap CLI menggunakan akun dan langganan miliknya sendiri.
 
 > **Agen berjalan tanpa konfirmasi persetujuan secara default.** Dengan `yolo` yang aktif secara default, agen dapat menjalankan perintah dan mengubah berkas tanpa meminta izin terlebih dahulu. Nonaktifkan pengaturan ini untuk memulihkan konfirmasi persetujuan standar setiap CLI. Lihat [README ekstensi](../../../extension/README.md#install).
 
@@ -45,7 +45,7 @@ Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan:
 
 **Agen dan IDE Anda, dalam jendela yang sama.**
 
-Facade Code menjalankan CLI agen native (Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi) di tab terminal editor di samping berkas Anda, menggunakan perintah, alat, akun, dan langganan milik masing-masing CLI. Sebuah kartu di panel melacak status setiap agen.
+Facade Code Extension menjalankan CLI agen native (Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi) di tab terminal editor di samping berkas Anda, menggunakan perintah, alat, akun, dan langganan milik masing-masing CLI. Sebuah kartu di panel melacak status setiap agen.
 
 - **Bekerja di samping kode Anda.** Setiap agen berjalan di tab terminalnya sendiri di area editor. Menutup tab hanya menyembunyikannya sementara agen tetap berjalan; mengeklik kartunya akan membukanya kembali.
 - **Lacak status di seluruh agen.** Kartu menampilkan apa yang terakhir dikirim ke setiap agen dan apakah agen sedang bekerja, memerlukan izin, atau mengalami kesalahan, dengan detail yang menampilkan judul, folder, dan siapa yang memulainya. Agen tetap berjalan melalui muat ulang jendela dan mulai ulang ekstensi.
@@ -57,19 +57,19 @@ Facade Code menjalankan CLI agen native (Claude Code, Codex, Antigravity, Muse C
 
 Melalui MCP dan protokol terminal, agen dapat memulai, menghentikan, menemukan, dan mengirim pesan ke agen lain, membaca layar terminal mereka, mengetik teks, dan menekan tombol keyboard.
 
-- **Mulai dan hentikan agen.** Agen dapat memulai agen lain dengan salah satu dari enam CLI, di folder mana pun atau worktree baru pada jendela Facade Anda di komputer ini, serta memberi mereka tugas pertama. Permintaan yang dicoba ulang dengan ID permintaan yang sama tidak akan pernah memulai agen kedua.
-- **Kirim pesan.** Agen saling bertukar pesan satu sama lain dan dapat mengirim pesan kepada Anda. Facade menempelkan seluruh pesan sekaligus dan mengirimkannya. Jika ada teks yang belum terkirim atau pertanyaan prompt yang menghalangi, pengiriman akan menunggu hingga input bersih.
+- **Mulai dan hentikan agen.** Agen dapat memulai agen lain dengan salah satu dari enam CLI, di folder mana pun atau worktree baru pada jendela Facade Code Extension Anda di komputer ini, serta memberi mereka tugas pertama. Permintaan yang dicoba ulang dengan ID permintaan yang sama tidak akan pernah memulai agen kedua.
+- **Kirim pesan.** Agen saling bertukar pesan satu sama lain dan dapat mengirim pesan kepada Anda. Facade Code Extension menempelkan seluruh pesan sekaligus dan mengirimkannya. Jika ada teks yang belum terkirim atau pertanyaan prompt yang menghalangi, pengiriman akan menunggu hingga input bersih.
 - **Kontrol terminal.** Agen dapat membaca layar agen lain, mengetik perintah, dan menekan tombol keyboard untuk menjawab prompt atau membantu rekan yang macet. Ketika agen turunan menunggu selama 20 detik untuk izin, jawaban, atau proses masuk, agen yang memulainya akan diberi tahu.
 
 ## Agent Mesh
 
 **Hubungkan agen lintas jendela, mesin, dan lokasi.**
 
-Facade Code menghubungkan agen di seluruh jendela Facade Anda di komputer ini ke dalam satu jaringan. Buka jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) untuk memperluas kolaborasi tersebut ke mesin lain.
+Facade Code Extension menghubungkan agen di seluruh jendela Facade Code Extension Anda di komputer ini ke dalam satu jaringan. Buka jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) untuk memperluas kolaborasi tersebut ke mesin lain.
 
-- **Lintas jendela.** Dengan `yolo` aktif, agen dapat menjangkau setiap agen di seluruh jendela Facade Anda di komputer ini, baik lokal maupun Remote - SSH. Dengan pengaturan tersebut nonaktif, agen hanya menjangkau grupnya sendiri: agen yang Anda mulai dan agen yang dimulai darinya.
+- **Lintas jendela.** Dengan `yolo` aktif, agen dapat menjangkau setiap agen di seluruh jendela Facade Code Extension Anda di komputer ini, baik lokal maupun Remote - SSH. Dengan pengaturan tersebut nonaktif, agen hanya menjangkau grupnya sendiri: agen yang Anda mulai dan agen yang dimulai darinya.
 - **Perluas melalui SSH.** Di jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), agen berjalan langsung di mesin jarak jauh dengan alat, berkas, dan akun di sana. Agen lokal dapat memulai dan mengirim pesan ke agen di jendela Remote - SSH secara langsung.
-- **Koordinasikan dari ponsel Anda.** Hubungkan aplikasi seluler Claude ke sesi Claude Code di komputer Anda menggunakan [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Sesi tersebut dapat mengoordinasikan agen lain melalui Facade dan melaporkan kemajuan kembali ke ponsel Anda.
+- **Koordinasikan dari ponsel Anda.** Hubungkan aplikasi seluler Claude ke sesi Claude Code di komputer Anda menggunakan [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Sesi tersebut dapat mengoordinasikan agen lain melalui Facade Code Extension dan melaporkan kemajuan kembali ke ponsel Anda.
 
 <sub>Remote Control memerlukan versi Claude Code yang didukung, langganan yang memenuhi syarat, dan proses masuk dengan cakupan penuh. Lihat [persyaratan penyiapannya](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
@@ -97,6 +97,6 @@ Untuk panduan kontribusi dan aturan branch, lihat [`CONTRIBUTING.md`](../../../C
 
 ## Lisensi
 
-MIT, sesuai dengan upstream VS Code. Lihat [`LICENSE.txt`](../../../LICENSE.txt) untuk pemberitahuan hak cipta Microsoft dan pemberitahuan kontributor Facade Code.
+MIT, sesuai dengan upstream VS Code. Lihat [`LICENSE.txt`](../../../LICENSE.txt) untuk pemberitahuan hak cipta Microsoft dan pemberitahuan kontributor Facade Code Extension.
 
-<sub>Facade Code adalah produk independen dan tidak berafiliasi dengan, didukung oleh, atau disponsori oleh penyedia alat pihak ketiga yang ditampilkan. Semua merek dagang dan logo pihak ketiga adalah milik pemiliknya masing-masing.</sub>
+<sub>Facade Code Extension adalah produk independen dan tidak berafiliasi dengan, didukung oleh, atau disponsori oleh penyedia alat pihak ketiga yang ditampilkan. Semua merek dagang dan logo pihak ketiga adalah milik pemiliknya masing-masing.</sub>

@@ -1,4 +1,4 @@
-//! What each CLI is given for a run to have Facade's tools: the server, tool approvals and, for
+//! What each CLI is given for a run to have Facade Code Framework's tools: the server, tool approvals and, for
 //! CLIs that need it, a hook or extension that gives the model the instructions.
 
 use std::collections::BTreeMap;
@@ -78,7 +78,7 @@ pub(super) fn opencode_run(
         Some(Ok(Value::Object(config))) => config,
         Some(_) => {
             return Err(format!(
-                "its {OPENCODE_CONFIG} is not a JSON object Facade can read"
+                "its {OPENCODE_CONFIG} is not a JSON object Facade Code Framework can read"
             ));
         }
     };
@@ -112,11 +112,11 @@ pub(super) fn pi_run(server: &Server, entry: &Entry, name: &str) -> Wiring {
     let mut instructions = server.instructions.to_owned();
     if name != SERVER {
         instructions.push_str(&format!(
-            "\n\nFor this run, call Facade's tools through `{name}` using names that begin with `mcp__{name}__`."
+            "\n\nFor this run, call Facade Code Framework's tools through `{name}` using names that begin with `mcp__{name}__`."
         ));
     }
     let extension = format!(
-        r#"// Facade Code: this run's tools, registered for its session alone
+        r#"// Facade Code Framework: this run's tools, registered for its session alone
 export default function (pi) {{
 	pi.registerMcpServer({name}, {entry});
 	pi.on('before_agent_start', (event) => {{
@@ -146,10 +146,10 @@ fn muse_entry(entry: &Entry) -> Value {
 
 /// Muse Code: `-c mcpServers.facade=<entry>` for the run alone, and two hooks: `SessionStart`,
 /// which gives the model the instructions, as Muse Code shows it no server's instructions, and
-/// `PermissionRequest`, which approves Facade's own tools, as Muse Code has no rule for one
+/// `PermissionRequest`, which approves Facade Code Framework's own tools, as Muse Code has no rule for one
 /// server's tools. The entry references the CLI's environment and is optional, as Muse Code fails
 /// a whole run over a required server that does not start. Each hook receives the run's
-/// variables in its command. Where the person's settings hold a Facade server, the run
+/// variables in its command. Where the person's settings hold a Facade Code Framework server, the run
 /// uses that entry with these hooks.
 pub(super) fn muse_run(server: &Server, entry: Option<&Entry>) -> Wiring {
     let args = entry
@@ -211,8 +211,8 @@ fn mcp_config(entry: Value) -> (String, String) {
     (MCP_CONFIG.into(), format!("{config:#}\n"))
 }
 
-/// Takes out of `env`, the environment a run of `cli` started with, what gave it Facade's tools:
-/// the test CLI's variables, and Facade's server and permission in OpenCode's inline configuration.
+/// Takes out of `env`, the environment a run of `cli` started with, what gave it Facade Code Framework's tools:
+/// the test CLI's variables, and Facade Code Framework's server and permission in OpenCode's inline configuration.
 /// Remove the old OpenCode skill entry when it names a file in a run folder of `FACADE_AGENT`
 /// under `FACADE_HOME`.
 pub(super) fn unwire(cli: &str, env: &mut BTreeMap<String, String>) {
@@ -251,7 +251,7 @@ pub(super) fn unwire(cli: &str, env: &mut BTreeMap<String, String>) {
                     config.shift_remove("instructions");
                 }
             }
-            // What only Facade's entries filled goes with them, and so does a configuration that
+            // What only Facade Code Framework's entries filled goes with them, and so does a configuration that
             // holds nothing else.
             config.retain(|key, value| {
                 !(["mcp", "permission"].contains(&key.as_str())

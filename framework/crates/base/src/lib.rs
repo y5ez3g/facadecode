@@ -1,4 +1,4 @@
-//! What Facade's programs share.
+//! What Facade Code Framework's programs share.
 //!
 //! - Daemon and keeper messages, framing and the blocking daemon client ([`api_v1`]).
 //! - Agent, machine, message, terminal and error data ([`model`]).

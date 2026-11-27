@@ -1,4 +1,4 @@
-//! How the command line reaches the Orchestrator and installs a running replacement. Status,
+//! How the command line reaches Facade Code Framework and installs a running replacement. Status,
 //! installers and passive machine links can check for an existing service without starting it.
 
 use std::io::Write as _;
@@ -60,12 +60,12 @@ fn permanent(error: impl Into<anyhow::Error>) -> ConnectFailure {
     ConnectFailure::Permanent(error.into())
 }
 
-/// Connects to the daemon within one attempt, starting Facade where nothing answers.
+/// Connects to the daemon within one attempt, starting Facade Code Framework where nothing answers.
 pub(super) fn connect_or_start() -> anyhow::Result<DaemonClient> {
     first_connection(None).map_err(unreachable)
 }
 
-/// Connects or starts Facade within the command's total deadline.
+/// Connects or starts Facade Code Framework within the command's total deadline.
 pub(super) fn connect_or_start_until(until: Instant) -> anyhow::Result<DaemonClient> {
     first_connection(Some(until)).map_err(unreachable)
 }
@@ -77,7 +77,7 @@ fn first_connection(deadline: Option<Instant>) -> Result<DaemonClient, ConnectFa
     Ok(client)
 }
 
-/// The failure of a command's attempt to reach Facade, for the reader: why, and the log that says
+/// The failure of a command's attempt to reach Facade Code Framework, for the reader: why, and the log that says
 /// more where one does.
 fn unreachable(failure: ConnectFailure) -> anyhow::Error {
     let error = anyhow::Error::from(failure);
@@ -92,7 +92,7 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
     Problem::Unreachable { why, log }.into()
 }
 
-/// Probes the running Orchestrator without waking or upgrading it.
+/// Probes the running Facade Code Framework without waking or upgrading it.
 pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
     let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
     let until = Instant::now() + RUNNING_TIMEOUT;
@@ -116,7 +116,7 @@ fn explicit(error: anyhow::Error) -> anyhow::Error {
     .into()
 }
 
-/// Facade did not start: why, the log that says more, the words `facade daemon --detach` has
+/// Facade Code Framework did not start: why, the log that says more, the words `facade daemon --detach` has
 /// always printed for it, and whether a daemon holds the lock and is still starting.
 #[derive(Debug)]
 struct Unstarted {
@@ -597,7 +597,7 @@ fn report_editor_startup(error: anyhow::Error) -> anyhow::Error {
             if body.code == -32602 && body.data.reason == "invalid_argument" {
                 body.data.reason = "protocol_incompatible".into();
                 body.message = format!(
-                    "The running Framework did not accept daemon API v1. Use compatible Framework builds for the editor, Shell and participating SSH endpoints. {}",
+                    "The running Facade Code Framework did not accept daemon API v1. Use compatible Facade Code Framework builds for the editor, Shell and participating SSH endpoints. {}",
                     body.message
                 );
             }

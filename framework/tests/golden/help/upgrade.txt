@@ -1,4 +1,4 @@
-Upgrade Facade.
+Upgrade Facade Code Framework.
 
 Checks the latest stable release first and skips downloading when already up
 to date or ahead of the stable channel. Installs a newer release or the

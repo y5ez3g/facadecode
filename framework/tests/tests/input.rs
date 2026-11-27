@@ -79,7 +79,8 @@ fn each_terminal_query_gets_one_reply_with_multiple_viewers() {
             .collect();
         for term in &terms {
             assert!(
-                term.wait_for(secs(10), |text| text.contains("Facade test CLI")),
+                term.wait_for(secs(10), |text| text
+                    .contains("Facade Code Framework test CLI")),
                 "{}",
                 term.text()
             );

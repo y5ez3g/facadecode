@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Runs the integration suite in an isolated official VS Code (ARCHITECTURE-5.2): `VSCODE_EXECUTABLE` names it, else macOS's standard
-// installation where there is one. The window opens a fresh repository, with Facade's directory, user data, extensions and fake
+// installation where there is one. The window opens a fresh repository, with Facade Code Extension's directory, user data, extensions and fake
 // agent CLIs of its own; no inherited editor, Git or CLI credential variables reach it, and nothing it does touches a person's
 // profile or agents.
 
@@ -23,7 +23,7 @@ import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowL
 import { CUTOVER_VARIANTS, legacyCutover, type CutoverVariant } from './cutover';
 import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, withFrameworkWindows } from './frameworkMultiWindow';
 
-/** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
+/** An entry of Facade Code Extension's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
 
 const ACCEPTANCE_DRIVERS = new Map([
@@ -45,7 +45,7 @@ const ACCEPTANCE_DRIVERS = new Map([
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
 
-/** The suite's program: an entry of type `custom` in Facade's settings file, by its name (CONFIGURATION-2.1, 2.3). */
+/** The suite's program: an entry of type `custom` in Facade Code Extension's settings file, by its name (CONFIGURATION-2.1, 2.3). */
 const CUSTOM_CLI = 'my-cli';
 
 /**
@@ -85,18 +85,18 @@ async function main(): Promise<void> {
 	if (overlapFrameworkIdle) {
 		const scope = process.env.CI_ACCEPTANCE_ROOT;
 		if (process.platform !== 'linux' || !scope || scope !== os.tmpdir() || !/^\/tmp\/fnative-[a-zA-Z0-9_-]+$/u.test(scope)) {
-			throw new Error('Overlapping Framework idle cleanup requires the Linux owned-scope native editor runner.');
+			throw new Error('Overlapping Facade Code Framework idle cleanup requires the Linux owned-scope native editor runner.');
 		}
 	}
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
 	if (only === 'real') {
-		throw new Error('Use FACADE_IT_ONLY=real-lifecycle for the Framework editor with a real CLI.');
+		throw new Error('Use FACADE_IT_ONLY=real-lifecycle for the Facade Code Framework editor with a real CLI.');
 	}
 	const attachFake = process.env.FACADE_IT_FAKECLI;
 	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
-	// Current builds activate Framework. The legacy selector is only for fixtures using earlier packages.
+	// Current builds activate Facade Code Framework. The legacy selector is only for fixtures using earlier packages.
 	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'framework';
 	if (implementation !== 'framework') {
 		throw new Error('Run legacy execution through the published VSIX cutover fixtures.');
@@ -165,7 +165,7 @@ async function main(): Promise<void> {
 	const pinsPerGroup = process.env.FACADE_IT_PINS_PER_GROUP;
 	// The focus probe's variables: its cases, such as `N1,F2`, where its evidence goes and how it injects keys
 	const probeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.startsWith('FACADE_IT_PROBE_')));
-	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
+	// Read before this: it removes every variable of Facade Code Extension's and of the CLIs' from this process
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
 	const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
@@ -197,7 +197,7 @@ async function main(): Promise<void> {
 		'terminal.integrated.env.osx': { HOME: agentsHome, ...isolatedStorage, ...more },
 		'terminal.integrated.env.linux': { HOME: agentsHome, ...isolatedStorage, ...more }
 	});
-	// The editor's settings: the agents' terminals isolated, and nothing that would stop a test. The CLIs are Facade's settings file's.
+	// The editor's settings: the agents' terminals isolated, and nothing that would stop a test. The CLIs are Facade Code Extension's settings file's.
 	const settings = {
 		...terminalEnv(),
 		'security.workspace.trust.enabled': false,
@@ -208,11 +208,11 @@ async function main(): Promise<void> {
 		'extensions.autoCheckUpdates': false
 	};
 	/**
-	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
+	 * Facade Code Extension's settings file in the Facade Code Extension root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
 	 * a person's real CLI - each entry of `clis` over its built-in's, an added one as it is, and `yolo` where given.
 	 */
 	const facadeSettings = (facade: string, clis: { readonly [name: string]: Entry } = {}, yolo?: boolean) => {
-		// Resume listing reads the settings entry's effective environment on the Orchestrator machine.
+		// Resume listing reads the settings entry's effective environment on the Facade Code Framework machine.
 		const fixtureEnv = implementation === 'framework' && !nativeLifecycle
 			? { HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage }
 			: undefined;
@@ -229,7 +229,7 @@ async function main(): Promise<void> {
 	const alone = (cli: string) => Object.fromEntries(BUILT_INS.filter(each => each.id !== cli).map(each => [each.id, { enabled: false }]));
 	const extension = path.resolve(__dirname, '..', '..', '..', 'extension-it');
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
-	/** Framework's programs in the stage, and what a run on the Framework leaves of them in the Facade root `facade`: ended as framework's README ends them. */
+	/** Facade Code Framework's programs in the stage, and what a run on the Facade Code Framework leaves of them in the Facade Code Extension root `facade`: ended as framework's README ends them. */
 	const frameworkPrograms = frameworkProgram(path.join(extension, 'bin'));
 	const idleChecks: Promise<unknown>[] = [];
 	const cleanUpFramework = async (facade: string, independentHome = false) => {
@@ -247,8 +247,8 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * One editor of the suite on `folder`, with user data, extensions and a Facade directory of its own - and shared data: without it
-	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2) - its CLIs `clis` of Facade's
+	 * One editor of the suite on `folder`, with user data, extensions and a Facade Code Extension directory of its own - and shared data: without it
+	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2) - its CLIs `clis` of Facade Code Extension's
 	 * settings file, `yolo` there where given, and the editor's settings `more` beside the suite's.
 	 */
 	let testProfiles = 0;
@@ -293,8 +293,8 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * A folder window that becomes a multi-root workspace keeps its agents (ARCHITECTURE-2.2). The editor refuses to enter a
-	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake CLI in the folder window
-	 * and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
+	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code Extension starts a fake CLI in the folder window
+	 * and adds a folder, then, in the extension host the editor restarts, says what Facade Code Extension shows; this judges it.
 	 */
 	const conversion = async (cli: typeof BUILT_INS[number], reopening = false, expiry = false) => {
 		const suffix = `${cli.id}${expiry ? '-expiry' : reopening ? '-reopen' : ''}`;
@@ -385,7 +385,7 @@ async function main(): Promise<void> {
 				const reopenBy = Date.now() + (nativeLifecycle ? 150_000 : 45_000);
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
-				// On the Framework a run is known by its agent's ID once a window has claimed it, where the first window's was its start's own
+				// On the Facade Code Framework a run is known by its agent's ID once a window has claimed it, where the first window's was its start's own
 				// ID: the process and the session are the run's identity there
 				// A local window closed and reopened within its 90 seconds takes its run over, as a reload does - no claim ends it; after its
 				// grace the process ended already and the Pin restores the exact session in a new process (RULES-4.1)
@@ -432,7 +432,7 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * Pins across reloads in a window of two groups, and each way a person changes one (LIFECYCLE-3.4, 3.5, VERIFICATION J12). A driver beside Facade
+	 * Pins across reloads in a window of two groups, and each way a person changes one (LIFECYCLE-3.4, 3.5, VERIFICATION J12). A driver beside Facade Code Extension
 	 * Code starts the agents, pins every other one and reloads the window three times; this judges what it saw after each: the pinned
 	 * agents' tabs alone back, in the Pins' order, each marked before the next opened, the last in front of the active group with the
 	 * selection on it, every other tab hidden.
@@ -450,7 +450,7 @@ async function main(): Promise<void> {
 		}
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
 		facadeSettings(facade, alone(cli.id));
-		// Activated at once: after a reload it watches the tabs open from before Facade's restoration begins
+		// Activated at once: after a reload it watches the tabs open from before Facade Code Extension's restoration begins
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'pins-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['*'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'pinsDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
@@ -534,7 +534,7 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * Two windows of one computer (COLLABORATION-1.1, VERIFICATION J15): a second editor - user data and extensions of its own, the same
-	 * Facade root, so that both window components meet in this computer's registry - holds another folder while the suite's editor
+	 * Facade Code Extension root, so that both window components meet in this computer's registry - holds another folder while the suite's editor
 	 * runs its cross-window journey there. It runs no tests itself; it is closed with its agents afterwards.
 	 */
 	const crossWindow = async () => {
@@ -565,7 +565,7 @@ async function main(): Promise<void> {
 			}
 		}
 	};
-	/** Install the candidate pair in an empty isolated profile and observe one real Framework start. */
+	/** Install the candidate pair in an empty isolated profile and observe one real Facade Code Framework start. */
 	const installPair = async () => {
 		if (!current) {
 			throw new Error('FACADE_IT_ONLY=install-pair requires FACADE_IT_CURRENT.');
@@ -645,7 +645,7 @@ async function main(): Promise<void> {
 			}
 			assert.ok(observed.token && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and a native Window Component');
 			const { agents } = await frameworkCall(facade, 'agent.list', {});
-			assert.strictEqual(agents.length, 1, 'only one Framework agent started');
+			assert.strictEqual(agents.length, 1, 'only one Facade Code Framework agent started');
 			const { agent } = await frameworkCall(facade, 'agent.inspect', { target: agents[0].reference });
 			assert.deepStrictEqual([agent.process, agent.pid, agent.reference.agent_id], ['running', pid, observed.alias.slice(1)]);
 			const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
@@ -666,14 +666,14 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * The Framework's acceptance on the extension's side, in one window on it (framework.it.ts): the window runs on framework of its Facade
+	 * The Facade Code Framework's acceptance on the extension's side, in one window on it (framework.it.ts): the window runs on framework of its Facade Code Extension
 	 * root, its terminal's `facade list` shows the editor's agent, Resume Agent restores the record Stop Agent retained, and a program
 	 * is told the theme's colours.
 	 */
 	const frameworkJourneys = async () => {
-		await run('framework', repo, { FACADE_IT_JOURNEY: 'framework', FACADE_IT_GREP: 'Journey: the Framework' }, alone('claude'));
+		await run('framework', repo, { FACADE_IT_JOURNEY: 'framework', FACADE_IT_GREP: 'Journey: the Facade Code Framework' }, alone('claude'));
 	};
-	/** Real reload, close, reopen and daemon replacement on Framework, followed by saved Pin restoration (RULES-4.1, 4.2). */
+	/** Real reload, close, reopen and daemon replacement on Facade Code Framework, followed by saved Pin restoration (RULES-4.1, 4.2). */
 	const frameworkWindowLifetime = async () => {
 		const folder = path.join(root, 'lifetime');
 		const profile = editorProfile(root, 'l');
@@ -696,7 +696,7 @@ async function main(): Promise<void> {
 		const screen = (agent: string) => execFileSync(frameworkPrograms, ['screen', agent, '--lines', '120'], { env, encoding: 'utf8', timeout: 20_000 });
 		const list = async () => (await frameworkCall(facade, 'agent.list', {})).agents;
 		const inspect = (agent: string) => frameworkCall(facade, 'agent.inspect', { target: agent });
-		console.log('\n  Journey: the Framework window lifetime and saved Pins');
+		console.log('\n  Journey: the Facade Code Framework window lifetime and saved Pins');
 		try {
 			await windowLifetime(start, () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', async step => {
 				if (step.after === 'reload') {
@@ -711,7 +711,7 @@ async function main(): Promise<void> {
 				const steps = fs.readFileSync(out, 'utf8').trim().split('\n').map(line => JSON.parse(line));
 				const began = steps.find(step => step.phase === 'started')?.agent;
 				const restored = steps.find(step => step.phase === 'done')?.detail;
-				assert.ok(began && restored && /^a\d+$/u.test(began.id), 'the lifetime driver observed a Framework agent');
+				assert.ok(began && restored && /^a\d+$/u.test(began.id), 'the lifetime driver observed a Facade Code Framework agent');
 				assert.deepStrictEqual([restored.id, restored.cwd, restored.session], [began.id, began.cwd, began.session]);
 				const starts = fs.readFileSync(`${env.FACADE_IT_RECORD}.starts.#${began.id}`, 'utf8').trim().split(/\r?\n/u).map(Number);
 				assert.deepStrictEqual(starts, [began.pid, restored.pid], 'one original start and one restoration of the saved Pin');
@@ -816,7 +816,7 @@ async function main(): Promise<void> {
 				}
 				return shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
 			});
-			// Both journeys observe the live Framework daemon and an editor view of the same machine-qualified agent.
+			// Both journeys observe the live Facade Code Framework daemon and an editor view of the same machine-qualified agent.
 			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
 			if (runName === 'handoff') { driverPassed('shell-handoff', 'framework'); }
 			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'framework'); }
@@ -904,14 +904,14 @@ async function main(): Promise<void> {
 		// The released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
 		const cutover = only === 'upgrade-pair' ? 'exited' : only === 'update' ? 'live' : CUTOVER_VARIANTS.find(variant => only === `cutover-${variant}`);
 		if (cutover) {
-			assert.strictEqual(implementation, 'framework', 'the cutover journeys run the candidate on Framework');
+			assert.strictEqual(implementation, 'framework', 'the cutover journeys run the candidate on Facade Code Framework');
 			await legacyCutover({
 				variant: cutover, root, home, executable, record, claudeConfig, released, current, settings, endMatching,
 				legacyCliSettings: {
 					...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
 					...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false]))
 				},
-				// Framework resolves a session from the daemon's environment and the entry's: Claude Code's session store is named there
+				// Facade Code Framework resolves a session from the daemon's environment and the entry's: Claude Code's session store is named there
 				facadeSettings: facade => facadeSettings(facade, { ...alone('claude'), claude: { env: {
 					HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage, CLAUDE_CONFIG_DIR: claudeConfig
 				} } }),

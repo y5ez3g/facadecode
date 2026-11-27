@@ -66,7 +66,7 @@ fn store(home: &TestHome) -> rusqlite::Connection {
 }
 
 /// Message `number`'s delivery status and request ID, as `facade.db` keeps them: read from the
-/// store itself, since a read through Facade would deliver it, and a send's receipt comes only
+/// store itself, since a read through Facade Code Framework would deliver it, and a send's receipt comes only
 /// once it is settled. None where it is not kept.
 fn kept(home: &TestHome, number: u64) -> Option<(String, Option<String>)> {
     store(home)
@@ -645,7 +645,7 @@ fn repository(folder: &std::path::Path) {
         &["init", "-q", "-b", "main"][..],
         &[
             "-c",
-            "user.name=Facade",
+            "user.name=Facade Code Framework",
             "-c",
             "user.email=facade@example.invalid",
             "commit",

@@ -327,7 +327,7 @@ fn read(
         return Some(envelope::failure(
             "unsupported",
             "read_messages cannot wait in this managed run. This call did not check your inbox. \
-             End this turn so Facade can deliver incoming messages to your input.",
+             End this turn so Facade Code Framework can deliver incoming messages to your input.",
         ));
     }
     let budget = if positive {

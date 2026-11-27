@@ -12,7 +12,7 @@ use nix::sys::termios::{
 
 /// Both ends of a CLI's PTY.
 pub(super) struct Terminal {
-    /// The side Facade reads and writes.
+    /// The side Facade Code Framework reads and writes.
     pub(super) master: OwnedFd,
     /// The side the CLI gets as its standard input, output and error.
     pub(super) slave: OwnedFd,

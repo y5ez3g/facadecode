@@ -110,7 +110,9 @@ impl Plugins {
         let plugin = inspect(&folder, files);
         let replace = match plugin {
             Plugin::Foreign(why) => {
-                return Err(format!("{why}; Facade leaves the plugin as it is"));
+                return Err(format!(
+                    "{why}; Facade Code Framework leaves the plugin as it is"
+                ));
             }
             Plugin::Matching => Some(false),
             Plugin::Earlier | Plugin::Edited { .. } if !busy => Some(true),
@@ -145,14 +147,16 @@ impl Plugins {
         let left = match inspect(&folder, files) {
             Plugin::Matching | Plugin::Earlier => None,
             Plugin::Edited { .. } => Some(format!(
-                "{} was changed since Facade wrote it; Facade leaves it as it is",
+                "{} was changed since Facade Code Framework wrote it; Facade Code Framework leaves it as it is",
                 folder.display()
             )),
             Plugin::Later => Some(format!(
-                "{} is a later Facade's plugin, which Facade leaves to it",
+                "{} is a later Facade Code Framework's plugin, which Facade Code Framework leaves to it",
                 folder.display()
             )),
-            Plugin::Foreign(why) => Some(format!("{why}; Facade leaves the plugin as it is")),
+            Plugin::Foreign(why) => Some(format!(
+                "{why}; Facade Code Framework leaves the plugin as it is"
+            )),
         };
         if let Some(message) = left {
             facade_base::log::write("daemon", "info", &message);
@@ -166,7 +170,7 @@ impl Plugins {
                     "daemon",
                     "warn",
                     &format!(
-                        "could not remove Facade's plugin file {}: {error}",
+                        "could not remove Facade Code Framework's plugin file {}: {error}",
                         folder.join(name).display()
                     ),
                 );
@@ -212,7 +216,7 @@ fn inspect(folder: &Path, files: &[(String, String)]) -> Plugin {
                 };
                 if !known {
                     return Ok(Err(format!(
-                        "{} holds {name}, which Facade does not write there",
+                        "{} holds {name}, which Facade Code Framework does not write there",
                         folder.display()
                     )));
                 }
@@ -362,7 +366,7 @@ mod tests {
 
     /// A plugin that is not Facade Code Framework's - the person's own, or the Facade Code Extension's - or
     /// that holds a file no Facade Code Framework plugin holds is never changed, before or after a run. One
-    /// that holds part of what Facade writes, and nothing else, is completed; one changed since
+    /// that holds part of what Facade Code Framework writes, and nothing else, is completed; one changed since
     /// stays after its runs.
     #[tokio::test]
     async fn a_plugin_that_is_not_facade_framework_s_is_left_as_it_is() {
@@ -378,7 +382,7 @@ mod tests {
             let refused = preparation.plugins.hold(&cwd, &files).err().unwrap();
             assert!(
                 refused.contains(
-                    "is not a Facade Code Framework plugin; Facade leaves the plugin as it is"
+                    "is not a Facade Code Framework plugin; Facade Code Framework leaves the plugin as it is"
                 ),
                 "{refused}"
             );
@@ -392,7 +396,7 @@ mod tests {
         std::fs::write(plugin.join("notes.txt"), "mine").unwrap();
         let refused = preparation.plugins.hold(&cwd, &files).err().unwrap();
         assert!(
-            refused.contains("holds notes.txt, which Facade does not write there"),
+            refused.contains("holds notes.txt, which Facade Code Framework does not write there"),
             "{refused}"
         );
         assert_eq!(
@@ -401,12 +405,12 @@ mod tests {
             "nothing written"
         );
         std::fs::remove_file(plugin.join("notes.txt")).unwrap();
-        // A skill of someone else's beside where Facade's goes is theirs too.
+        // A skill of someone else's beside where Facade Code Framework's goes is theirs too.
         std::fs::create_dir_all(plugin.join("skills/mine")).unwrap();
         std::fs::write(plugin.join("skills/mine/SKILL.md"), "mine").unwrap();
         let refused = preparation.plugins.hold(&cwd, &files).err().unwrap();
         assert!(
-            refused.contains("holds skills/mine, which Facade does not write there"),
+            refused.contains("holds skills/mine, which Facade Code Framework does not write there"),
             "{refused}"
         );
         assert!(
@@ -502,7 +506,7 @@ mod tests {
             cwd.join(facade_rules::PLUGIN_FOLDER).exists(),
             "its agent runs"
         );
-        // The plugin is an earlier version's, as where a newer Facade took over the run: a start
+        // The plugin is an earlier version's, as where a newer Facade Code Framework took over the run: a start
         // beside the run leaves it.
         let manifest = cwd.join(facade_rules::PLUGIN_FOLDER).join("plugin.json");
         let earlier = "{ \"name\": \"facade\", \"description\": \"Facade Code Framework 0.1.0: an earlier text.\" }\n";

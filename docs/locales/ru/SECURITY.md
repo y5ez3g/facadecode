@@ -1,6 +1,6 @@
 # Безопасность
 
-Facade Code разрабатывается открыто на [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Facade Code Extension разрабатывается открыто на [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Как сообщить об уязвимости
 

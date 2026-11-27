@@ -34,7 +34,7 @@ const START: Page = Page {
     path: "start",
     intro: r#"Start an agent from a coding CLI.
 
-Facade options come before the CLI name. Everything after the CLI name is
+Facade Code Framework options come before the CLI name. Everything after the CLI name is
 passed to that CLI unchanged. Use that CLI's own flags for model, reasoning,
 and prompts. Run 'facade status' to see the CLIs you can start."#,
     usage: r#"Usage: facade start [OPTIONS] <CLI> [CLI_ARGS]..."#,
@@ -48,7 +48,7 @@ and prompts. Run 'facade status' to see the CLIs you can start."#,
   [CLI_ARGS]...  Arguments passed to the CLI unchanged
 
 Options
-  -n, --name <NAME>          Name this agent (default: chosen by Facade)
+  -n, --name <NAME>          Name this agent (default: chosen by Facade Code Framework)
       --machine <MACHINE>    Run on this machine (default: {machine})
       --workdir <DIRECTORY>  Working directory (default: current directory locally,
                              login directory remotely)
@@ -87,9 +87,9 @@ Interact
   type      Type text or press keys in an agent's terminal
 
 System
-  status    Show Facade or agent status
+  status    Show Facade Code Framework or agent status
   machine   Connect and manage machines over SSH
-  upgrade   Upgrade Facade
+  upgrade   Upgrade Facade Code Framework
 
 Options
   -h, --help     Show help
@@ -104,7 +104,7 @@ Learn more at https://facadecode.com"#,
         intro: r#"Stop one or more running agents.
 
 Keeps each agent's record, final screen, and saved session so you can read
-its screen or resume it later. Connected guests cannot be stopped by Facade
+its screen or resume it later. Connected guests cannot be stopped by Facade Code Framework
 and are skipped when stopping all agents on a machine or across machines."#,
         usage: r#"Usage:
   facade stop <AGENT>...
@@ -202,8 +202,8 @@ Options
         path: "send",
         intro: r#"Send a message to an active agent or guest.
 
-By default, the command ends when Facade saves the message in the
-recipient's inbox. Use '-w' to wait until Facade submits the message
+By default, the command ends when Facade Code Framework saves the message in the
+recipient's inbox. Use '-w' to wait until Facade Code Framework submits the message
 in a managed agent's terminal or a guest reads it. Use '-r' to wait
 for a reply. Set the timeout in seconds with '-t'.
 Messages can be up to 8,000 characters and 540 lines."#,
@@ -263,9 +263,9 @@ Options
     },
     Page {
         path: "status",
-        intro: r#"Show Facade or agent status.
+        intro: r#"Show Facade Code Framework or agent status.
 
-Without arguments, checks the local Facade service without starting it.
+Without arguments, checks the local Facade Code Framework service without starting it.
 Pass an agent to inspect its state, working directory, and launch details."#,
         usage: r#"Usage: facade status [AGENT]"#,
         examples: r#"  facade status
@@ -301,8 +301,8 @@ Run 'facade machine <COMMAND> --help' for examples and options."#,
         intro: r#"Connect to a remote machine over SSH and save it.
 
 Runs SSH in this terminal so you can answer host key or password prompts,
-installs a dedicated Facade SSH key when needed for passwordless reconnects,
-and installs or upgrades Facade on the remote machine. Put Facade options
+installs a dedicated Facade Code Framework SSH key when needed for passwordless reconnects,
+and installs or upgrades Facade Code Framework on the remote machine. Put Facade Code Framework options
 before SSH options and destination; everything after is passed to ssh. Pass
 '--bidirectional' to also authorize and save a return connection from that
 machine back to this machine."#,
@@ -325,7 +325,7 @@ Options
 
 Keeps the connection open while this command runs (press Ctrl+C to
 disconnect) without saving it. Runs SSH in this terminal and installs or
-upgrades Facade on the remote machine if needed. Put '--home' before SSH
+upgrades Facade Code Framework on the remote machine if needed. Put '--home' before SSH
 options and destination; everything after is passed to ssh."#,
         usage: r#"Usage: facade machine connect [--home <PATH>] <SSH_ARGS>..."#,
         examples: r#"  facade machine connect devbox
@@ -341,7 +341,7 @@ Options
         path: "machine list",
         intro: r#"List the local machine and known remote machines.
 
-Shows each machine's name, ID, connection state, Facade version, route,
+Shows each machine's name, ID, connection state, Facade Code Framework version, route,
 and whether its SSH connection is saved."#,
         usage: r#"Usage: facade machine list"#,
         examples: r#"  facade machine list"#,
@@ -352,9 +352,9 @@ and whether its SSH connection is saved."#,
         path: "machine remove",
         intro: r#"Remove a saved SSH connection.
 
-Removes the local saved connection and revokes local Facade SSH
+Removes the local saved connection and revokes local Facade Code Framework SSH
 authorization for the other machine. Use '--bidirectional' to remove the
-saved return connection and revoke Facade SSH authorization there.
+saved return connection and revoke Facade Code Framework SSH authorization there.
 Agents on both machines keep running."#,
         usage: r#"Usage: facade machine remove [--bidirectional] <MACHINE>"#,
         examples: r#"  facade machine remove devbox
@@ -385,7 +385,7 @@ Options
     },
     Page {
         path: "upgrade",
-        intro: r#"Upgrade Facade.
+        intro: r#"Upgrade Facade Code Framework.
 
 Checks the latest stable release first and skips downloading when already up
 to date or ahead of the stable channel. Installs a newer release or the

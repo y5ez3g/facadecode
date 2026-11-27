@@ -68,7 +68,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		const module = withModules({ vscode })<typeof AgentPtyModule>(require.resolve('../host/terminal/agentPty'));
 		const pty = new module.AgentPty('Ada', () => undefined);
 		made.push(pty);
-		// What reaches the editor's terminal of the run, Facade's own colour questions aside
+		// What reaches the editor's terminal of the run, Facade Code Extension's own colour questions aside
 		const drawn: string[] = [];
 		pty.onDidWrite(data => { if (!data.startsWith('\x1b]10;?')) { drawn.push(data); } });
 		// The screens taken, answered as the test says, and what reaches the run's process
@@ -94,7 +94,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		pty.output(5, 'more');
 		assert.strictEqual(taken.length, 0, 'no screen is asked for a terminal not open');
 		pty.open({ columns: 80, rows: 24 });
-		assert.deepStrictEqual(drawn.join(''), '\x1b[2mStarting Codex...\x1b[0m\r\n', 'Facade\'s own line is kept for it, the run\'s output is not');
+		assert.deepStrictEqual(drawn.join(''), '\x1b[2mStarting Codex...\x1b[0m\r\n', 'Facade Code Extension\'s own line is kept for it, the run\'s output is not');
 		assert.strictEqual(taken.length, 1);
 		pty.output(6, 'while the screen is taken');
 		taken[0]('the screen at 5', 5);

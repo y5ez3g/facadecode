@@ -168,7 +168,7 @@ export interface ChangedParams {
 	readonly change: AgentsChange | MachinesChange | ScreenChange;
 }
 
-/** A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1). */
+/** A CLI a start can run: an entry of Facade Code Framework's settings file (CONFIGURATION-2.1). */
 export interface CliInfo {
 	readonly cli: string;
 	readonly display_name: string;
@@ -649,7 +649,7 @@ export interface ResumeResult {
 export type ResumeTarget = { readonly kind: 'agent'; readonly reference: { readonly machine_id: string; readonly agent_id: string } } | { readonly kind: 'session'; readonly machine_id: string; readonly cli: string; readonly session: string; readonly folder: string } | { readonly kind: 'selector'; readonly selector: string; readonly scope?: SingleMachineScope; readonly folder?: string };
 
 /** The latest submission through an agent's terminal, from a person, an `agent.type` call with
- * `enter`, or a message Facade delivered. */
+ * `enter`, or a message Facade Code Framework delivered. */
 export interface Said {
 	readonly text: string;
 	readonly from: string;
@@ -776,7 +776,7 @@ export interface StateDetail {
 	readonly reason?: StateReason;
 }
 
-/** Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it. */
+/** Why nothing shows what an agent's CLI is doing, or what Facade Code Framework found wrong with it. */
 export type StateReason = 'not_shown' | 'asked' | 'taken_back' | 'unrecognized' | 'not_ready' | 'tools_unavailable';
 
 export interface StatusArgs {
@@ -812,10 +812,10 @@ export type TerminalInput = { readonly kind: 'text'; readonly text: string; read
 /** How much of a message reached the recipient's terminal. */
 export type TextWritten = 'none' | 'partial' | 'full' | 'unknown';
 
-/** Why an agent's CLI cannot use the Facade tools it was given. */
+/** Why an agent's CLI cannot use the Facade Code Framework tools it was given. */
 export type ToolsReason = 'not_given' | 'not_connected' | 'not_started' | 'disconnected' | 'ended';
 
-/** Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that a CLI started
+/** Whether an agent's CLI can use Facade Code Framework's tools: `facade-mcp`, the MCP server that a CLI started
  * by its rule is given for its run. */
 export type ToolsState = 'not_injected' | 'connecting' | 'available' | 'unavailable';
 

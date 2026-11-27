@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // What the integration runners share (ARCHITECTURE-5.2): the official VS Code they run, the environment they leave it, the flags of
-// the editors they start themselves, the repositories they open and how they see another editor's window join the Facade windows.
+// the editors they start themselves, the repositories they open and how they see another editor's window join the Facade Code Extension windows.
 
 import * as assert from 'assert';
 import { ChildProcess, execFileSync, spawnSync } from 'child_process';
@@ -114,7 +114,7 @@ export function newRepository(folder: string): void {
 }
 
 /**
- * The label of another editor's window once its window component registered it in the Facade root `facade` on this computer: the
+ * The label of another editor's window once its window component registered it in the Facade Code Extension root `facade` on this computer: the
  * first that `matches`. None within `ms`.
  */
 export async function registeredWindow(facade: string, matches: (label: string) => boolean, ms = 90_000): Promise<string | undefined> {
@@ -213,7 +213,7 @@ export interface FakeClis {
 
 /**
  * The suite's agent CLI (`fakeCli.js` beside this file, run by this Node) in `root`, as each built-in is installed: elsewhere a
- * script; on Windows a `.cmd` as npm writes one for a package's script, which Facade starts as that script with the Node beside it
+ * script; on Windows a `.cmd` as npm writes one for a package's script, which Facade Code Extension starts as that script with the Node beside it
  * (CLIS-1.2), and Pi's installer launcher. Muse uses the same Node-backed fake; its official native `.exe` selection and
  * unknown batch-wrapper fallback are covered separately by adapter tests, without pretending a `.cmd` preserves native JSON.
  */
@@ -266,7 +266,7 @@ export function frameworkListens(home: string): boolean {
 	return process.platform === 'win32' ? fs.readdirSync('\\\\.\\pipe\\').includes(path.win32.basename(socket)) : fs.existsSync(socket);
 }
 
-/** Framework's `facade` program in the folder `bin`, as the package carries it. */
+/** Facade Code Framework's `facade` program in the folder `bin`, as the package carries it. */
 export function frameworkProgram(bin: string): string {
 	return path.join(bin, process.platform === 'win32' ? 'facade.exe' : 'facade');
 }

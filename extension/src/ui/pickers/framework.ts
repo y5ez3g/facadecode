@@ -22,7 +22,7 @@ export interface FrameworkPickerDeps extends LaunchPickerDeps {
 	readonly resume: (candidate: ResumeCandidate) => Promise<RunId>;
 }
 
-/** Orchestrator-backed commands use the same public candidates as Shell (RULES-6.2, 6.5). */
+/** Facade Code Framework-backed commands use the same public candidates as Shell (RULES-6.2, 6.5). */
 export function createFrameworkPickers(deps: FrameworkPickerDeps): {
 	readonly newAgent: (startAt?: LaunchStart) => Promise<void>;
 	readonly stopAgent: () => Promise<void>;
@@ -68,7 +68,7 @@ function matchesAgentRow(row: vscode.QuickPickItem & { readonly cli: string; rea
 	return matchesCliSearch(query, row.cli, cliDisplayName(row.cli), row, row.searchText);
 }
 
-/** Stop selects a running Managed Agent by its original Framework reference (LIFECYCLE-5.3). */
+/** Stop selects a running Managed Agent by its original Facade Code Framework reference (LIFECYCLE-5.3). */
 async function pickRunningAgent(deps: FrameworkPickerDeps, flow: Flow, action: {
 	readonly title: string;
 	readonly empty: string;

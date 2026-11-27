@@ -1,7 +1,7 @@
 //! A run's hooks: `facade hook session-start <session-file>`, `title`, `instructions` and
-//! `approve`, which Facade gives the CLI of a run it starts. They record the run's own session in
+//! `approve`, which Facade Code Framework gives the CLI of a run it starts. They record the run's own session in
 //! its private folder and nothing else: they join no guest and take no message, and they never
-//! start Facade or fail the CLI.
+//! start Facade Code Framework or fail the CLI.
 
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
@@ -39,7 +39,7 @@ fn input(event: &str, session: &str, more: Value) -> String {
     input.to_string()
 }
 
-/// The session file of agent `id`'s run, which Facade names in its CLI's session-start hook.
+/// The session file of agent `id`'s run, which Facade Code Framework names in its CLI's session-start hook.
 fn session_file(home: &TestHome, id: &str) -> PathBuf {
     facade_rules::run_folder(&home.path.join("framework/runs"), id)
         .expect("the agent has one run")
@@ -51,7 +51,7 @@ fn inspected_session(home: &TestHome, name: &str) -> Value {
     home.inspect_agent(name)["agent"]["session"].clone()
 }
 
-/// In a run Facade started, the run's hooks record its own session and do nothing else: they join
+/// In a run Facade Code Framework started, the run's hooks record its own session and do nothing else: they join
 /// no guest and take nothing, and its typist delivers its messages.
 #[test]
 fn a_run_s_hooks_record_its_session_and_join_no_guest() {
@@ -191,7 +191,7 @@ fn a_hook_with_a_variable_or_a_word_that_is_not_utf8_exits_0() {
     );
 }
 
-/// A hook never starts Facade and never fails its CLI's turn, whatever its input; in a background
+/// A hook never starts Facade Code Framework and never fails its CLI's turn, whatever its input; in a background
 /// job of Claude Code it does nothing.
 #[test]
 fn hooks_never_start_facade_and_always_exit_0() {
@@ -215,7 +215,7 @@ fn hooks_never_start_facade_and_always_exit_0() {
     }
     assert!(
         !socket_exists(&home.daemon_socket()),
-        "a hook started Facade"
+        "a hook started Facade Code Framework"
     );
     let ada = home.start_fake("ada");
     let file = session_file(&home, &ada.id);

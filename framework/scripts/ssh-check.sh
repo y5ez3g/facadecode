@@ -47,7 +47,7 @@ fail() {
 	failed=1
 }
 
-# Facade as this script runs it here; only the logins start its services.
+# Facade Code Framework as this script runs it here; only the logins start its services.
 facade() { FACADE_HOME=$home "$bin/facade" "$@"; }
 
 # Waits up to 20 seconds for <agent>'s screen to show <text>, once the login has started the daemon.

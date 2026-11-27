@@ -1,14 +1,14 @@
 # Facade Code Framework
 
 Facade Code Framework runs AI coding CLIs, such as Claude Code and Codex, as agents. It starts each CLI in a terminal it keeps,
-reads what the CLI shows, types into it, delivers messages between agents, and gives every CLI Facade's tools over MCP.
+reads what the CLI shows, types into it, delivers messages between agents, and gives every CLI Facade Code Framework's tools over MCP.
 Clients, such as the `facade` commands and an editor, use it through a local socket, a named pipe on Windows.
 
 This folder is a Rust workspace. It builds two programs:
 
 - `facade`: the commands a person runs, the hooks a CLI runs, and two services. The keeper (`facade keeper`) is the
   parent of every CLI. The daemon (`facade daemon`) keeps the agents and serves clients.
-- `facade-mcp`: the relay a CLI runs as Facade's MCP server. It passes each MCP line between the CLI and the daemon.
+- `facade-mcp`: the relay a CLI runs as Facade Code Framework's MCP server. It passes each MCP line between the CLI and the daemon.
 
 ## Build and test
 
@@ -20,8 +20,7 @@ cargo build              # target/debug/: facade, facade-mcp, facade-fakecli, fa
 cargo test --workspace
 ```
 
-`rust-toolchain.toml` pins the toolchain. The scenario tests in `tests/` run the built programs in temporary Facade
-homes and drive `facade-fakecli`, a test CLI with an input box. To run every test in a temporary folder of its own,
+`rust-toolchain.toml` pins the toolchain. The scenario tests in `tests/` run the built programs in temporary Facade homes and drive `facade-fakecli`, a test CLI with an input box. To run every test in a temporary folder of its own,
 with the home folder there too, then report anything a test wrote to the home folder and any process the run left
 behind:
 
@@ -35,11 +34,11 @@ The stress test is a program of its own, not part of `cargo test`:
 CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo run --release -p facade-scenarios --bin facade-stress
 ```
 
-Framework builds for macOS and for Linux, each on x64 and arm64, and for Windows 11 or Windows Server 2022 and later on x64
+Facade Code Framework builds for macOS and for Linux, each on x64 and arm64, and for Windows 11 or Windows Server 2022 and later on x64
 and Windows 11 on arm64. Linux needs kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed. An agent
 keeps running when the SSH login that started it ends, except where systemd ends a login's processes when it ends
 (`KillUserProcesses=yes`, or `KillOnlyUsers` naming that user), which linger does not prevent: there, an administrator lists the user in
-`KillExcludeUsers`. Facade changes no system settings; `facade machine add` and `connect` say when it applies. Windows builds with the MSVC toolchain, and every
+`KillExcludeUsers`. Facade Code Framework changes no system settings; `facade machine add` and `connect` say when it applies. Windows builds with the MSVC toolchain, and every
 Windows build carries the ConPTY package's files for its architecture, from [vendor/conpty](vendor/conpty/), which the
 build copies beside the programs.
 
@@ -67,7 +66,7 @@ facade stop two                            # ends the CLI and keeps the agent re
 ```
 
 `fake` is the test CLI's rule. Only builds with debug assertions, such as `cargo build`'s, have it. A CLI's rule tells
-Facade how to start the CLI, read its input box and resume its session. The test CLI reports the session that
+Facade Code Framework how to start the CLI, read its input box and resume its session. The test CLI reports the session that
 `FAKECLI_SESSION` names, so this agent can resume:
 
 ```sh
@@ -86,7 +85,7 @@ Use an agent's name, a bare ID such as `a2`, or its full reference from the list
 
 `facade status` shows the Facade home and, when it responds, this command's version, the running services and the
 agent count. A service using a different build shows its build beside its PID. Status makes one connection attempt
-without starting or upgrading Facade. The logs are in `$FACADE_HOME/framework/logs/`. `facade --version` prints the
+without starting or upgrading Facade Code Framework. The logs are in `$FACADE_HOME/framework/logs/`. `facade --version` prints the
 command's version locally.
 
 To clean up this temporary home, stop all running managed agents and wait for the daemon's socket to close before
@@ -143,9 +142,9 @@ Remove-Item -LiteralPath $env:FACADE_HOME -Recurse -Force
 
 | Folder | Crate | What it is |
 | --- | --- | --- |
-| `crates/base` | `facade-base` | What every part shares: both protocols and their framing, the daemon client, what Facade asks of the operating system, the settings file, and the texts a model reads |
+| `crates/base` | `facade-base` | What every part shares: both protocols and their framing, the daemon client, what Facade Code Framework asks of the operating system, the settings file, and the texts a model reads |
 | `crates/screen` | `facade-screen` | A headless terminal for one agent: its screen and scrollback, replies to terminal queries, and full redraws |
-| `crates/rules` | `facade-rules` | What Facade knows of each CLI: how it starts and resumes, where its input box is, what its screen says of its state, its session files, and Facade's way into it |
+| `crates/rules` | `facade-rules` | What Facade Code Framework knows of each CLI: how it starts and resumes, where its input box is, what its screen says of its state, its session files, and Facade Code Framework's way into it |
 | `crates/keeper` | `facade-keeper` | `facade keeper`: the parent of every CLI. It holds each terminal so the terminal outlives a daemon, and keeps a daemon running |
 | `crates/relay` | `facade-relay` | `facade-mcp`: passes each MCP line between a CLI and the daemon |
 | `crates/daemon` | `facade-daemon` | `facade daemon`: the agents, their screens, state and messages, windows and guests, the store, and the protocol server |
@@ -158,15 +157,15 @@ Remove-Item -LiteralPath $env:FACADE_HOME -Recurse -Force
 | `scripts` | — | The full test run, the check for leftover processes, the check of each commit, and the check that agents outlive an SSH login |
 
 The crates depend in one direction: base and screen, then rules, then keeper and daemon, then facade. The relay depends
-on no other Facade crate.
+on no other Facade Code Framework crate.
 
 ## Read next
 
 - [Architecture](../docs/framework/ARCHITECTURE.md): the processes and threads, how they talk, and how the code is split
   into islands.
 - [Islands](../docs/framework/islands/): each crate's design, from the crate down to its smallest part.
-- [Features](../docs/framework/FEATURES.md): what the Framework supports and how to use it.
+- [Features](../docs/framework/FEATURES.md): what the Facade Code Framework supports and how to use it.
 - [Glossary](../docs/framework/GLOSSARY.md): one word for each thing.
-- [Engineering](../docs/framework/ENGINEERING.md): how a team of agents builds the Framework.
+- [Engineering](../docs/framework/ENGINEERING.md): how a team of agents builds the Facade Code Framework.
 - [Daemon protocol](protocol/PROTOCOL.md), [keeper protocol](protocol/KEEPER.md) and
-  [Facade's MCP tools](../docs/extension/engineering/MCP.md).
+  [Facade Code Framework's MCP tools](../docs/extension/engineering/MCP.md).

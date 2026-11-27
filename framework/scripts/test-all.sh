@@ -33,7 +33,7 @@ done
 export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2
 export GIT_CONFIG_GLOBAL="$tmp/gitconfig"
-printf '[user]\n    name = Facade QA\n    email = qa@example.invalid\n' > "$GIT_CONFIG_GLOBAL"
+printf '[user]\n    name = Facade Code Framework QA\n    email = qa@example.invalid\n' > "$GIT_CONFIG_GLOBAL"
 mkdir -p "$tmp/home"
 cd "$framework" || exit 2
 mkdir -p "$(dirname "$log")"

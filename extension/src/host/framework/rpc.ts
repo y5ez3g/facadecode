@@ -31,7 +31,7 @@ export function daemonSocketPath(home: string): string {
 }
 
 /**
- * Framework's `socket_dir` check, made before connecting: a socket folder that exists must be a folder (not a link) owned by this user,
+ * Facade Code Framework's `socket_dir` check, made before connecting: a socket folder that exists must be a folder (not a link) owned by this user,
  * or another user could listen there and receive the window's environment and every key typed. False where it is missing: there is no
  * socket to connect to, and the daemon makes the folder.
  */
@@ -46,7 +46,7 @@ function socketFolderIsOurs(dir: string): boolean {
 		throw err;
 	}
 	if (!stat.isDirectory() || stat.uid !== (process.getuid?.() ?? os.userInfo().uid)) {
-		throw new Error(`Facade will not connect: ${dir} is not a folder of this user.`);
+		throw new Error(`Facade Code Framework will not connect: ${dir} is not a folder of this user.`);
 	}
 	return true;
 }

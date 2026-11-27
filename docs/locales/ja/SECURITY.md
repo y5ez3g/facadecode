@@ -1,6 +1,6 @@
 # セキュリティ
 
-Facade Code は [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) でオープンに開発しています。
+Facade Code Extension は [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) でオープンに開発しています。
 
 ## 脆弱性の報告
 

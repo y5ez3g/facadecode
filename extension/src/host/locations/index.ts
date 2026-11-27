@@ -39,7 +39,7 @@ export function createLocationService(workspaceState: vscode.Memento, log: LogPo
 
 /**
  * New worktrees for the window's locations (WORKTREES-2), through the editor's Git extension, serialized per destination folder
- * across the environment's windows by locks in its Facade directory.
+ * across the environment's windows by locks in its Facade Code Extension directory.
  */
 export function createWorktreeService(locations: CreationLocations, log: LogPort, home = facadeHome()): WorktreeService {
 	return new WorktreeService({ locations, git: editorGit(), native: editorNativeGit(), settings: editorGitCreationSettings(), locks: path.join(home, 'locks', 'worktrees'), log });

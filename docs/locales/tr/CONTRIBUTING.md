@@ -1,6 +1,6 @@
-# Facade Code'a Katkıda Bulunmak
+# Facade Code Extension'a Katkıda Bulunmak
 
-Yardımınız için teşekkürler. Facade Code, [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) üzerinde açık olarak geliştirilir.
+Yardımınız için teşekkürler. Facade Code Extension, [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) üzerinde açık olarak geliştirilir.
 
 ## Hatalar ve fikirler
 
@@ -18,7 +18,7 @@ Bu deponun nasıl işlediği [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.m
 
 - `main` dalından `feature/<number>-<name>` adıyla dal açın.
 - Merge edin, asla rebase etmeyin: bir özellik, incelemeden sonra `--no-ff` ile `main` dalına girer.
-- Facade Code'un dosyalarını bir arada tutun; VS Code'un dosyalarında ise mantığı yeniden yazmak yerine isteğe bağlı kancalar (hook) ekleyin. Böylece daha yeni bir VS Code sürümünü birleştirmek az çaba gerektirir.
+- Facade Code Extension'un dosyalarını bir arada tutun; VS Code'un dosyalarında ise mantığı yeniden yazmak yerine isteğe bağlı kancalar (hook) ekleyin. Böylece daha yeni bir VS Code sürümünü birleştirmek az çaba gerektirir.
 - Her özelliğin bir açma/kapama anahtarı vardır ve kapalıyken standart VS Code elde edilir.
 - Her değişikliğe test ekleyin.
 - Belgeleri, yorumları ve commit mesajlarını İngilizce yazın.

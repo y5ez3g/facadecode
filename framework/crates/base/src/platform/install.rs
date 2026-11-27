@@ -1,4 +1,4 @@
-//! Looks up stable releases and runs the published Facade installer.
+//! Looks up stable releases and runs the published Facade Code Framework installer.
 
 use std::path::Path;
 use std::process::Command;

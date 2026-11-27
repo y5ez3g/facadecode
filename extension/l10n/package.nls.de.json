@@ -1,8 +1,8 @@
 {
 	"displayName": "Facade Code: KI-Coding-Agenten gemeinsam ausführen",
 	"description": "Der VS Code-Zugang zu Facade Code. Starten Sie Coding-Agenten auf Ihren Rechnern und öffnen Sie deren Terminals neben Ihren Dateien.",
-	"view.container": "Facade Code",
-	"command.category": "Facade Code",
+	"view.container": "Facade Code Extension",
+	"command.category": "Facade Code Extension",
 	"command.newAgent": "Neuer Agent...",
 	"command.openTerminal": "Terminal öffnen",
 	"command.renameAgent": "Agent umbenennen...",
@@ -17,7 +17,7 @@
 	"command.moveUp": "Nach oben verschieben",
 	"command.moveDown": "Nach unten verschieben",
 	"command.revealAgent": "Agent anzeigen",
-	"config.title": "Facade Code",
+	"config.title": "Facade Code Extension",
 	"config.claude.title": "Claude Code",
 	"config.codex.title": "Codex",
 	"config.antigravity.title": "Antigravity",
@@ -31,7 +31,7 @@
 	"config.omp.title": "Oh My Pi",
 	"config.copilot.title": "GitHub Copilot CLI",
 	"windowDisplayName": "Facade Code-Fensterkomponente",
-	"windowDescription": "Räumt alte Facade Code-Terminal-Tabs auf, wenn sich ein Remote-Fenster erneut verbindet oder die Erweiterung neu startet.",
+	"windowDescription": "Räumt alte Facade Code Extension-Terminal-Tabs auf, wenn sich ein Remote-Fenster erneut verbindet oder die Erweiterung neu startet.",
 	"command.filter": "Agenten filtern...",
 	"command.showAgentLaunch": "Agent-Befehlszeile anzeigen...",
 	"command.showAgentsLog": "Agentenprotokoll anzeigen",
@@ -41,6 +41,6 @@
 	"command.continueSession": "Sitzung fortsetzen...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Das Facade-Verzeichnis dieses Fensters für Einstellungen, Agentendaten und die Migration aus früheren Versionen. Ein hier angegebener Pfad hat Vorrang vor `FACADE_HOME` und dem Standardpfad `~/.facade`.\n\n[In facade.json bearbeiten](command:facade.openSettingsFile) um YOLO, vorgeschlagene Namen und den Start der CLIs zu ändern.",
+	"config.home": "Das Facade Code Extension-Verzeichnis dieses Fensters für Einstellungen, Agentendaten und die Migration aus früheren Versionen. Ein hier angegebener Pfad hat Vorrang vor `FACADE_HOME` und dem Standardpfad `~/.facade`.\n\n[In facade.json bearbeiten](command:facade.openSettingsFile) um YOLO, vorgeschlagene Namen und den Start der CLIs zu ändern.",
 	"config.home.pattern": "Der Pfad muss mit ~/ beginnen oder absolut sein."
 }

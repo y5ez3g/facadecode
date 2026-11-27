@@ -15,7 +15,7 @@ const MESSAGES: &str = "messages-";
 /// How long a screen's file is kept.
 const SCREEN_KEPT_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// The folder of result files in the Framework folder `framework`.
+/// The folder of result files in the Facade Code Framework folder `framework`.
 pub(crate) fn results_folder(framework: &Path) -> PathBuf {
     framework.join("results")
 }

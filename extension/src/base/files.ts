@@ -141,7 +141,7 @@ export interface FileStamp {
 /** A file another program wrote between its read and the write that was to replace it: nothing was written. */
 export class FileChangedError extends Error {
 	constructor(file: string) {
-		super(`Another process changed '${file}' while Facade was preparing to write it. Facade wrote nothing.`);
+		super(`Another process changed '${file}' while Facade Code Extension was preparing to write it. Facade Code Extension wrote nothing.`);
 		this.name = 'FileChangedError';
 	}
 }
@@ -233,7 +233,7 @@ export interface JsonLayout {
 	readonly finalNewline: boolean;
 }
 
-/** The layout of a JSON file Facade creates. */
+/** The layout of a JSON file Facade Code Extension creates. */
 const NEW_FILE_LAYOUT: JsonLayout = { byteOrderMark: false, lineEnding: '\n', indent: 2, finalNewline: true };
 
 /** The layout of a JSON text: its byte order mark, line endings, indentation and final newline. */

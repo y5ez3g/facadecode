@@ -1,6 +1,6 @@
 # Bezpieczeństwo
 
-Facade Code jest rozwijane otwarcie na [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
+Facade Code Extension jest rozwijane otwarcie na [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
 ## Zgłaszanie luki
 

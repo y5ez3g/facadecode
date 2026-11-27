@@ -1,4 +1,4 @@
-//! Which build of Facade this is, and which build takes over from which.
+//! Which build of Facade Code Framework this is, and which build takes over from which.
 //!
 //! A test of a debug build can have a program play another build: it runs the program through a
 //! script of its own and names the build in `FACADE_TEST_BUILD`, the script in
@@ -6,7 +6,7 @@
 
 use std::{cmp::Ordering, path::PathBuf};
 
-/// The package version of every Facade program in this build.
+/// The package version of every Facade Code Framework program in this build.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Orders stable builds by version and then source commit time. Legacy builds without a time
@@ -33,7 +33,7 @@ fn build_order(build: &str) -> Option<([u64; 3], Option<u64>)> {
     Some((version, time))
 }
 
-/// Whether a running Facade of build `running` can hand over to the newer build.
+/// Whether a running Facade Code Framework of build `running` can hand over to the newer build.
 pub fn takes_over(newer: &str, running: &str) -> bool {
     compare_builds(newer, running) == Some(Ordering::Greater)
 }

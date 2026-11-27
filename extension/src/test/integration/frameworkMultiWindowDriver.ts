@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Each test window runs this workspace extension beside Facade. Files in the isolated test
+// Each test window runs this workspace extension beside Facade Code Extension. Files in the isolated test
 // directory let the runner interleave actions in two editor windows of the same Facade home.
 
 import * as assert from 'assert';
@@ -253,7 +253,7 @@ async function perform(action: Action): Promise<unknown> {
 					vscode.window.tabGroups.activeTabGroup.activeTab?.label === 'Settings' || undefined);
 				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
 				await vscode.commands.executeCommand('facade.openSettingsFile');
-				await until('Edit in facade.json to open the Orchestrator settings file', () => {
+				await until('Edit in facade.json to open the Facade Code Framework settings file', () => {
 					const file = vscode.window.activeTextEditor?.document.uri.fsPath;
 					return file && normalizeDriveLetter(file) === normalizeDriveLetter(action.file) || undefined;
 				});
@@ -314,7 +314,7 @@ async function perform(action: Action): Promise<unknown> {
 				}) : undefined;
 				if (before) {
 					assert.strictEqual(card.runId, `${before.reference.machine_id}/${before.reference.agent_id}`);
-					assert.ok(before.pid && before.process === 'running', 'the exact Framework agent is already running');
+					assert.ok(before.pid && before.process === 'running', 'the exact Facade Code Framework agent is already running');
 					assert.strictEqual((await view()).terminals, 0, 'the fresh window has no terminal tab before Open Terminal');
 				}
 				const opened = await vscode.commands.executeCommand('facade.openTerminal', { run_id: card.runId });
@@ -322,7 +322,7 @@ async function perform(action: Action): Promise<unknown> {
 					assert.strictEqual(opened, true);
 					await until('Open Terminal to create the native tab for the exact existing run', async () =>
 						hasAgentTab(card) && (await view()).terminals === 1 || undefined);
-					const after = await until('the exact Framework agent to gain one Attach viewer', async () => {
+					const after = await until('the exact Facade Code Framework agent to gain one Attach viewer', async () => {
 						const { agent, viewers } = await inspect(address);
 						return viewers.length === 1 ? agent : undefined;
 					});

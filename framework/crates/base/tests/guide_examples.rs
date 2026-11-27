@@ -259,7 +259,9 @@ impl Exchange {
                     let supported = &line["error"]["data"]["details"]["supported_api_versions"];
                     schema.named("ProtocolMismatchDetails", &line["error"]["data"]["details"])?;
                     if line["error"]["code"] != -32000 {
-                        return Err("a disjoint offer must use the Facade error code".into());
+                        return Err(
+                            "a disjoint offer must use the Facade Code Framework error code".into(),
+                        );
                     }
                     if supported != &schema.0["api_versions"] {
                         return Err(format!("version refusal advertises {supported}"));

@@ -1,4 +1,4 @@
-//! The places an agent can work in and the worktrees Facade adds to them. A start checks its
+//! The places an agent can work in and the worktrees Facade Code Framework adds to them. A start checks its
 //! folder on the running machine and can create a worktree at that checkout's current HEAD.
 //!
 //! Every folder of a window is a location. So is every checkout of the Git repository a folder sits
@@ -771,7 +771,7 @@ mod tests {
         run(&["init", "-q", "-b", "main"]);
         run(&[
             "-c",
-            "user.name=Facade",
+            "user.name=Facade Code Framework",
             "-c",
             "user.email=facade@example.invalid",
             "commit",

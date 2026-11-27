@@ -26,7 +26,7 @@ export function verifyArchivePair(archive, vsix, target) {
 		assert.ok(expected && member(program)?.equals(expected), program + ' differs from the paired VSIX');
 	}
 	const marker = editor.get('extension/bin/' + FRAMEWORK_BUILD_FILE);
-	assert.ok(marker && member(FRAMEWORK_BUILD_FILE)?.equals(marker), 'Framework archive BUILD differs from the paired VSIX');
+	assert.ok(marker && member(FRAMEWORK_BUILD_FILE)?.equals(marker), 'Facade Code Framework archive BUILD differs from the paired VSIX');
 	return marker.toString('utf8');
 }
 
@@ -77,7 +77,7 @@ function packageFramework(target, vsix, binDir, output) {
 		execFileSync(tar, [windows ? '-acf' : '-czf', destination, '-C', stage, ...entries, FRAMEWORK_BUILD_FILE, 'LICENSE.txt'], { stdio: 'inherit' });
 		const digest = createHash('sha256').update(fs.readFileSync(destination)).digest('hex');
 		fs.writeFileSync(path.join(output, 'SHA256SUMS'), digest + '  ' + archive + '\n');
-		console.log('Packed Facade ' + build + ' in ' + destination);
+		console.log('Packed Facade Code Framework ' + build + ' in ' + destination);
 	} finally {
 		fs.rmSync(stage, { recursive: true, force: true });
 	}

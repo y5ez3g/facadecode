@@ -86,7 +86,7 @@ impl RelayHelloParams {
         let hello: RelayHelloParams = decode_arguments(params)?;
         if hello.relay != RELAY_CONTRACT {
             let message = format!(
-                "this Facade speaks relay contract {RELAY_CONTRACT}, not {}; restart the CLI",
+                "this Facade Code Framework speaks relay contract {RELAY_CONTRACT}, not {}; restart the CLI",
                 hello.relay
             );
             return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));

@@ -29,7 +29,7 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 	}
 }
 
-/** The installed Facade Code's version. */
+/** The installed Facade Code Extension's version. */
 function version(): string | undefined {
 	return (vscode.extensions.getExtension('facade.facadecode')?.packageJSON as { version?: string } | undefined)?.version;
 }

@@ -10,14 +10,14 @@ import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
 import { directoryOfFilter, locationOfFilter, PanelModel } from '../model';
 import { PanelView } from '../panel';
 import { pickFilter } from '../pickers/filter';
-import { createFrameworkPickers, type FrameworkPickerDeps } from '../pickers/orchestrator';
+import { createFrameworkPickers, type FrameworkPickerDeps } from '../pickers/framework';
 import { PanelPrefs } from '../order';
 import { registerFrameworkAgentCommands, targetOf, type FrameworkCardActions } from './agent';
 
 /** Defined by the build: true only in the integration suite's build, whose test commands the shipped one has none of (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
 
-export interface OrchestratorUiDeps {
+export interface FrameworkUiDeps {
 	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange' | 'pins' | 'reorderPins'> & FrameworkCardActions;
 	readonly pickers: Omit<FrameworkPickerDeps, 'select' | 'locations' | 'media'>;
 	readonly locations: LocationPort;
@@ -34,19 +34,19 @@ export interface OrchestratorUiDeps {
 /** The words a card is said in, in the window's language (PANEL-1.4). */
 function cardWords(): CardWords {
 	return {
-		orchestrator: {
+		framework: {
 			justDone: vscode.l10n.t('Just done'),
 			waitingForYou: vscode.l10n.t('Waiting for you'),
 			ended: vscode.l10n.t('Ended'),
 			unknown: vscode.l10n.t('Unknown'),
 			stateError: vscode.l10n.t('Error'),
-			toolsError: vscode.l10n.t('Facade tools unavailable'),
+			toolsError: vscode.l10n.t('Facade Code Framework tools unavailable'),
 			address: (value: string) => vscode.l10n.t('Agent reference: {0}', value),
 			session: (value: string) => vscode.l10n.t('Session: {0}', value),
 			name: (value: string) => vscode.l10n.t('Name: {0}', value)
 		},
 		title: value => vscode.l10n.t("Title: {0}", value),
-		// The details' first row where a run has no title: its CLI has not saved one yet; or Facade has no history reader for its CLI
+		// The details' first row where a run has no title: its CLI has not saved one yet; or Facade Code Extension has no history reader for its CLI
 		untitledPending: vscode.l10n.t("No title yet"),
 		untitledUnreadable: vscode.l10n.t("Title unavailable"),
 		location: value => vscode.l10n.t("Location: {0}", value),
@@ -74,7 +74,7 @@ function cardWords(): CardWords {
 					: why === 'screen_unrecognized' ? vscode.l10n.t("State unrecognized · check terminal")
 						: vscode.l10n.t("State reset · check terminal"),
 		needsAttention: vscode.l10n.t("Attention needed"),
-		toolsConnecting: vscode.l10n.t("Facade tools not connected yet"),
+		toolsConnecting: vscode.l10n.t("Facade Code Framework tools not connected yet"),
 		needsPermission: vscode.l10n.t("Permission needed"),
 		needsSignIn: vscode.l10n.t("Sign-in needed"),
 		hasQuestion: vscode.l10n.t("Answer needed"),
@@ -89,25 +89,25 @@ function cardWords(): CardWords {
 		// {0} is why its new worktree could not be created, without its closing period
 		worktreeFailed: reason => vscode.l10n.t("Worktree failed · {0}", reason),
 		toolsUnavailable: (problem, file) => problem === 'cmd'
-			? vscode.l10n.t("Facade tools unavailable · replace .cmd with CLI in facade.json")
+			? vscode.l10n.t("Facade Code Framework tools unavailable · replace .cmd with CLI in facade.json")
 			: problem === 'conflict' && file
-				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
-				? vscode.l10n.t("Facade tools unavailable · move or rename {0}", file)
+				// {0} is a file in the agent's folder that Facade Code Extension will not overwrite, such as .agents/skills/facade/SKILL.md
+				? vscode.l10n.t("Facade Code Framework tools unavailable · move or rename {0}", file)
 				: problem === 'variable' && file
-					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
-					? vscode.l10n.t("Facade tools unavailable · {0} unreadable", file)
+					// {0} is an environment variable of the person's own that Facade Code Extension could not read, such as OPENCODE_CONFIG_CONTENT
+					? vscode.l10n.t("Facade Code Framework tools unavailable · {0} unreadable", file)
 					: problem === 'disconnected'
-						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
-						? vscode.l10n.t("Facade tools disconnected")
-						: vscode.l10n.t("Facade tools unavailable · file creation failed"),
+						// The agent's CLI stopped the Facade Code Framework tools it had started with, or they ended on their own
+						? vscode.l10n.t("Facade Code Framework tools disconnected")
+						: vscode.l10n.t("Facade Code Framework tools unavailable · file creation failed"),
 		// {0} the agent that sent it, with its window where that is another; {1} its text
 		saidByAgent: (sender, line) => vscode.l10n.t("Last message from agent {0}: {1}", sender, line),
 		saidByPerson: line => vscode.l10n.t("Last input: {0}", line),
-		saidByFacade: line => vscode.l10n.t("Facade result: {0}", line)
+		saidByFacade: line => vscode.l10n.t("Facade Code Framework result: {0}", line)
 	};
 }
 
-export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposable[] {
+export function registerFrameworkUi(deps: FrameworkUiDeps): vscode.Disposable[] {
 	const { agents, locations } = deps;
 	const model = new PanelModel({
 		agents, locations,
@@ -115,7 +115,7 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 		words: cardWords(),
 		remote: vscode.env.remoteName !== undefined,
 		ready: deps.ready,
-		orchestrator: true,
+		framework: true,
 		icons: () => deps.pickers.icons
 	});
 	const pickers = createFrameworkPickers({

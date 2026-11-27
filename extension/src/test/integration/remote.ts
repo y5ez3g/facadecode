@@ -11,7 +11,7 @@
 // extension's folder, built here, mounted at its own path; the editor attaches to it as Dev Containers' Attach to Running
 // Container does, and its server goes in the container.
 //
-// Facade's root, Claude Code's configuration and the fake CLIs' records are the run's own on every computer, at one path they all
+// Facade Code Extension's root, Claude Code's configuration and the fake CLIs' records are the run's own on every computer, at one path they all
 // resolve, `/tmp/fdrt-…` - on Windows `\tmp\fdrt-…` of the system drive - as the editor gives its extension hosts, local and
 // remote, one environment. FACADE_IT_REMOTE_ROOT names another folder for it, the same on every computer, such as /var/tmp for a
 // host whose /tmp is short of room. Scenarios, each on every host - a container's remote window standing for the SSH window:
@@ -20,9 +20,9 @@
 //   ssh-ssh    an agent of an SSH window works with an agent of another SSH window on the same host
 //   local-ssh  an agent of a local window works with an agent of an SSH window
 //   ssh-local  an agent of an SSH window works with an agent of a local window
-//   ssh-lifetime  a Framework agent keeps its process and screen through the SSH window's lifecycle
-//   ssh-multi-window  two Framework editor windows share one Facade home on an SSH host
-//   ssh-network  two Framework Remote-SSH windows attach to one local agent over an explicit SSH connection
+//   ssh-lifetime  a Facade Code Framework agent keeps its process and screen through the SSH window's lifecycle
+//   ssh-multi-window  two Facade Code Framework editor windows share one Facade home on an SSH host
+//   ssh-network  two Facade Code Framework Remote-SSH windows attach to one local agent over an explicit SSH connection
 //
 // and, given two hosts, `hosts`: an agent of an SSH window on the first works with an agent of an SSH window on the second.
 //
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
 		throw new Error(`FACADE_IT_ONLY is one of ${SCENARIOS.join(', ')}.`);
 	}
 	const keep = !!process.env.FACADE_IT_KEEP;
-	// Framework is the current runtime. Use the legacy mode with a checkout of a legacy build.
+	// Facade Code Framework is the current runtime. Use the legacy mode with a checkout of a legacy build.
 	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'framework';
 	if (implementation !== 'legacy' && implementation !== 'framework') {
 		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
@@ -139,10 +139,10 @@ async function main(): Promise<void> {
 
 	const frameworkOnly = connectOnly || only === 'ssh-lifetime' || only === 'ssh-multi-window' || only === 'ssh-network';
 	if (frameworkOnly && (implementation !== 'framework' || !aliases.length)) {
-		throw new Error(`The ${only} journey needs the Framework and an SSH host.`);
+		throw new Error(`The ${only} journey needs the Facade Code Framework and an SSH host.`);
 	}
 	const base = process.env.FACADE_IT_REMOTE_ROOT || '/tmp';
-	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
+	// Read before this: it removes every variable of Facade Code Extension's and of the CLIs' from this process
 	sanitizedEnvironment();
 
 	// One path on every computer: short, for the editor's sockets, and made anew on each
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
 		const folder = path.resolve(__dirname, '..', '..', '..', '..');
 		const alias = `${name}-container`;
 		try {
-			// On the Framework the stage's bin/ holds this computer's framework, which the container cannot run: FACADE_IT_REMOTE_BIN names a folder
+			// On the Facade Code Framework the stage's bin/ holds this computer's framework, which the container cannot run: FACADE_IT_REMOTE_BIN names a folder
 			// of framework's programs built for the container's platform, which the container sees in its place
 			const linuxFramework = process.env.FACADE_IT_REMOTE_BIN ? ['--volume', `${path.resolve(process.env.FACADE_IT_REMOTE_BIN)}:${folder}/build/extension-it/bin:ro`] : [];
 			execFileSync('docker', ['run', '--detach', '--name', alias, '--user', 'node', '--volume', `${folder}:${folder}:ro`, ...linuxFramework, image, 'sleep', 'infinity'], { stdio: 'pipe' });
@@ -215,7 +215,7 @@ async function main(): Promise<void> {
 	const editors: ChildProcess[] = [];
 	const server = (host: Host) => host.at(`${root}/server`);
 
-	// Every built-in points to a fake on every computer, in the Facade settings file of each, written again with each new Facade root:
+	// Every built-in points to a fake on every computer, in the Facade Code Extension settings file of each, written again with each new Facade Code Extension root:
 	// the run never starts a person's real CLI (CONFIGURATION-1.1)
 	const BUILT_INS = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
 	const facadeSettings = (fake: string) => JSON.stringify({ clis: Object.fromEntries(BUILT_INS.map(id => [id, { command: fake }])) });
@@ -263,7 +263,7 @@ async function main(): Promise<void> {
 
 	/**
 	 * Ends what the run left on `host` - the editor's server, the ptyds, their agents - and its fake CLIs' records there; then its
-	 * root where asked, else a new Facade root and Claude Code configuration for the next scenario: the records, registry and
+	 * root where asked, else a new Facade Code Extension root and Claude Code configuration for the next scenario: the records, registry and
 	 * remembered locations of one never reach the next.
 	 */
 	const clean = (host: Host, removeRoot: boolean) => host.kind === 'container' ? cleanContainer(host, removeRoot) : host.run(host.platform === 'windows'
@@ -277,7 +277,7 @@ New-Item -ItemType Directory -Force -Path ${literal(host.at(facade))}, ${literal
 
 	/**
 	 * A container's clean: every process in it but its first - the editor's server, the ptyds, their agents - and the fake CLIs'
-	 * records, then a new Facade root and Claude Code configuration; or the container itself, where its root goes too.
+	 * records, then a new Facade Code Extension root and Claude Code configuration; or the container itself, where its root goes too.
 	 */
 	const cleanContainer = (host: Host, removeRoot: boolean) => {
 		if (removeRoot) {
@@ -293,7 +293,7 @@ New-Item -ItemType Directory -Force -Path ${literal(host.at(facade))}, ${literal
 		fakeClis(root);
 		newRepository(local.app);
 		newRepository(local.peer);
-		// Each host's half: the same root, its Facade settings file pointing to its fake, and two repositories
+		// Each host's half: the same root, its Facade Code Extension settings file pointing to its fake, and two repositories
 		for (const host of hosts) {
 			try {
 				host.run(host.platform === 'windows' ? `
@@ -402,7 +402,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			// An SSH window is named for its host by its workspace extension, which tells its component: that is its label
 			const label = await registeredWindow(facade, 'local' in folder ? each => each === 'local-peer' : each => each.startsWith(`remote-peer [`) && each.includes(folder.host.alias));
 			if (label === undefined) {
-				throw new Error(`The ${editorName} window did not join this computer's Facade windows.`);
+				throw new Error(`The ${editorName} window did not join this computer's Facade Code Extension windows.`);
 			}
 			return label;
 		};
@@ -423,7 +423,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 				fs.rmSync(path.join(root, file));
 			}
-			// This computer's Facade root and Claude Code configuration anew too, as each host's
+			// This computer's Facade Code Extension root and Claude Code configuration anew too, as each host's
 			for (const dir of [facade, claude]) {
 				fs.rmSync(dir, { recursive: true, force: true });
 				fs.mkdirSync(dir, { mode: 0o700 });
@@ -683,7 +683,7 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 				},
 				{
 					scenario: 'local-ssh', title: on, go: async () => {
-						// The Framework's computers do not work together: of this scenario the local window's own journeys run, the container started beside it
+						// The Facade Code Framework's computers do not work together: of this scenario the local window's own journeys run, the container started beside it
 						if (implementation === 'framework') {
 							await suite('local-ssh', { local: fs.realpathSync(local.app) }, { FACADE_IT_CLI: 'claude' });
 							return;

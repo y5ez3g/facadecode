@@ -257,7 +257,7 @@ def command_for(root, bindings, log_path, vscode, env):
     else:
         editor_env['FACADE_IT_EXPECT_DRIVER'] = binding['name']
         if binding['journey'] in ('activation-failure', 'incompatible-activation'):
-            # Observe the outcome of Framework startup through the real workbench.
+            # Observe the outcome of Facade Code Framework startup through the real workbench.
             editor_env['FACADE_IT_IMPLEMENTATION'] = 'framework'
     return root / 'extension', ['xvfb-run', '-a', 'node', 'build/out/test/integration/run.js'], editor_env
 

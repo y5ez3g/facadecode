@@ -151,7 +151,7 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		await tick();
 		await tick();
 		const offers = editor.notices.filter(notice => notice.kind === 'information');
-		assert.deepStrictEqual(offers.map(notice => [notice.text, notice.actions]), [['The Facade Code Window Component is installed. Reload the window to start Facade Code.', ['Reload Window']]]);
+		assert.deepStrictEqual(offers.map(notice => [notice.text, notice.actions]), [['The Facade Code Window Component is installed. Reload the window to start Facade Code Extension.', ['Reload Window']]]);
 		offers[0].answer('Reload Window');
 		await tick();
 		assert.strictEqual(editor.executed.at(-1), 'workbench.action.reloadWindow');
@@ -184,7 +184,7 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		shown.dispose();
 	});
 
-	test('missing, each of Facade\'s commands says the same, with the same action - never that the editor has no such command - until disposed (ARCHITECTURE-4.3)', async () => {
+	test('missing, each of Facade Code Extension\'s commands says the same, with the same action - never that the editor has no such command - until disposed (ARCHITECTURE-4.3)', async () => {
 		const editor = fakeEditor();
 		const shown = editor.component.showComponentMissing({ subscriptions: [] } as never, SESSION);
 		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'package.json'), 'utf8')) as { contributes: { commands: { command: string }[] } };

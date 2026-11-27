@@ -55,10 +55,10 @@ export function verifyArchivePrograms(archive, vsix, target, build) {
 	const marker = member(FRAMEWORK_BUILD_FILE);
 	// Earlier release candidates recorded a numeric archive version before VSIXs carried BUILD.
 	if (build === undefined || parseFrameworkBuild(build)?.revision) {
-		assert.ok(marker && editor.get('extension/bin/' + FRAMEWORK_BUILD_FILE)?.equals(marker), 'Framework archive BUILD differs from the paired VSIX');
+		assert.ok(marker && editor.get('extension/bin/' + FRAMEWORK_BUILD_FILE)?.equals(marker), 'Facade Code Framework archive BUILD differs from the paired VSIX');
 	}
 	const text = marker?.toString('utf8');
-	if (build !== undefined) assert.equal(text, build + '\n', 'Framework archive names a different BUILD');
+	if (build !== undefined) assert.equal(text, build + '\n', 'Facade Code Framework archive names a different BUILD');
 	return { programs, marker: text };
 }
 

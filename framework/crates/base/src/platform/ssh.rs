@@ -78,8 +78,8 @@ impl fmt::Display for SshArgumentError {
             }
             Self::RemoteCommand => "supply SSH login arguments without a remote command",
             Self::Home => "the remote Facade home must be an absolute UTF-8 path",
-            Self::Version => "expected a stable Facade build ID",
-            Self::Probe => "expected a home and build report from the remote Facade probe",
+            Self::Version => "expected a stable Facade Code Framework build ID",
+            Self::Probe => "expected a home and build report from the remote Facade Code Framework probe",
         })
     }
 }
@@ -265,7 +265,7 @@ fn check_login_option(option: &str) -> Result<(), SshArgumentError> {
     Ok(())
 }
 
-/// Gives OpenSSH the caller's login arguments and one Facade command for the remote shell.
+/// Gives OpenSSH the caller's login arguments and one Facade Code Framework command for the remote shell.
 pub fn ssh_command_args(
     args: &[String],
     mode: SshMode,
@@ -528,7 +528,7 @@ fn unix_probe_script(installed: &str, missing: &str) -> String {
         r#"for dir in "$FACADE_HOME" "$FACADE_HOME/framework" "$FACADE_HOME/framework/bin"; do
             if [ -d "$dir" ] && [ -x "$dir" ]; then continue; fi
             if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then break; fi
-            printf 'Cannot access Facade installation directory: %s\n' "$dir" >&2
+            printf 'Cannot access Facade Code Framework installation directory: %s\n' "$dir" >&2
             exit 1
         done
         if [ -e "$program" ] || [ -L "$program" ]; then
@@ -630,7 +630,7 @@ fn unix_install_script() -> String {
     let download = install::UNIX_DOWNLOAD;
     format!(
         r#"{download}fetch_installer "$2" "$3" || {{
-    printf '%s\n' 'Could not download Facade installer.' >&2
+    printf '%s\n' 'Could not download Facade Code Framework installer.' >&2
     exit "$status"
 }}
 sh -c "$script" -- --version "$4" --expected-build "$5" --install-root "$FACADE_HOME" --no-path >&2"#
@@ -646,7 +646,7 @@ fn windows_install_script(version: &str, build: &str, prefix: &str) -> String {
             use_facade_home: true,
         },
         prefix,
-        "throw 'Could not download Facade installer.'",
+        "throw 'Could not download Facade Code Framework installer.'",
         " | ForEach-Object { [Console]::Error.WriteLine($_) }",
     )
 }
@@ -841,13 +841,13 @@ fn bootstrap_command(
                     r#"{} || exit $?
                     report=$("$program" --version) || exit 1
                     if [ "$report" != "facade $5" ]; then
-                        printf 'Expected Facade %s in %s, got %s\n' "$5" "$FACADE_HOME" "$report" >&2
+                        printf 'Expected Facade Code Framework %s in %s, got %s\n' "$5" "$FACADE_HOME" "$report" >&2
                         exit 1
                     fi"#,
                     unix_install_script()
                 )
             } else {
-                "printf '%s\\n' 'This connection does not permit Facade installation.' >&2; exit 1"
+                "printf '%s\\n' 'This connection does not permit Facade Code Framework installation.' >&2; exit 1"
                     .to_owned()
             };
             let admin_probe = if admin {
@@ -872,7 +872,7 @@ fn bootstrap_command(
                 case "$action" in
                     serve) ;;
                     install) {install} ;;
-                    *) printf '%s\n' 'Expected a Facade bootstrap decision' >&2; exit 1 ;;
+                    *) printf '%s\n' 'Expected a Facade Code Framework bootstrap decision' >&2; exit 1 ;;
                 esac
                 {admin_probe}printf '%s\n' {BOOTSTRAP_READY} || exit 1
                 exec "$program" {arguments}"#
@@ -900,12 +900,13 @@ fn bootstrap_command(
                 format!(
                     "{}\n$report = & $program --version; \
                      if ($LASTEXITCODE -ne 0 -or $report -isnot [string] -or $report -cne 'facade {build}') {{ \
-                         throw \"Expected Facade {build} in $env:FACADE_HOME, got $report\" \
+                         throw \"Expected Facade Code Framework {build} in $env:FACADE_HOME, got $report\" \
                      }}",
                     windows_install_script(version, build, "")
                 )
             } else {
-                "throw 'This connection does not permit Facade installation.'".to_owned()
+                "throw 'This connection does not permit Facade Code Framework installation.'"
+                    .to_owned()
             };
             let admin_probe = if admin {
                 format!(
@@ -929,7 +930,7 @@ fn bootstrap_command(
                  switch -CaseSensitive ($action) {{ \
                      'serve' {{ }} \
                      'install' {{ {install} }} \
-                     default {{ throw 'Expected a Facade bootstrap decision' }} \
+                     default {{ throw 'Expected a Facade Code Framework bootstrap decision' }} \
                  }}; \
                  {admin_probe}[Console]::WriteLine('{BOOTSTRAP_READY}'); \
                  & $program {arguments}; exit $LASTEXITCODE",

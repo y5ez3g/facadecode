@@ -10,12 +10,12 @@ import * as path from 'path';
 import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { withModules } from './withModules';
 
-suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4)', () => {
+suite('A window whose Facade Code Extension cannot start says what helps (ARCHITECTURE-2.2, UX-2.4)', () => {
 	let temp: string;
 	let commands: Map<string, (...args: unknown[]) => unknown>;
 	let shown: { readonly text: string; readonly items: readonly string[] }[];
 	let executed: string[];
-	/** Facade: Home as the person set it in their user settings; none, never set. */
+	/** Facade Code Extension: Home as the person set it in their user settings; none, never set. */
 	let home: unknown;
 	let terminalHome: string[];
 	/** The remote's name in a remote window; none in a local one. */
@@ -263,7 +263,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual([typeof answer.unreadable, 'damaged' in answer, 'token' in answer], ['string', false, false]);
 	});
 
-	test('a window whose Facade could not start: each of its commands says why, as its notification does, never that the editor has no such command (ARCHITECTURE-4.3)', async () => {
+	test('a window whose Facade Code Extension could not start: each of its commands says why, as its notification does, never that the editor has no such command (ARCHITECTURE-4.3)', async () => {
 		const vscode = api();
 		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
 		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'package.json'), 'utf8')) as { contributes: { commands: { command: string }[] } };
@@ -275,13 +275,13 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual(shown, Array(3).fill({ text: failure.message, items: ['Reload Window'] }));
 	});
 
-	test('a missing Framework program reports the error without activating an execution engine', async () => {
+	test('a missing Facade Code Framework program reports the error without activating an execution engine', async () => {
 		const vscode = api();
 		const service = withModules({ vscode, './framework/index': {
-			activateOrchestrator: () => assert.fail('attempted to launch the missing program')
+			activateFramework: () => assert.fail('attempted to launch the missing program')
 		} })<typeof import('../host/service')>(require.resolve('../host/service'));
 		const windowContext = context();
-		const failure = await service.activateFacade(windowContext as never).then(() => assert.fail('Facade started'), (err: unknown) => err);
+		const failure = await service.activateFacade(windowContext as never).then(() => assert.fail('Facade Code Extension started'), (err: unknown) => err);
 		assert.match((failure as Error).message, /Framework program is missing/);
 		assert.ok(!executed.includes(WINDOW_TERMINALS_COMMAND));
 		service.sayActivationFailed(windowContext as never, failure);
@@ -316,7 +316,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		}
 	});
 
-	test('Facade: Home that the person set is this window\'s Facade home before anything reads it: FACADE_HOME for what the window starts, and for its terminals; never set, FACADE_HOME is left as it is (ARCHITECTURE-3.1)', async () => {
+	test('Facade Code Extension: Home that the person set is this window\'s Facade home before anything reads it: FACADE_HOME for what the window starts, and for its terminals; never set, FACADE_HOME is left as it is (ARCHITECTURE-3.1)', async () => {
 		const before = process.env.FACADE_HOME;
 		try {
 			home = '~/facade-elsewhere';
@@ -324,7 +324,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			const connected: string[] = [];
 			const service = withModules({ vscode: api(),
 				'./implementation': { prepareFramework: async (_context: unknown, home: string) => { verified.push(home); } },
-				'./framework/index': { activateOrchestrator: async (_context: unknown, deps: { root: string }) => {
+				'./framework/index': { activateFramework: async (_context: unknown, deps: { root: string }) => {
 					connected.push(deps.root);
 					return async () => undefined;
 				} }
@@ -361,28 +361,28 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual(['/facade', '\\facade', 'C:facade', 'C:\\facade', '\\\\server\\share'].map(read), [undefined, undefined, undefined, 'C:\\facade', '\\\\server\\share']);
 	});
 
-	test('a Facade: Home that is no path starts nothing in this window, never another home, and offers Open Settings at that setting (ARCHITECTURE-3.1, UX-2.4)', async () => {
+	test('a Facade Code Extension: Home that is no path starts nothing in this window, never another home, and offers Open Settings at that setting (ARCHITECTURE-3.1, UX-2.4)', async () => {
 		const before = process.env.FACADE_HOME;
 		home = 'facade';
 		const vscode = api();
 		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
-		const failure = await service.activateFacade(context() as never).then(() => assert.fail('Facade started'), (err: unknown) => err);
+		const failure = await service.activateFacade(context() as never).then(() => assert.fail('Facade Code Extension started'), (err: unknown) => err);
 		assert.ok(failure instanceof service.ActivationError);
 		assert.deepStrictEqual([failure.message, failure.reloadHelps, failure.opensSetting, process.env.FACADE_HOME],
-			['Facade: Home "facade" must start with ~/ or be absolute. No agent can start until it is fixed.', false, 'facade.home', before]);
+			['Facade Code Extension: Home "facade" must start with ~/ or be absolute. No agent can start until it is fixed.', false, 'facade.home', before]);
 		service.sayActivationFailed({ subscriptions: [] } as never, failure);
 		assert.deepStrictEqual(shown, [{ text: failure.message, items: ['Open Settings'] }]);
 		// One of another JSON type is set all the same, and no path: never read as unset, which would use another home
 		home = 42;
 		const typed = await withModules({ vscode: api() })<typeof import('../host/service')>(require.resolve('../host/service')).activateFacade(context() as never)
-			.then(() => assert.fail('Facade started'), (err: unknown) => err as Error);
-		assert.deepStrictEqual([typed.message, process.env.FACADE_HOME], ['Facade: Home "42" must start with ~/ or be absolute. No agent can start until it is fixed.', before]);
+			.then(() => assert.fail('Facade Code Extension started'), (err: unknown) => err as Error);
+		assert.deepStrictEqual([typed.message, process.env.FACADE_HOME], ['Facade Code Extension: Home "42" must start with ~/ or be absolute. No agent can start until it is fixed.', before]);
 	});
 
-	test('fixing an unusable Facade: Home offers the reload that uses it, as any other change does; a change elsewhere offers nothing (ARCHITECTURE-3.1)', async () => {
+	test('fixing an unusable Facade Code Extension: Home offers the reload that uses it, as any other change does; a change elsewhere offers nothing (ARCHITECTURE-3.1)', async () => {
 		home = 'facade';
 		const service = withModules({ vscode: api() })<typeof import('../host/service')>(require.resolve('../host/service'));
-		await service.activateFacade(context() as never).then(() => assert.fail('Facade started'), () => undefined);
+		await service.activateFacade(context() as never).then(() => assert.fail('Facade Code Extension started'), () => undefined);
 		const change = (section: string) => configurationChanged.forEach(listener => listener({ affectsConfiguration: (each: string) => each === section }));
 		change('editor.fontSize');
 		home = '~/facade';
@@ -391,7 +391,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual(informed, [{ text: 'The new Facade home applies only after the window reloads.', items: ['Reload Window'] }]);
 	});
 
-	test('in a remote window, Open Settings opens the Remote tab of the editor\'s Settings, where Facade\'s machine settings are; in a local window, the User tab (CONFIGURATION-1.2)', async () => {
+	test('in a remote window, Open Settings opens the Remote tab of the editor\'s Settings, where Facade Code Extension\'s machine settings are; in a local window, the User tab (CONFIGURATION-1.2)', async () => {
 		home = 'facade';
 		choose = 'Open Settings';
 		for (const [remote, command] of [[undefined, 'workbench.action.openSettings2'], ['ssh-remote', 'workbench.action.openRemoteSettings']] as const) {
@@ -401,7 +401,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			const vscode = api();
 			commands.set(command, (...args: unknown[]) => { opened.push(...args); });
 			const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
-			const failure = await service.activateFacade(context() as never).then(() => assert.fail('Facade started'), (err: unknown) => err);
+			const failure = await service.activateFacade(context() as never).then(() => assert.fail('Facade Code Extension started'), (err: unknown) => err);
 			service.sayActivationFailed({ subscriptions: [] } as never, failure as never);
 			await new Promise(resolve => setImmediate(resolve));
 			assert.deepStrictEqual([executed.filter(each => each.startsWith('workbench.action.open')), opened],
@@ -409,7 +409,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		}
 	});
 
-	test('Open Settings opens Facade Code\'s section on the User tab, or the Remote tab in a remote window; there a person whose Settings open as JSON, whom the editor would show the remote settings.json without the section, gets facade.json itself (CONFIGURATION-1.2)', async () => {
+	test('Open Settings opens Facade Code Extension\'s section on the User tab, or the Remote tab in a remote window; there a person whose Settings open as JSON, whom the editor would show the remote settings.json without the section, gets facade.json itself (CONFIGURATION-1.2)', async () => {
 		const opened: string[] = [];
 		for (const [remote, editor, expected] of [
 			[undefined, undefined, 'workbench.action.openSettings2 {"query":"@ext:facade.facade-code"}'],
@@ -429,7 +429,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		}
 	});
 
-	test('a change of Facade: Home that leaves the folder the window uses - the same written another way, or FACADE_HOME\'s own folder where none was set - offers no reload; one to another folder does (ARCHITECTURE-3.1)', async () => {
+	test('a change of Facade Code Extension: Home that leaves the folder the window uses - the same written another way, or FACADE_HOME\'s own folder where none was set - offers no reload; one to another folder does (ARCHITECTURE-3.1)', async () => {
 		const before = process.env.FACADE_HOME;
 		try {
 			const change = () => configurationChanged.forEach(listener => listener({ affectsConfiguration: (each: string) => each === 'facade.home' }));

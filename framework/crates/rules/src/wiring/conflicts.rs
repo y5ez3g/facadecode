@@ -1,6 +1,6 @@
-//! Why a run is not given Facade's tools: a `facade` server of the person's own in a configuration
-//! its CLI reads, which Facade's would take the place of or stand beside, or, for Muse Code,
-//! anything that has it refuse Facade's server. Facade changes none of these files.
+//! Why a run is not given Facade Code Framework's tools: a `facade` server of the person's own in a configuration
+//! its CLI reads, which Facade Code Framework's would take the place of or stand beside, or, for Muse Code,
+//! anything that has it refuse Facade Code Framework's server. Facade Code Framework changes none of these files.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -17,12 +17,13 @@ use super::servers::{SERVER, is_server_program, runs_facade_mcp};
 use crate::formats::parse_jsonc;
 
 /// What every refusal of a server of the person's own ends with.
-const LEFT_AS_IT_IS: &str = "Facade leaves it as it is, and the run has no Facade tools";
+const LEFT_AS_IT_IS: &str =
+    "Facade Code Framework leaves it as it is, and the run has no Facade Code Framework tools";
 
-/// Why a run of `cli` in `cwd`, with the CLI's own `environment`, is not given Facade's tools: a
+/// Why a run of `cli` in `cwd`, with the CLI's own `environment`, is not given Facade Code Framework's tools: a
 /// `facade` server of the person's own that `cli` reads. None where there is none. Muse Code's
 /// refusals are checked by [`muse_config`]. Antigravity has no such check: it names a plugin's
-/// server after the plugin, so Facade's is `facade_facade`, and neither it nor a `facade` server
+/// server after the plugin, so Facade Code Framework's is `facade_facade`, and neither it nor a `facade` server
 /// of the person's own takes the other's place.
 pub(super) fn persons_server(
     cli: &str,
@@ -40,7 +41,7 @@ pub(super) fn persons_server(
         .into_iter()
         .find(|(_, entry)| !runs_facade_mcp(entry))?;
     Some(format!(
-        "{place} names a {SERVER} server that is not Facade's; {LEFT_AS_IT_IS}"
+        "{place} names a {SERVER} server that is not Facade Code Framework's; {LEFT_AS_IT_IS}"
     ))
 }
 
@@ -130,8 +131,8 @@ fn opencode_server(config: &Value) -> Option<&Value> {
 }
 
 /// An extension Pi loads that registers a `facade` server: Pi does not start at all beside a second
-/// registration of the name, so Facade starts it without its own. The guest extension `facade
-/// integration add pi` writes is not one: it registers Facade's server only where Facade did not
+/// registration of the name, so Facade Code Framework starts it without its own. The guest extension `facade
+/// integration add pi` writes is not one: it registers Facade Code Framework's server only where Facade Code Framework did not
 /// start Pi. Pi loads extensions from `.pi/extensions` of the folder it starts in and from
 /// `extensions` of its agent folder, `$PI_CODING_AGENT_DIR` or `.pi/agent` in the home folder.
 fn pi_registration(cwd: &Path, environment: &BTreeMap<String, String>) -> Option<String> {
@@ -145,7 +146,7 @@ fn pi_registration(cwd: &Path, environment: &BTreeMap<String, String>) -> Option
                 .is_ok_and(|text| registers_facade(&text) && !written_by_facade(&text))
         })?;
     Some(format!(
-        "{} registers a {SERVER} server that is not Facade's; {LEFT_AS_IT_IS}",
+        "{} registers a {SERVER} server that is not Facade Code Framework's; {LEFT_AS_IT_IS}",
         file.display()
     ))
 }
@@ -204,7 +205,7 @@ pub(super) fn pi_has_server(
         }
         if !is_server_program(entry["command"].as_str()) {
             return Err(format!(
-                "{} names a {SERVER} server that is not Facade's; {LEFT_AS_IT_IS}",
+                "{} names a {SERVER} server that is not Facade Code Framework's; {LEFT_AS_IT_IS}",
                 file.display()
             ));
         }
@@ -269,7 +270,7 @@ fn registers_facade(text: &str) -> bool {
     })
 }
 
-/// Whether a run can use a configured Facade server, or why its MCP configuration precludes it.
+/// Whether a run can use a configured Facade Code Framework server, or why its MCP configuration precludes it.
 pub(super) fn muse_config(
     cwd: &Path,
     environment: &BTreeMap<String, String>,
@@ -277,8 +278,8 @@ pub(super) fn muse_config(
     let mut has_server = false;
     let named = |file: &Path| {
         format!(
-            "{} names a {SERVER} server, beside which Muse Code refuses to run with Facade's; \
-             Facade leaves it as it is",
+            "{} names a {SERVER} server, beside which Muse Code refuses to run with Facade Code Framework's; \
+             Facade Code Framework leaves it as it is",
             file.display()
         )
     };
@@ -306,7 +307,7 @@ pub(super) fn muse_config(
             Err(err) => {
                 let file = file.display();
                 return Err(format!(
-                    "{file} could not be read: {err}; Facade leaves it as it is"
+                    "{file} could not be read: {err}; Facade Code Framework leaves it as it is"
                 ));
             }
         };
@@ -324,8 +325,8 @@ pub(super) fn muse_config(
             }
             Err(why) => {
                 return Err(format!(
-                    "{} {why}, and Muse Code refuses to run with Facade's server beside a project \
-                     MCP file it cannot load; Facade leaves it as it is",
+                    "{} {why}, and Muse Code refuses to run with Facade Code Framework's server beside a project \
+                     MCP file it cannot load; Facade Code Framework leaves it as it is",
                     file.display()
                 ));
             }

@@ -40,7 +40,7 @@ pub fn first_control(text: &str) -> Option<String> {
     ))
 }
 
-/// The most characters an agent's name takes where Facade shows it.
+/// The most characters an agent's name takes where Facade Code Framework shows it.
 const NAME_CHARS: usize = 120;
 
 /// Untrusted text as one line to show (CLIS-2.3): invisible formatting removed, control characters
@@ -74,7 +74,7 @@ pub fn display_line(text: &str, most: usize) -> String {
     format!("{}…", line[..end].trim_end())
 }
 
-/// An agent's name as Facade shows it: one line of at most 120 characters. The name itself stays as
+/// An agent's name as Facade Code Framework shows it: one line of at most 120 characters. The name itself stays as
 /// given.
 pub fn display_name(name: &str) -> String {
     display_line(name, NAME_CHARS)
@@ -198,7 +198,7 @@ pub struct InputInfo {
 }
 
 /// The size, in columns and rows, of a terminal started where no terminal gives one: without a
-/// terminal of the caller's, or for a guest, which has none of Facade's.
+/// terminal of the caller's, or for a guest, which has none of Facade Code Framework's.
 pub const DEFAULT_TERMINAL_SIZE: (u16, u16) = (120, 30);
 
 #[cfg(test)]

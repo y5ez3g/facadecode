@@ -19,7 +19,7 @@ The code's design is in [ARCHITECTURE](ARCHITECTURE.md) and [islands/](islands/)
 | Island owner | One per island with children | Freezing its children's interfaces and the wiring between them; starting its children; its layer's code; integrating its children; keeping its island working | Change a child's inside | Claude Code, Opus, high effort |
 | Engineer | One per island without children | Its island's code, to the frozen interface | Touch a sibling; write new tests | Claude Code, Opus, high effort, or Codex, high effort |
 
-- Every agent starts through Facade, in its own worktree, so the owner can watch it. No in-process subagents.
+- Every agent starts through Facade Code Framework, in its own worktree, so the owner can watch it. No in-process subagents.
 - The agents that write code and the agents that write tests are different agents.
 - One Claude account's limits are shared by all its agents. Thirty Opus agents can use up five hours of quota in under
   one: put engineers on Codex, keep Opus for the TLs, owners and reviews, and keep progress in files, not messages.
@@ -166,7 +166,7 @@ The files and examples must match the registries, and the two generated TypeScri
 match byte for byte. Set `FACADE_REGENERATE=1` for the `protocol_files` test only to regenerate
 approved changes. Then rerun both tests with it unset and compare the changes to the published contract.
 
-The Framework real-build scenarios below are opt-in. Run in an isolated home from `framework/` with the named
+The Facade Code Framework real-build scenarios below are opt-in. Run in an isolated home from `framework/` with the named
 absolute artifact path and
 `cargo test --locked -p facade-scenarios --test <target> <case> -- --ignored --exact`.
 Use the artifacts from the accepted QA handoff, including their native companions. Record their
@@ -175,9 +175,9 @@ The normal workspace suite skips these cases.
 
 | Case | Artifact input | Expected result |
 | --- | --- | --- |
-| [`machines` · `two_framework_builds_cold_dial_each_other`](../../framework/tests/tests/machines.rs#L1884) | `FACADE_TEST_FRAMEWORK_PEER` names a separately compiled Framework CLI with its native companions, the same version and commit time, and a distinct build ID. | Each build negotiates v1, cold dials the other over SSH, and forwards input to its agent. |
-| [`machines` · `a_v1_peer_without_notice_support_keeps_the_link`](../../framework/tests/tests/machines.rs#L3032) | `FACADE_TEST_FRAMEWORK_PEER_WITHOUT_NOTICE` names a Framework CLI built with `internal.deliver_notice` omitted from its daemon operation registry. | Observe its refusal of the notice and successful message delivery on the same authenticated link. |
-| [`upgrade` · `a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover`](../../framework/tests/tests/upgrade.rs#L2398) | `FACADE_TEST_API_V1_NEXT` from a separate compatible build with a higher numeric version. See the [Linux x64 QA replay](../CI.md#native-framework-hot-takeover-qa). | Replace the Daemon while the Keeper, CLI, session and existing receipt survive. Deliver one fresh message to the same CLI. |
+| [`machines` · `two_framework_builds_cold_dial_each_other`](../../framework/tests/tests/machines.rs#L1884) | `FACADE_TEST_FRAMEWORK_PEER` names a separately compiled Facade Code Framework CLI with its native companions, the same version and commit time, and a distinct build ID. | Each build negotiates v1, cold dials the other over SSH, and forwards input to its agent. |
+| [`machines` · `a_v1_peer_without_notice_support_keeps_the_link`](../../framework/tests/tests/machines.rs#L3032) | `FACADE_TEST_FRAMEWORK_PEER_WITHOUT_NOTICE` names a Facade Code Framework CLI built with `internal.deliver_notice` omitted from its daemon operation registry. | Observe its refusal of the notice and successful message delivery on the same authenticated link. |
+| [`upgrade` · `a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover`](../../framework/tests/tests/upgrade.rs#L2398) | `FACADE_TEST_API_V1_NEXT` from a separate compatible build with a higher numeric version. See the [Linux x64 QA replay](../CI.md#native-facade-code-framework-hot-takeover-qa). | Replace the Daemon while the Keeper, CLI, session and existing receipt survive. Deliver one fresh message to the same CLI. |
 
 ### Docs and working files
 
@@ -219,7 +219,7 @@ The normal workspace suite skips these cases.
   `framework/scripts/leftovers.sh` finds them.
 - Write every `rm -rf` with guarded variables: `rm -rf "${W:?}/${S:?}"`.
 - No `git stash`: every worktree shares its stack.
-- An agent never deletes the worktree it runs in: Facade closes the agent with it. Its parent deletes it after the
+- An agent never deletes the worktree it runs in: Facade Code Framework closes the agent with it. Its parent deletes it after the
   agent ends, once `git cherry` shows the branch's commits are on the parent's line.
 
 ### While the owner is away
@@ -231,7 +231,7 @@ The normal workspace suite skips these cases.
 
 ### When agents stop
 
-Facade can restart, and an account can reach its limit. Agents keep no message that arrived while they were stopped.
+Facade Code Framework can restart, and an account can reach its limit. Agents keep no message that arrived while they were stopped.
 Afterwards, the General TL lists the agents, reads each one's screen, and wakes each stopped agent with a message that
 says its task again and points to the files that hold its progress. Every important handover is in a file as well as in
 a message.
@@ -249,21 +249,21 @@ where every commit must build.
 
 | Script | What it does |
 | --- | --- |
-| `scripts/test-all.sh [<log>]` | Clears inherited Facade variables and runs the workspace suite with a temporary `HOME` and fallback `FACADE_HOME`. Scenarios set their own homes. Writes a summary and Cargo output, and fails on a test failure, a fallback write or a leftover process. |
+| `scripts/test-all.sh [<log>]` | Clears inherited Facade Code Framework variables and runs the workspace suite with a temporary `HOME` and fallback `FACADE_HOME`. Scenarios set their own homes. Writes a summary and Cargo output, and fails on a test failure, a fallback write or a leftover process. |
 | `scripts/leftovers.sh <TMPDIR> [<framework folder>]` | Lists the processes a test run left behind: those working in its `TMPDIR` or naming a Facade home inside it, and those working in `framework/` that outlived their parent |
 | `scripts\test-all.ps1 [<log>]` | The same on Windows, its temporary folder in `.test-temp\` beside the checkout, outside every checkout so that no test's Git reaches the repository. It builds first with the person's own folders, as any build does, then runs the tests with `USERPROFILE`, `HOME`, `APPDATA` and `LOCALAPPDATA` in its temporary folder, and lists only the processes started after the tests began |
 | `scripts\leftovers.ps1 <temporary folder> [<framework folder>] [-Since <time>]` | The same on Windows: reads each process's working folder and environment, and ends nothing. With `-Since`, a UTC file time, it counts only processes started since then |
 | `scripts/check-each-commit.sh <base> [<head>]` | Runs `cargo check --workspace --all-targets` for each commit after `<base>` and requires an unchanged `Cargo.lock`. Uses a temporary worktree. |
 | `scripts/ssh-check.sh [<destination>]` | On Linux, over real ssh to this machine and with the test CLI: a login starts an agent and detaches, another login drops while attached, a new login finds both agents running with their screens and types into one, and once they stop, both services exit. Needs a key login without a prompt. Exits 1 when a step fails |
 
-A pull request that changes `framework/` runs the workflow `Framework checks`: clippy and the tests on macOS, Linux and Windows,
+A pull request that changes `framework/` runs the workflow `Facade Code Framework checks`: clippy and the tests on macOS, Linux and Windows,
 each on arm64 and x64, with `test-all.sh`, or `test-all.ps1` on Windows; `cargo fmt --check`, `ssh-check.sh` and
 `check-each-commit.sh` on Linux x64.
 
 For documentation changes, follow each changed link and anchor from the published location and verify the stated
 interface, effect order or command against its source. Run the
 [extension specification audit](../extension/audit/REPORT.md#reproducible-checks) when changing the editor specification.
-The audit checks structure and references in that specification. The Framework workflow's path filters can skip changes
+The audit checks structure and references in that specification. The Facade Code Framework workflow's path filters can skip changes
 under `docs/framework/`, so record the documentation review on the proposed revision.
 
 Follow the [release workflow](../extension/engineering/ARCHITECTURE.md#43-packaging-and-version-support)

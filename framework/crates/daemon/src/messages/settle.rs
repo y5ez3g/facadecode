@@ -231,7 +231,7 @@ impl Deliveries {
     }
 }
 
-/// The result `prompt`, ending as `delivery` at `at`, owes its sender: from Facade, under the
+/// The result `prompt`, ending as `delivery` at `at`, owes its sender: from Facade Code Framework, under the
 /// number the prompt keeps, on the sender's call, pending until `due`.
 fn result_message(
     prompt: &Message,

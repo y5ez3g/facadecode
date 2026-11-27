@@ -26,8 +26,8 @@ test('the published BUILD marker is committed by the release tag', t => {
 	const date = `${time} +0000`;
 	const env = {
 		...process.env, GIT_DIR: git,
-		GIT_AUTHOR_NAME: 'Facade QA', GIT_AUTHOR_EMAIL: 'qa@example.invalid', GIT_AUTHOR_DATE: date,
-		GIT_COMMITTER_NAME: 'Facade QA', GIT_COMMITTER_EMAIL: 'qa@example.invalid', GIT_COMMITTER_DATE: date,
+		GIT_AUTHOR_NAME: 'Facade Code Extension QA', GIT_AUTHOR_EMAIL: 'qa@example.invalid', GIT_AUTHOR_DATE: date,
+		GIT_COMMITTER_NAME: 'Facade Code Extension QA', GIT_COMMITTER_EMAIL: 'qa@example.invalid', GIT_COMMITTER_DATE: date,
 	};
 	const read = (...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', input: '' }).trim();
 	const tree = read('mktree');
@@ -304,7 +304,7 @@ test('the candidate verifier requires every native target and the tested bytes f
 	writeArchive(directory, 'linux-x64', build, programsFor('linux-arm64'));
 	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /facade differs from the paired VSIX/);
 	writeArchive(directory, 'linux-x64', `${version}+1700000001.${source.revision}`, programsFor('linux-x64'));
-	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /Framework archive BUILD differs from the paired VSIX/);
+	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /Facade Code Framework archive BUILD differs from the paired VSIX/);
 	fs.writeFileSync(archive, original);
 	fs.writeFileSync(path.join(root, 'framework', 'SHA256SUMS'), sha256(original) + '  ' + filename + '\n');
 
@@ -415,7 +415,7 @@ function nativeReplay(fixture, implementation = 'framework') {
 			return { source, target, inputs, exitCode: 0, sha256: sha256(bytes) };
 		};
 		const install = log('framework-install', inputs(frameworkArchive(target), win ? 'install.ps1' : 'install.sh'), [
-			`Installed Facade ${build} in disposable-bin.`, `facade ${build}`,
+			`Installed ${implementation === 'legacy' ? 'Facade' : 'Facade Code Framework'} ${build} in disposable-bin.`, `facade ${build}`,
 		]);
 		const pair = inputs(fileFor(version, target), fileFor(version, 'universal'));
 		const editorLog = check => log(check, pair, [
@@ -714,7 +714,7 @@ test('partial promotion resumes the same pin and refuses a competing marker', t 
 	const markerWrites = () => fixture.log().match(/^r2 put facade-framework-version\.txt$/gm)?.length ?? 0;
 
 	checkExit(fixture.command('promote', pin, { fault: 'stable-alias-changed' }), 1,
-		/The website accepted the stable marker write.*Stable read-back failed.*install\.ps1 differs/);
+		/The website accepted the stable marker write for Facade Code Framework .*Stable read-back failed.*install\.ps1 differs/);
 	assert.equal(fs.readFileSync(fixture.marker, 'utf8'), marker);
 	assert.equal(fixture.latest(), oldLatest);
 	assert.equal(markerWrites(), 1);

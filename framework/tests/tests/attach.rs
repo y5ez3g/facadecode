@@ -3,7 +3,7 @@
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// The copyable address Facade gives the agent with this ID, such as `a1@host`.
+/// The copyable address Facade Code Framework gives the agent with this ID, such as `a1@host`.
 fn address(home: &TestHome, id: &str) -> String {
     home.agent_record(id).expect("the agent is recorded")["address"]
         .as_str()
@@ -954,7 +954,8 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
         30,
     );
     assert!(
-        term.wait_for(secs(10), |t| t.contains("fakecli (Facade test CLI)")
+        term.wait_for(secs(10), |t| t
+            .contains("fakecli (Facade Code Framework test CLI)")
             && t.contains("❯")),
         "{}",
         term.text()
@@ -1238,7 +1239,7 @@ fn attach_refuses_the_removed_mouse_option() {
     assert!(error.contains("Usage: facade attach <AGENT>"), "{error}");
     assert!(
         !home.path.join("framework").exists(),
-        "invalid arguments reached Facade"
+        "invalid arguments reached Facade Code Framework"
     );
 }
 
@@ -1918,7 +1919,7 @@ fn attach_views_share_the_smallest_grid_and_resize_only_owned_watches() {
     let shared_redraws = redraws().len();
     let before = large.output_len();
     large.resize(155, 46);
-    assert!(large.wait_for_bytes(before, b"Facade test CLI", LOADED_TIMEOUT));
+    assert!(large.wait_for_bytes(before, b"Facade Code Framework test CLI", LOADED_TIMEOUT));
     assert!(
         wait_until(LOADED_TIMEOUT, || wraps_at_80(&large)),
         "{}",
@@ -2644,7 +2645,7 @@ fn an_empty_title_is_a_reset_only_after_a_title() {
     ends_with_the_host_s_title(&mut term, b"\x04", "reset");
 }
 
-/// Claude Code starts with its own `✳` before its title, reports idle while Facade's tools still
+/// Claude Code starts with its own `✳` before its title, reports idle while Facade Code Framework's tools still
 /// connect, then sets its title without the glyph, in a later read. The console goes from its own
 /// title to `✳ <title>` and stays there: never the title alone after the report, never two glyphs.
 #[test]
@@ -2662,7 +2663,7 @@ fn claude_code_s_own_glyph_at_start_gives_way_to_facade_s_without_a_flicker() {
     assert_eq!(
         state_of(&home, "starting"),
         "Starting",
-        "the title came while Facade's tools still connect"
+        "the title came while Facade Code Framework's tools still connect"
     );
     assert!(
         wait_until(LOADED_TIMEOUT, || state_of(&home, "starting") == "Idle"),

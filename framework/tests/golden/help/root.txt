@@ -29,9 +29,9 @@ Interact
   type      Type text or press keys in an agent's terminal
 
 System
-  status    Show Facade or agent status
+  status    Show Facade Code Framework or agent status
   machine   Connect and manage machines over SSH
-  upgrade   Upgrade Facade
+  upgrade   Upgrade Facade Code Framework
 
 Options
   -h, --help     Show help

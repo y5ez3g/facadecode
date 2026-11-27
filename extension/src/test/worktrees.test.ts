@@ -537,7 +537,7 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 			assert.deepStrictEqual([await removed(worktrees, idOf(current)), walked], [{ outcome: 'fulfilled', closed: 1 }, 0]);
 		});
 
-		test('Git that succeeds but leaves the folder behind is said to have, the folder kept as Git left it: Facade deletes nothing itself', async () => {
+		test('Git that succeeds but leaves the folder behind is said to have, the folder kept as Git left it: Facade Code Extension deletes nothing itself', async () => {
 			const left = path.join(temp.dir, 'left');
 			git(repo, 'worktree', 'add', '-q', '-b', 'left', left);
 			const { worktrees, idOf } = await windowWith([repo], {}, {

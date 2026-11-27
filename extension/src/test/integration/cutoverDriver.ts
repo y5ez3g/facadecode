@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The legacy cutover's driver (ARCHITECTURE-1.4, VERIFICATION-5.2): an extension beside an installed released legacy build of Facade
+// The legacy cutover's driver (ARCHITECTURE-1.4, VERIFICATION-5.2): an extension beside an installed released legacy build of Facade Code Extension
 // Code, in an editor that runs no extension tests, as the installed packages have none of the suite's commands. In the released build
 // it starts two agents as a person does and pins the first, so their two distinct sessions and the one Pin are saved; the runner
 // then installs the candidate pair and asks for a reload. Each window reports its actions to FACADE_IT_CUTOVER and accepts

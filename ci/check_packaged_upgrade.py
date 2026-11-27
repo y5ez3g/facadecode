@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rehearse a live upgrade between digest-pinned Linux x64 Framework archives."""
+"""Rehearse a live upgrade between digest-pinned Linux x64 Facade Code Framework archives."""
 
 import argparse
 from hashlib import sha256
@@ -117,7 +117,7 @@ def exercise(scope, sockets, receipt, fake):
     def install_package(role):
         build = receipt[role]['build']
         installed = command(f'install {role}', installer_args(INSTALLER, packages[role], build))
-        assert f'Installed Facade {build} in {bin_dir}.' in installed.splitlines(), installed
+        assert f'Installed Facade Code Framework {build} in {bin_dir}.' in installed.splitlines(), installed
 
     def verify_shell_build(role):
         reported = command(f'read {role} Shell version', [facade, '--version'])
@@ -187,7 +187,7 @@ def exercise(scope, sockets, receipt, fake):
     original_keys = keys.read_bytes()
     assert original_keys.count(ORIGINAL.encode()) == 1, original_keys
 
-    # The CLI's hook reports the selected session at launch. Facade publishes it after
+    # The CLI's hook reports the selected session at launch. Facade Code Framework publishes it after
     # the CLI writes its transcript, which the first submitted message creates.
     wait_for('the original saved session', lambda: inspect(target).get('session') == SESSION)
     before = receipt['before'] = observe('prior', target)

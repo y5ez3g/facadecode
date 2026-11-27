@@ -275,7 +275,7 @@ struct Actor {
     /// Messages wait behind the run's start prompt until it comes.
     awaits_prompt: bool,
     prompt_ready: Option<oneshot::Sender<()>>,
-    /// A newer Facade takes over: no reading, no typing.
+    /// A newer Facade Code Framework takes over: no reading, no typing.
     quiet: bool,
     quieting: Option<oneshot::Sender<()>>,
     settling: Option<oneshot::Sender<()>>,
@@ -535,7 +535,9 @@ impl Actor {
         self.start_keeping();
         self.undrawn = match (recovered, handed_over) {
             (true, true) => None,
-            (true, false) => Some("the CLI has not written since Facade recovered it"),
+            (true, false) => {
+                Some("the CLI has not written since Facade Code Framework recovered it")
+            }
             (false, _) => Some("the CLI has not written yet"),
         };
         // A new run readies its tools and may answer its trust question.
@@ -1707,7 +1709,7 @@ impl Actor {
         self.state_changed = true;
     }
 
-    /// The person or Facade answers a question of the CLI's own before a new session's
+    /// The person or Facade Code Framework answers a question of the CLI's own before a new session's
     /// conversation begins: the rows the question pushed off the top of the screen go, as the CLI
     /// cannot erase them when it redraws. More than a screenful can be a conversation that the CLI
     /// goes on with.

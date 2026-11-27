@@ -1,8 +1,8 @@
 # Collaboration
 
-Group 5 covers collaboration through the Orchestrator. Groups 1–4 retain the legacy implementation transition rules.
+Group 5 covers collaboration through Facade Code Framework. Groups 1–4 retain the legacy implementation transition rules.
 
-Layer 3. Facade exposes operations, not a team workflow. [RULES-1](../RULES.md#1-agent-messages) owns delivery;
+Layer 3. Facade Code Extension exposes operations, not a team workflow. [RULES-1](../RULES.md#1-agent-messages) owns delivery;
 [MCP](../engineering/MCP.md) owns schemas. This document owns visible messages, message records and collaboration
 surfaces.
 
@@ -33,7 +33,7 @@ automatic report to a creator. Organization and reporting belong to prompt/skill
 **Read screen observes; direct text and keys execute the caller's input without draft protection or an input-policy choice.**
 
 Read rendered text without taking focus. Ended runs can expose a retained last screen with its observation time. Direct
-input can edit, clear or submit a draft or operate a menu. Facade applies the requested text/keys and optional Enter,
+input can edit, clear or submit a draft or operate a menu. Facade Code Extension applies the requested text/keys and optional Enter,
 reports what was written, and does not decide how the agent should operate its CLI. There is no single-line or
 text-length cap; one call's size is bounded only by RULES-5.3's fixed runtime buffer (MCP-5.2). There is no compulsory
 screen-read step or extra confirmation. Preserve newlines/tabs and supplied text. Direct operations share terminal
@@ -60,18 +60,18 @@ A message from another window's agent adds ` · From Design`, that window's name
 names use the short ID alone. Bodies are data: control bytes and terminal escapes are rejected by MCP validation;
 ordinary Unicode, blank lines and newlines are preserved without truncation. There is no closing label, JSON wrapper,
 generic read_messages instruction or fetch-body notice. Each ordinary message is one paste and one submission.
-The Orchestrator puts the complete header and body in the same paste for all supported CLIs (CLIS-2.1). This puts the
+Facade Code Framework puts the complete header and body in the same paste for all supported CLIs (CLIS-2.1). This puts the
 complete request inside Claude Code's long-paste wrapper. Input already started keeps its original rendered text
 through reload. The legacy renderer keeps the window name its header was first made with. A formatting change never
 triggers a second paste.
 The header's message ID stays the same through the message's whole delivery (RULES-1.1); MCP-6.2 teaches the receiving
 model to recognize a repeat by it. Oversized content fails before writing with the supported limit (MCP-4.1); a caller
-can explicitly send a file-reference message. A path in such a message is just text; Facade never assumes a remote path
+can explicitly send a file-reference message. A path in such a message is just text; Facade Code Extension never assumes a remote path
 is readable in another environment.
 
 ### 2.2 System results and creation prompt
 
-**System results are Facade facts; a creation prompt is an ordinary message supplied by the caller.**
+**System results are Facade Code Extension facts; a creation prompt is an ordinary message supplied by the caller.**
 
 A system result starts with 🔔 and reports actual facts in natural English, without JSON or a closing label. An
 ordinary message has none: its send answers with its outcome (RULES-1.2, 1.7). A start's result that reports its prompt
@@ -86,13 +86,13 @@ can answer - without changing its recipient, frequency or authority. A send's fa
 window was unavailable before execution, says the message could not be sent and confirms untouched input only when
 known; after forwarding without an answer, it says delivery could not be confirmed; it never recommends a blind
 resend. These wordings add no notification or recipient.
-They are Facade facts, not replies authored by the recipient, and request no response. An unreachable result ends; do
+They are Facade Code Extension facts, not replies authored by the recipient, and request no response. An unreachable result ends; do
 not notify a person, send another error to B, or resend the original content. Use the native interactive prompt argument
 that CLIS-3.2 maps for the CLI, even while it is unverified, and report its capability state with the prompt outcome.
 Without a mapping, start the CLI and automatically send the same prompt after process startup through ordinary message
 delivery. Either path gives the CLI the prompt with its 📨 header (2.1), under the message ID its record keeps. The
 caller does not need to compensate for CLI differences. Start that delivery budget when the CLI process starts, not
-after waiting indefinitely for ready. Where a CLI's first turn could not use the Facade tools - Antigravity, which
+after waiting indefinitely for ready. Where a CLI's first turn could not use the Facade Code Extension tools - Antigravity, which
 starts a folder's plugin servers only with its first turn or its MCP panel - its start types what readies them before
 any other input. Once its input first reads empty, within thirty seconds, it types `/mcp`, then Enter once that alone
 shows in the input, within two seconds; then Escape as soon as the panel shows the server ready, or after ten seconds
@@ -157,14 +157,14 @@ submission. No understanding or completion claim is inferred from reading.
 
 ### 3.2 Message records
 
-**The person opens a saved Facade message as a read-only record from its notification.**
+**The person opens a saved Facade Code Extension message as a read-only record from its notification.**
 
 A message to the person opens from its notification's Open Message (2.3) as a read-only document of its saved record,
 read as it is when opened: its ID and time, source, recipient, reply relation, its delivery outcome labeled `Delivery`,
 the complete body and, below it, localized Technical details with its call and request IDs and window. A record that
 has expired opens as no longer available. No command or view lists the records: agents read their own inbox through
 read_messages (MCP-4.2), and a request_id retry finds its original record (MCP-1.1). Records from previous openings of
-this workspace remain within retention. A record is Facade's record of a message, not the vendor's whole CLI
+this workspace remain within retention. A record is Facade Code Extension's record of a message, not the vendor's whole CLI
 conversation. No live composer, send/replay control, group conversation or delete/hide control is added. Render message
 content as text; do not execute links or commands embedded in it.
 A start or stop result records its operation and execution window explicitly, with the target's recorded short
@@ -173,9 +173,9 @@ messages keep their references without invented content.
 
 ### 3.3 History retention
 
-**Facade's message records are read-only and use the automatic retention in RULES-5.3.**
+**Facade Code Extension's message records are read-only and use the automatic retention in RULES-5.3.**
 
-There are no manual delete, hide or restore actions. Expiration removes Facade's own records, the sender's copies (4.1)
+There are no manual delete, hide or restore actions. Expiration removes Facade Code Extension's own records, the sender's copies (4.1)
 and the result files that hold them (4.2), not vendor conversations or work files. Request IDs on those records follow
 MCP-1.1's one-hour reuse rule; no separate request ledger or deletion-consent workflow is required.
 
@@ -202,7 +202,7 @@ fallback paths; RULES-1.8's notice of a waiting child is the one automatic repor
 **Long read results are complete and available in the caller's execution environment.**
 
 When a read_screen or read_messages result exceeds MCP's inline limit, write the full result as a temporary UTF-8 file
-in the `results` folder of the caller's execution environment's Facade directory and return its path, its size in bytes
+in the `results` folder of the caller's execution environment's Facade Code Extension directory and return its path, its size in bytes
 and its code points. A screen read in another window comes back whole, and the caller's window writes its file; an
 inaccessible remote path is not a successful read. This is not arbitrary file transfer.
 A transfer failure fails the read, not an already completed input operation. Message files are temporary copies:
@@ -212,7 +212,7 @@ document, not a result file. Do not add protected-storage or authentication prot
 transport.
 
 
-## 5 Collaboration through the Orchestrator
+## 5 Collaboration through Facade Code Framework
 
 ### 5.1 Visible helpers
 
@@ -225,7 +225,7 @@ RULES-6.6.
 
 **Agents collaborate through MCP and the person can follow their work through Attach.**
 
-The Orchestrator owns [messages and terminal operations](../../PRODUCT.md#interaction). Shell sends as the command
+Facade Code Framework owns [messages and terminal operations](../../PRODUCT.md#interaction). Shell sends as the command
 line. The editor presents its own operation errors and shows the agent's terminal and its state. See RULES-6.7.
 
 ## Checks

@@ -78,10 +78,10 @@ export async function publishMirror(version, assets, latest, options) {
 			assert.ok(await check(frameworkVersionFile, markerDigest), 'The stable marker disappeared during read-back');
 		} catch (error) {
 			if (resume) throw error;
-			throw new Error(`The website accepted the stable marker write for Facade ${version}. Stable read-back failed. ${error.message}`, { cause: error });
+			throw new Error(`The website accepted the stable marker write for Facade Code Framework ${version}. Stable read-back failed. ${error.message}`, { cause: error });
 		}
 	}
-	console.log(`Verified ${assets.length} files for Facade ${version} at ${website}`);
+	console.log(`Verified ${assets.length} files for the Facade Code Framework and Facade Code Extension release ${version} at ${website}`);
 }
 
 /** Remove only old formal releases from the mirror, after the new stable version is verified. */

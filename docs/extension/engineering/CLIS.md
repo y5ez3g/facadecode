@@ -4,17 +4,17 @@ Group 6 defines the active editor integration boundary and the current CLI confi
 adapters.
 
 Layer 4. This document specifies the CLI adapters and the effective launch configuration: how each CLI is found,
-started, given the Facade tools, read, resumed and inspected. A recorded vendor observation is a test lead, never
+started, given the Facade Code Extension tools, read, resumed and inspected. A recorded vendor observation is a test lead, never
 current-platform certification (5.1).
 
 | Group | Decides |
 | --- | --- |
 | 1 Discovery and permissions | Programs, environment, permission mapping, model and effort |
-| 2 Runtime adapters | Capability interface, input readers, Facade tool files, status and conversations |
+| 2 Runtime adapters | Capability interface, input readers, Facade Code Extension tool files, status and conversations |
 | 3 Launch configuration | Literal arguments/environment, adapter internals and trust |
 | 4 Inspection and design | Launch inspection, persistence and adapter ownership |
 | 5 Evidence baseline | What recorded vendor behavior proves and the evidence a support claim needs |
-| 6 Orchestrator integration | Editor boundary and current MCP configuration |
+| 6 Facade Code Framework integration | Editor boundary and current MCP configuration |
 
 ## 1 Discovery and permissions
 
@@ -38,12 +38,12 @@ disabled ones, report CONFIGURATION-4.1's errors. Recompute on settings-file/PAT
 and immediately before launch. Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or
 modifying settings, except creating a missing settings file under CONFIGURATION-1.3.
 
-A line of a CLI Facade does not support, known by the version its installation names, is unavailable for new starts and
+A line of a CLI Facade Code Extension does not support, known by the version its installation names, is unavailable for new starts and
 refused at a start, saying how to update. That line is OpenCode below version 2, as the `package.json` of npm's
 `opencode-ai` or `@opencode/cli` beside its program names it: it sends no activity reports, does not take `--standalone`
 and draws an input box no reader knows, so no message reaches it. Its refusal says to run `npm uninstall -g opencode-ai`,
 then `npm install -g @opencode/cli`. A version no installation file names is started; a 1.x program found so starts, and
-with the Facade tools exits at `--standalone` with its usage.
+with the Facade Code Extension tools exits at `--standalone` with its usage.
 
 ### 1.2 Executable and environment
 
@@ -54,7 +54,7 @@ Use this environment order for both discovery and launch: execution extension ho
 entry's `env`; the variables every run is given and final cleanup. Resolve the profile through
 `terminal.integrated.defaultProfile.<platform>` and its entry in `terminal.integrated.profiles.<platform>` in the
 destination environment. A profile without a configured env map adds nothing. Do not start a shell or parse its startup
-scripts to discover extra variables; shell-only PATH changes are not part of Facade's computed environment.
+scripts to discover extra variables; shell-only PATH changes are not part of Facade Code Extension's computed environment.
 
 In every configured environment map, a string sets the value, null removes the variable and an omitted key inherits
 the preceding layer. `${env:NAME}` is expanded only in environment string values, once, from the execution host's
@@ -69,13 +69,13 @@ errors (CONFIGURATION-3.2). The execution extension host environment is taken as
 inherits it: without what its `sanitizeProcessEnvironment` removes - `ELECTRON_*`; `VSCODE_*` except `VSCODE_PORTABLE`,
 `VSCODE_SHELL_LOGIN`, `VSCODE_ENV_REPLACE`/`_APPEND`/`_PREPEND` and `VSCODE_IPC_HOOK_CLI`; `SNAP` and `SNAP_*`;
 `GDK_PIXBUF_*` - with, on macOS, `NODE_OPTIONS` and `NODE_REPL_EXTERNAL_MODULE` restored from their `VSCODE_` copies;
-and without inherited run markers, which would make a run act as another's: Facade's own run variables
+and without inherited run markers, which would make a run act as another's: Facade Code Extension's own run variables
 (`FACADE_AGENT`, `FACADE_CODE_SESSION_FILE`, `FACADE_CODE_TITLE_COMMAND`, `FACADE_RUN`, `FACADE_PTYD`,
 `FACADE_LAUNCH_CONTEXT`, `FACADE_ELECTRON_RUN_AS_NODE`) and a Claude Code session's (`CLAUDECODE`,
 `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_EXECPATH`,
 `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_JOB_DIR`). A configured layer may set any of them again. Over every layer, each run
 is given no `ELECTRON_RUN_AS_NODE`, which would make an Electron-based CLI run as Node, and is given
-`TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `FACADE_AGENT` set to its `#aN` alias, and the variables its Facade tools
+`TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `FACADE_AGENT` set to its `#aN` alias, and the variables its Facade Code Extension tools
 and session tracking set (2.2, 2.4). Never copy credentials from the client to a remote environment. Claude Code is given
 `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` where no layer sets that variable: in a VS Code terminal without its VS Code
 extension, Claude Code installs that extension and shows a welcome that waits for Enter, past which no message goes.
@@ -90,10 +90,10 @@ for a package's Node script runs that script with Node, its shim for a native pr
 Pi's own installer writes runs its `pi-launcher.js` with the Node it chooses - its own in `LOCALAPPDATA` where it names
 one and it is there - and Muse Code's installer launcher runs its active native program (2.4). Node is the `node.exe`
 beside npm's shim, else a Node program (`.exe` or `.com`) on the launch's PATH, never a version manager's `.cmd` or
-`.bat`. Any other `.cmd` or `.bat` runs through cmd.exe, which Facade gives no text it would read as its own: a launch
+`.bat`. Any other `.cmd` or `.bat` runs through cmd.exe, which Facade Code Extension gives no text it would read as its own: a launch
 through cmd.exe is refused before execution where an argument or the program's own path holds `"`, `%`, `^`, `&`, `|`,
 `<`, `>`, `!` or a line break, saying to set the entry's `program` to its own program or Node entry point; a configured
-argument is named by its place in its setting and that character, never quoted. Where only the Facade tools' arguments
+argument is named by its place in its setting and that character, never quoted. Where only the Facade Code Extension tools' arguments
 cannot pass, the CLI starts without the tools, which are unavailable with why (2.2). A launch never builds an unescaped
 shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in the Windows
 directory, so a launch through it from such a folder is refused before execution. On Windows, which cannot run a script
@@ -107,30 +107,30 @@ and effective launch must agree. Checks requiring a new worktree's actual cwd fo
 **Adapters map the run's YOLO value from RULES-4.3 to supported native permission controls.**
 
 Non-YOLO enables the CLI sandbox when supported and retains normal approvals for the CLI's own commands and edits.
-Calls to Facade's own tools are approved in advance in both modes wherever the CLI can approve one server's tools (2.2);
+Calls to Facade Code Extension's own tools are approved in advance in both modes wherever the CLI can approve one server's tools (2.2);
 Muse Code cannot, so with YOLO off its own approvals apply to them too (RULES-4.3). Report actual sandbox/approval
-on/off/unavailable/unknown without inventing a capability. Facade's same-tree rules are separate normal MCP policy, not
+on/off/unavailable/unknown without inventing a capability. Facade Code Extension's same-tree rules are separate normal MCP policy, not
 an authentication boundary.
 
 | CLI | YOLO on | YOLO off |
 | --- | --- | --- |
 | Claude Code | Permission bypass; its sandbox as its own settings have it | Its sandbox enabled where it has one (not on Windows); its own approvals |
 | Codex | Approval and sandbox bypass | `--sandbox workspace-write`; its own approval policy |
-| Antigravity | `--mode accept-edits --dangerously-skip-permissions` | Its own approvals; Facade does not yet map its newer sandbox option |
+| Antigravity | `--mode accept-edits --dangerously-skip-permissions` | Its own approvals; Facade Code Extension does not yet map its newer sandbox option |
 | Muse Code | `--disable-approval --disable-sandbox` | Its own approvals and shell sandbox, on unless its configuration turns it off |
 | OpenCode | `--auto` | Its own permission configuration; it has no sandbox |
 | Pi | Nothing to bypass | Nothing to enable: it has no approvals and no sandbox |
 
 Muse Code's `--yolo` is not used: it also withholds its question tool. A CLI with no native approvals or sandbox - Pi,
 and OpenCode under its default permissions, which allow every tool - runs as it natively does with YOLO off; the
-extension's README says so, and Facade adds no approval mechanism of its own. The maintained adapters own the actual
+extension's README says so, and Facade Code Extension adds no approval mechanism of its own. The maintained adapters own the actual
 flags; a spelling recorded for one CLI version certifies no other. Native login, approval, question tools, the person's
 project servers and user settings remain intact. Do not default-disable them or insert instructions to report to a
 creator (MCP-6.2). If the requested actual mode cannot be supplied, report that fact rather than silently changing modes.
 
 ### 1.4 Model and effort
 
-**Facade resolves model and effort from this start, then the current entry, then the CLI's own configuration.**
+**Facade Code Extension resolves model and effort from this start, then the current entry, then the CLI's own configuration.**
 
 CONFIGURATION-3.3 owns the precedence and suggested values. Resolve each field independently. An absent request field
 can use `clis["<name>"].model` or `.effort`; with neither source present, add no override. A native restored session
@@ -153,7 +153,7 @@ replaces it for that run alone.
 list_agents reports override support for the actual destination. Structured diagnostics record requested model/effort
 and startup outcomes. They do not establish effective native choices or successful model requests. Values are not a
 model catalog or an allowlist. The native CLI owns its model controls, history and later in-session changes; an omitted
-choice is unknown to Facade unless the CLI reports it.
+choice is unknown to Facade Code Extension unless the CLI reports it.
 
 ## 2 Runtime adapters
 
@@ -162,7 +162,7 @@ choice is unknown to Facade unless the CLI reports it.
 **Each CLI adapter reports individual capabilities and allows interactive startup and messaging even when a version is untested.**
 
 An adapter is one maintained definition per CLI (4.2): its command and settings, the argument groups and values of its
-invocation (3.2), the explicit choices it takes (1.4), how it is given the Facade tools (2.2), its input reader, its
+invocation (3.2), the explicit choices it takes (1.4), how it is given the Facade Code Extension tools (2.2), its input reader, its
 native initial prompt mapping, its trust (3.3), the launchers it verified (1.2), its sandbox and approval facts (1.3),
 its session integration (2.4) and, for Muse Code, its screen reader (2.3). It states each capability as supported,
 unverified or unavailable, with why, never more than its evidence holds. A CLI's version is read only from what its
@@ -199,7 +199,7 @@ session, without changing what it reads, apart from the two places below where t
 colored placeholder and the lower edge of Codex's box. A CLI's questions, menus and logins take its box's place: a
 screen without the box around the cursor is a native interaction where the reader recognizes one of its CLI's questions
 or menus, which a message waits for (RULES-1.4, 1.5), and unknown otherwise. Nothing is typed into either, and an
-unknown screen fails the message at its deadline with `input_unknown`, naming the CLI and the version Facade found.
+unknown screen fails the message at its deadline with `input_unknown`, naming the CLI and the version Facade Code Extension found.
 A screen its program is still drawing - within a synchronized update - is read again within the same attempt, every
 tenth of a second for at most a second, until a complete frame shows: an unfinished frame is never taken for an empty
 input, a frame still unfinished after that second reads as unknown for that attempt, and reading again never pastes
@@ -209,7 +209,7 @@ recorded screens of real CLI versions; a changed box becomes a new recorded case
 input where it does not find its box.
 
 `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text, messages, a
-Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines and a
+Facade Code Extension result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines and a
 hundred-line message - without submitting anything, at 40 rows or the `--rows` given, and checks
 each reader and its own-draft recognition against what it drew; it is run against each built-in's newest version before
 a release and whenever a CLI updates, and the screens it saves, each paste's text kept with its screen, become recorded
@@ -225,7 +225,7 @@ own earlier messages begin `› ` too, higher up: the box is the one the cursor 
 row Codex draws its model and folder on - two spaces, the model, ` · ` and the folder's path - which its reader finds by
 that shape and its place, the last row Codex draws or the one above it. The row under it, where Codex draws one, changes
 with its state and is not read - among them a status at the right end, `⚠ 1 warning · f2 to view`, when `-c` overrides
-run it outside its background server, as Facade starts it with `--no-daemon`, and in a passive transcript view
+run it outside its background server, as Facade Code Extension starts it with `--no-daemon`, and in a passive transcript view
 `enter/esc latest` or, under a resting draft, `esc latest`, led by `New activity · `, by `Earlier messages available.  `
 while older history is not loaded, or by both. Its transcript browsing, search and selection keep the box drawn while
 they take its keys, and put the cursor outside the box or hide it: they are not usable input and stay unavailable to
@@ -242,7 +242,7 @@ Each reader also reports a draft as it is drawn, so that a delivery knows its ow
 placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
 first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse
 Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lines on. The reader compares the text
-without logging it. The Orchestrator pastes the complete header and body together for each supported CLI.
+without logging it. Facade Code Framework pastes the complete header and body together for each supported CLI.
 Claude Code wraps a long paste, including its complete header, in `<pasted_content>` tags. In
 Windows win32 input mode a character outside the Basic Multilingual Plane goes as its two UTF-16 halves in two key-down
 records together, with no key release for either half: Codex and Muse Code pair a half with a release and lose the
@@ -276,21 +276,21 @@ ptyd that reads no input (ARCHITECTURE-2.4), gives no such text.
 
 **Use per-run launch files first; write project files only where the CLI requires them and preserve user content.**
 
-The table below describes the legacy implementation adapters. CLIS-6.2 describes the current Orchestrator configuration.
+The table below describes the legacy implementation adapters. CLIS-6.2 describes the current Facade Code Framework configuration.
 
-Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them:
+Each built-in receives the `facade` server, the skill and an approval of Facade Code Extension's own tools as its CLI takes them:
 
-| CLI | Server | Skill | Facade's tools without asking |
+| CLI | Server | Skill | Facade Code Extension's tools without asking |
 | --- | --- | --- | --- |
 | Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
 | Antigravity | Project plugin `.agents/plugins/facade`, shared; its PreInvocation hook supplies run-private ephemeral initialization context through the run environment | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
-| Muse Code | Per-run `-c mcpServers.facade` with `"mode": "optional"`, on Windows too, where Facade starts its native program (2.4); where its program starts through cmd.exe, which cannot carry that JSON, a `facade` entry merged into the project's `.mcp.json`, shared, without `mode`, which in a project file Muse Code takes for a configuration error that turns off all its servers; the same entry takes the place of a `facade` server the run's own folder's `.mcp.json` already names, beside which Muse Code refuses a `-c` one. Its SessionStart hook supplies the run-private initialization context, except through cmd.exe | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| Muse Code | Per-run `-c mcpServers.facade` with `"mode": "optional"`, on Windows too, where Facade Code Extension starts its native program (2.4); where its program starts through cmd.exe, which cannot carry that JSON, a `facade` entry merged into the project's `.mcp.json`, shared, without `mode`, which in a project file Muse Code takes for a configuration error that turns off all its servers; the same entry takes the place of a `facade` server the run's own folder's `.mcp.json` already names, beside which Muse Code refuses a `-c` one. Its SessionStart hook supplies the run-private initialization context, except through cmd.exe | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
-| Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Its resource-discovery hook supplies the per-run skill only when Pi has not already loaded a byte-identical Facade skill | It has no approvals |
+| Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Its resource-discovery hook supplies the per-run skill only when Pi has not already loaded a byte-identical Facade Code Extension skill | It has no approvals |
 
-These approvals cover Facade's own tools alone, in either YOLO mode, for every CLI with a rule for one server's tools;
-Muse Code has none, so with YOLO off its own approvals apply to Facade's tools too (RULES-4.3). The CLI's own commands
+These approvals cover Facade Code Extension's own tools alone, in either YOLO mode, for every CLI with a rule for one server's tools;
+Muse Code has none, so with YOLO off its own approvals apply to Facade Code Extension's tools too (RULES-4.3). The CLI's own commands
 and edits keep the mode RULES-4.3 chose. An entry shared by a folder's runs holds no run's identity: the run's variables
 reach the server through the CLI's environment, and a server started without them - by a session the person starts in
 that folder - offers no tools (MCP-6.1). Muse Code's per-run entry names its variables only by references to that
@@ -298,8 +298,8 @@ environment. Its project entry, through cmd.exe, uses `${NAME:-}` references, em
 by hand - an unset plain reference would turn off every server of theirs. Muse Code refuses to run with a `-c` server of
 a name its own settings or a project MCP file it reads already gives one - the `.mcp.json` of each folder from the run's
 up to the top of its repository, of the run's alone outside one - and beside a project MCP file it cannot load, so
-Facade looks first: where the run's own folder's `.mcp.json` names a `facade` server, the shared project entry takes its
-place there, a Facade's brought up to date and a person's a conflict; anything else in the way is a conflict, and the
+Facade Code Extension looks first: where the run's own folder's `.mcp.json` names a `facade` server, the shared project entry takes its
+place there, a Facade Code Extension's brought up to date and a person's a conflict; anything else in the way is a conflict, and the
 CLI starts without the tools, which are reported unavailable with why. Claude Code's run settings disable a project's
 `facade` entry, which would otherwise ask about it at its start. Antigravity's `--settings` replaces a settings key
 whole for its session, so the person's own permission rules are read and kept in it. OpenCode's background service,
@@ -308,10 +308,10 @@ process; the person's own inline configuration is read as OpenCode reads it, and
 the run without the tools. Antigravity starts a folder's plugin servers only with its first turn, which is planned
 before they connect, or with its MCP panel: a run's start opens and closes that panel before the first turn
 (COLLABORATION-2.2), and the server marks its tools for Antigravity to give the model directly. The server is never
-declared required, so that a CLI whose Facade server fails still starts and stays usable. Muse Code requires a server
+declared required, so that a CLI whose Facade Code Extension server fails still starts and stays usable. Muse Code requires a server
 unless its entry says `"mode": "optional"`, and fails a whole run over a required one that does not start, so its
 per-run entry says so; its project entry through cmd.exe cannot, as Muse Code refuses `mode` in a project file, so a
-Facade server failing there can fail that run. Codex waits up to 10 s for its optional servers before its first model
+Facade Code Extension server failing there can fail that run. Codex waits up to 10 s for its optional servers before its first model
 request (`-c mcp_optional_startup_grace_ms=10000`), so a server that starts slowly still serves the first turn. The
 server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6.
 Every start using a built-in type attempts this injection; there is no switch to turn it off (RULES-4.4).
@@ -326,21 +326,21 @@ only when its complete bytes match the run's bundled skill; otherwise supply the
 retains Pi's native collision diagnostic: do not suppress warnings, overwrite it, or disable other skills.
 
 Before a project write, snapshot exact original bytes/existence, take one lock for the execution environment's runs and
-windows, merge only owned content, and record content hashes/reference counts. Content a Facade wrote is Facade's
-whatever wrote it - another version, another Facade data directory, or one changed since - and is brought up to date: a
-skill by its `facade` name and the description every Facade skill begins with; a file of its Antigravity plugin by its
-members, every one of them one a Facade writes there - the manifest's `facade` name and Facade's description, an MCP
-configuration and hooks of Facade's server alone, the shim; and a `.mcp.json` entry by that server. What the Facade Code
-IDE's agent extension writes into a folder is Facade's too: its `facade` skill by its own description, its Antigravity
-plugin's manifest by its name alone, its server by its shim. So is what a Facade left of a plugin file after taking its
+windows, merge only owned content, and record content hashes/reference counts. Content a Facade Code Extension wrote is Facade Code Extension's
+whatever wrote it - another version, another Facade Code Extension data directory, or one changed since - and is brought up to date: a
+skill by its `facade` name and the description every Facade Code Extension skill begins with; a file of its Antigravity plugin by its
+members, every one of them one a Facade Code Extension writes there - the manifest's `facade` name and Facade Code Extension's description, an MCP
+configuration and hooks of Facade Code Extension's server alone, the shim; and a `.mcp.json` entry by that server. What Facade Code Extension
+IDE's agent extension writes into a folder is Facade Code Extension's too: its `facade` skill by its own description, its Antigravity
+plugin's manifest by its name alone, its server by its shim. So is what a Facade Code Extension left of a plugin file after taking its
 own part out of it - the IDE takes its `name` out of this extension's manifest - even an empty object: nothing of anyone
-else's is in it, and the person is never asked to move or rename a file only Facade wrote. A skill Facade writes into a
-folder ends with a line naming the Facade version that wrote it; one a later version marked stands. An existing `facade`
+else's is in it, and the person is never asked to move or rename a file only Facade Code Extension wrote. A skill Facade Code Extension writes into a
+folder ends with a line naming the Facade Code Extension version that wrote it; one a later version marked stands. An existing `facade`
 server/skill of the person's own is a conflict; fail integration while preserving the CLI where it can launch safely.
-Never overwrite malformed user config or unknown values. On cleanup remove only unchanged Facade-owned content after the
+Never overwrite malformed user config or unknown values. On cleanup remove only unchanged Facade Code Extension-owned content after the
 last run that uses it releases it; a `.mcp.json` entry taken over goes with the file left as it would be without it, and
 modified files remain with a diagnostic. Never hide arbitrary files by modifying global Git ignore. Do not copy vendor
-credentials into project files. Per-run files reside in the execution environment's Facade data directory; no identity
+credentials into project files. Per-run files reside in the execution environment's Facade Code Extension data directory; no identity
 token or protected-file authentication mechanism is introduced.
 
 ### 2.3 Status, title and input evidence
@@ -361,7 +361,7 @@ reaches it, before any of that output goes on to a window and before the queries
 (ARCHITECTURE-2.3): an answer to a later query coming first would tell the CLI that its reports go nowhere. A run whose
 tab is hidden (LIFECYCLE-2.2) has no editor to answer what only an editor knows; each built-in is verified to start and
 work so, from a start with its tab never opened. A run is still starting, with its startup stage, until its CLI first
-shows its activity - a valid report or, where its screen is read, a state its reader knows - and its injected Facade
+shows its activity - a valid report or, where its screen is read, a state its reader knows - and its injected Facade Code Extension
 tools connect, for at most 60 s from its process start - many CLIs starting at once, as when an agent starts a group of
 them, each take far longer than one alone - a reloaded window counting from that start too. A custom program, which has
 no adapter and no tools, has started once its process has: no first report is awaited (CONFIGURATION-2.3). Past that bound, a run whose
@@ -407,7 +407,7 @@ wide-character/wrapped-line reading and bracketed paste modes are verified per t
 
 Use a supported session ID/hook/metadata source demonstrably tied to the selected conversation. Ambiguity remains
 unknown; never replace it with --continue, --last, the newest file or a made-up ID. Data-capture hooks do not impose work.
-Keep native interactive conversation stores and account configuration. Facade does not attach MCP to an existing
+Keep native interactive conversation stores and account configuration. Facade Code Extension does not attach MCP to an existing
 external process; resume creates a new interactive run.
 
 Discover metadata relevant to all current-window folders/subfolders and their related worktrees, including external
@@ -445,16 +445,16 @@ file version read once. It is read as soon as the run's conversation is known - 
 resume it by its ID - and whenever that changes; once for each run a reload reattaches; and as each turn ends, the run's
 activity going from working to not working. A run's title is read at most once in 30 seconds: a read asked sooner follows
 once they are up, one however many were asked, never dropped; a run's reads never overlap, and none is asked or waits for
-a run that ended or closed, or once the window's Facade stops. There is no polling and no file watcher. A title found
+a run that ended or closed, or once the window's Facade Code Extension stops. There is no polling and no file watcher. A title found
 replaces the run's, its card told only where it changed. Before its CLI saved the conversation it has none; a later read
 that finds none, or fails - said in the log, never shown - keeps the last, and another conversation of the run has none
 until it is read. The title is kept with the run across a reload, its reattachment and an ended run's restoration, as a conversation
 title only where it was proven to come from the native conversation reader: a title an earlier build kept without that
-proof, which may have come from a CLI's report, is discarded. A custom program keeps no history Facade reads, so
+proof, which may have come from a CLI's report, is discarded. A custom program keeps no history Facade Code Extension reads, so
 its runs have no title (CONFIGURATION-2.3). The extension runs where its window's CLIs do, a remote window's included, and reads the stores
 their launches use.
 
-A session already running in Facade is not duplicated; later Pin restorations skip it. Facade does not scan for or
+A session already running in Facade Code Extension is not duplicated; later Pin restorations skip it. Facade Code Extension does not scan for or
 acquire external writer locks. An externally active session may be resumed; return the vendor's actual acceptance or
 error without promising concurrency safety. Restoration context follows RULES-4.2.
 Verify interoperability with the actual Claude/Codex/vendor extensions where promised. Different stores cannot be
@@ -478,10 +478,10 @@ native tab synchronization and reload/reopen persistence. Reader fixtures establ
 vendor interoperability on an untested platform. A custom program has no discovery or identity
 adapter, so it advertises neither (CONFIGURATION-2.3).
 
-Compose session identity and Facade tool settings in the same launch; neither may overwrite the other's settings or a
+Compose session identity and Facade Code Extension tool settings in the same launch; neither may overwrite the other's settings or a
 user's hooks. An initial prompt remains after all launch options. On Windows, Muse Code's recognized installer is
 resolved to the active native executable named by its `.muse-version`, only in the installed channel. This bypasses the
-launcher's argument conversion so native JSON hooks and its server entry (2.2) reach Muse Code unchanged; that Facade
+launcher's argument conversion so native JSON hooks and its server entry (2.2) reach Muse Code unchanged; that Facade Code Extension
 launch does not run the launcher's update check. An unrecognized batch wrapper still starts as configured, without
 claiming session tracking it cannot install safely. Likewise, native settings or a per-launch configuration file an
 identity integration cannot read leave the launch as configured, with no session tracking claimed: the CLI reports its
@@ -492,7 +492,7 @@ records its session as its run's.
 
 ### 3.1 Launch arguments and environment
 
-**Entries use `program`, `args` and `env`; each adapter rejects options that replace Facade's launch choices.**
+**Entries use `program`, `args` and `env`; each adapter rejects options that replace Facade Code Extension's launch choices.**
 
 CONFIGURATION-2.2 owns field shapes and defaults, CONFIGURATION-3.1 literal arguments, and 1.2 environment handling.
 Arrays are used whole, in order. There is no public argument-group engine, placeholder template, trust-file merger
@@ -500,7 +500,7 @@ or input-delay field. Errors name the field or argument position and expected ty
 
 For built-in types, permissions come from `yolo`, model and effort from their fields, and location, session,
 interactive terminal and first task from the launch request. Cloud, remote, background and desktop redirection cannot
-replace the process Facade manages. The reserved options are:
+replace the process Facade Code Extension manages. The reserved options are:
 
 | Type | Reserved arguments and configuration paths |
 | --- | --- |
@@ -521,13 +521,13 @@ apply the same rule to every reserved long option. Its allowed `-settings` is me
 Claude, Codex, Muse and OpenCode also read short options joined together. Check each one until an option takes the
 remaining text as its value. For example, Claude's `-cp` means `-c -p`, while Codex's `-pwork` selects profile `work`.
 
-An end-of-options `--` is refused in a built-in entry's `args`: the options Facade adds after it would become positional.
+An end-of-options `--` is refused in a built-in entry's `args`: the options Facade Code Extension adds after it would become positional.
 It remains literal and allowed for a custom program. The table also reserves modes that turn off integration a
-Facade run needs, such as Claude's `--bare` and Pi's `--no-mcp`.
+Facade Code Extension run needs, such as Claude's `--bare` and Pi's `--no-mcp`.
 
 Read each option together with its value, following that CLI's parser:
 
-| CLI and option | How Facade reads a separate value |
+| CLI and option | How Facade Code Extension reads a separate value |
 | --- | --- |
 | Claude Code options documented with `<value>` | Take the next argument whatever it looks like, as Commander does |
 | Antigravity non-boolean flags | Take the next argument whatever it looks like, as Go's flag package does |
@@ -536,7 +536,7 @@ Read each option together with its value, following that CLI's parser:
 
 Any other option takes the next argument only when it does not start with `-`. For unknown options, this lenient
 rule prefers missing a positional argument to rejecting a newly added native option that takes a value.
-Pi treats `--name=value` for its own options as an unknown flag, so Facade neither extracts a model from that spelling
+Pi treats `--name=value` for its own options as an unknown flag, so Facade Code Extension neither extracts a model from that spelling
 nor merges it into a list, but still refuses it when the option name is reserved.
 
 Validation, migration, `--settings` extraction, list merging and `-c` hook merging all read arguments this same way.
@@ -546,7 +546,7 @@ An argument already taken as a value is not read again as an option, subcommand 
 a model. A `--settings=...` string in that same value position is prompt text too, and is not extracted or merged.
 
 Pi's provider is part of its `model`, such as `openrouter/my-model`; its native `--provider` requires `--model`, which
-Facade supplies. `--session-dir` remains allowed, and history discovery follows Pi's native precedence.
+Facade Code Extension supplies. `--session-dir` remains allowed, and history discovery follows Pi's native precedence.
 Custom-program arguments pass through without these adapter reservations. Additive and merged integrations follow 3.4.
 
 ### 3.2 Adapter-owned invocation
@@ -571,15 +571,15 @@ unverified and reports that state. Antigravity's first task goes after what its 
 (COLLABORATION-2.2), as its first message. Do not wait for MCP or activity idle beyond that, send a confirmed prompt twice
 or synthesize a prompt to make MCP appear connected.
 
-The legacy implementation starts Codex with `-c check_for_update_on_startup=false`. The Orchestrator's startup
+The legacy implementation starts Codex with `-c check_for_update_on_startup=false`. Facade Code Framework's startup
 and updater policy depends on the initiator and YOLO (6.3).
 
 ### 3.3 Native configuration and trust
 
-**Users configure native CLI settings and trust through the CLI; Facade writes only necessary integration configuration.**
+**Users configure native CLI settings and trust through the CLI; Facade Code Extension writes only necessary integration configuration.**
 
-Use native configuration files, commands or explicit literal launch options for vendor preferences. Facade does not
-provide a generic engine to edit arbitrary settings files or mirror their schemas. Facade trusts the folder an agent
+Use native configuration files, commands or explicit literal launch options for vendor preferences. Facade Code Extension does not
+provide a generic engine to edit arbitrary settings files or mirror their schemas. Facade Code Extension trusts the folder an agent
 starts in, as the person would by accepting the CLI's own trust question: where the CLI takes trust for one launch, in
 that launch (Codex `-c projects` with `trust_level = "trusted"` for the folder; Muse Code `--trust-workspace`; Pi
 `--approve`); where it keeps trust in its own file, by merging only that entry as the CLI itself writes it, under the
@@ -609,18 +609,18 @@ so restoration can validate the original entry (CONFIGURATION-3.4); a missing or
 built-in.
 
 For example, `"Codex · work": {"type": "codex", "args": ["--profile", "work"]}` uses the Codex adapter with the
-`work` profile. Provider configuration remains native (CONFIGURATION-5). There is no Facade `baseUrl`, `apiKey`,
+`work` profile. Provider configuration remains native (CONFIGURATION-5). There is no Facade Code Extension `baseUrl`, `apiKey`,
 provider generator or generated key-helper mechanism.
 
-| User input | How the adapter keeps both user and Facade integrations |
+| User input | How the adapter keeps both user and Facade Code Extension integrations |
 | --- | --- |
 | Claude `--mcp-config`, `--plugin-dir`, `--allowedTools` / `--allowed-tools`; Pi `-e` / `--extension` | Use native additive behavior where verified; otherwise merge before passing one effective input |
-| Claude `--settings` | Merge user settings first, then Facade-owned fields; preserve unrelated settings and user rules |
+| Claude `--settings` | Merge user settings first, then Facade Code Extension-owned fields; preserve unrelated settings and user rules |
 | Antigravity `--settings` / `-settings` | Merge in argument order, replacing each named top-level key; then add the run's tools permission and tracked title command |
-| Codex or Muse `-c hooks` | Merge user hooks with Facade's session hook |
+| Codex or Muse `-c hooks` | Merge user hooks with Facade Code Extension's session hook |
 
 Verify repeated-option behavior with the supported CLI; do not assume repetition appends. The merged Claude or
-Antigravity settings go into a per-run file with mode 0600 on POSIX. On Windows, Facade sets no access control list;
+Antigravity settings go into a per-run file with mode 0600 on POSIX. On Windows, Facade Code Extension sets no access control list;
 the file inherits its folder's permissions. CONFIGURATION-1.3 describes the default profile's protection and the
 private-folder requirement for another `FACADE_HOME`. Pass `--settings <file>`, not inline JSON containing values.
 The file follows 2.2's cleanup rules. CONFIGURATION-5.1 owns Claude's environment mirroring, the two null exceptions,
@@ -630,13 +630,13 @@ These checks can refuse a launch; optional tool or identity integration failures
 Every Antigravity launch passes one `--settings <file of the run>`, even when the file contains only `{}`.
 Read each user occurrence in argument order: `--settings`, `-settings`, and either spelling with `=`. Each replaces
 the top-level keys it names. For example, a later `{"theme": "light"}` replaces an earlier `theme` but keeps other keys.
-Then add Facade's tools permission if the run has the tools, and its title command if the session is tracked.
+Then add Facade Code Extension's tools permission if the run has the tools, and its title command if the session is tracked.
 An unreadable or invalid user settings value is a configuration error at that argument's path, as for Claude.
 If Antigravity's own settings file cannot be read, identity tracking is unavailable; the per-run settings file is
 still made with the person's settings and any active tools permission.
 
 `type: custom` starts its literal command and arguments with 1.2's shared environment, including `FACADE_AGENT` and
-cleanup. It gets no Facade tools, skill, trust or YOLO mapping, no model/effort override, no input or screen reader,
+cleanup. It gets no Facade Code Extension tools, skill, trust or YOLO mapping, no model/effort override, no input or screen reader,
 and no native history integration. An ordinary message or first task fails as `unsupported` without stopping the
 program's launch; direct text and keys still work. Startup completes when the process starts. Without an activity
 report its state stays unknown, not an integration error (CONFIGURATION-2.3).
@@ -650,12 +650,12 @@ report its state stays unknown, not an integration error (CONFIGURATION-2.3).
 The legacy implementation opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
 The picker uses `Show Agent Command Line`, with ` · {folder}` appended at the second step.
 Show executable and environment sources, the folder, literal argument order, resulting YOLO, native sandbox and
-approval facts, folder trust and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
+approval facts, folder trust and configuration errors. It includes the arguments and variables the Facade Code Extension tools (2.2) and session
 tracking (2.4) add at a start, in their literal order, without writing any launch file to show them: a value that exists
 only once a start makes it - a generated path or session ID - appears as a named placeholder, and what cannot be planned
 without writing files is said in words. Use one launch configuration and RULES-4.3's YOLO source. A chosen inspection
 location is not an API launch default. Apply CONFIGURATION-4.2: show the person's environment names and sources,
-never their values. Show Facade's constants; values generated for each run keep their placeholders.
+never their values. Show Facade Code Extension's constants; values generated for each run keep their placeholders.
 When Claude or Antigravity receives a per-run settings file, also show that file's JSON with the person's environment
 values and other secret values hidden, and per-run values replaced by placeholders. This preview writes no file.
 Redact generated arguments and files structurally before serialization, including nested values from the person's
@@ -709,11 +709,11 @@ documentation states its contract, as Claude Code's session-picker naming does f
 installed CLI is the runtime evidence.
 
 
-## 6 CLI behavior owned by the Orchestrator
+## 6 CLI behavior owned by Facade Code Framework
 
-### 6.1 Use the Orchestrator's CLI catalog and data
+### 6.1 Use Facade Code Framework's CLI catalog and data
 
-**The VS Code entry point obtains CLI choices, start results, titles and saved sessions from the Orchestrator.**
+**The VS Code entry point obtains CLI choices, start results, titles and saved sessions from Facade Code Framework.**
 
 The [product's CLI table](../../PRODUCT.md#cli-differences) summarizes CLI-specific behavior, including
 custom-program capabilities. The [rules implementation and specification](../../framework/islands/rules.md) describe
@@ -721,7 +721,7 @@ adapter details. The editor uses RULES-6.6 for settings and LIFECYCLE-5.4 for Re
 
 ### 6.2 MCP configuration for Antigravity and OpenCode
 
-**The Orchestrator configures the Facade MCP server through Antigravity's project plugin and OpenCode's launch environment.**
+**Facade Code Framework configures the Facade Code Extension MCP server through Antigravity's project plugin and OpenCode's launch environment.**
 
 Antigravity loads the shared project plugin at `.agents/plugins/facade/`. The server uses the run identity from
 the Antigravity launch environment. Another Antigravity process that inherits that environment and loads the
@@ -736,7 +736,7 @@ summarizes the user-visible limits.
 **Use the initiating operation and the target home's YOLO setting.**
 
 MCP `start_agent` starts a run as an agent. Shell and editor starts and both forms of resume use person policy.
-All managed runs receive the approvals for Facade's MCP tools and its Codex hook. The CLI keeps its own login,
+All managed runs receive the approvals for Facade Code Extension's MCP tools and its Codex hook. The CLI keeps its own login,
 project hooks and other approvals with YOLO off. YOLO selects the CLI's native work permissions and sandbox mode.
 A person-started run keeps the CLI's initial trust, update and risk prompts. A YOLO agent-started run uses the
 applicable startup controls below.
@@ -753,7 +753,7 @@ applicable startup controls below.
 An agent start disables automatic updates in Claude Code, Antigravity, OpenCode and the Muse Code launcher
 using their process environment. Automatic updater settings are applied independently of YOLO. Muse Code can
 still print a banner about a previous update. Its Windows native executable starts without the launcher (2.4).
-When a Facade launch reuses a running CLI's environment, it restores the updater inputs before applying the
+When a Facade Code Extension launch reuses a running CLI's environment, it restores the updater inputs before applying the
 destination's CLI entry. This includes a person start issued from inside that run.
 
 ## Checks
@@ -761,7 +761,7 @@ destination's CLI entry. This includes a person start issued from inside that ru
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.4 | Destination discovery, independent entries, unknown-version launch, OpenCode below version 2 refusal, disabled entries, matching PATH/env/quoting, missing references fail only in entry env and expand to empty in terminal/profile layers, Windows duplicate names, launcher recognition and cmd.exe refusals, native permissions, request/entry/native model-effort precedence |
-| 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, terminal and report titles rejected for each built-in (2.3), Muse Code's screen reader on its fixtures and its reports' precedence |
+| 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade Code Extension tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, terminal and report titles rejected for each built-in (2.3), Muse Code's screen reader on its fixtures and its reports' precedence |
 | 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks; native-title refresh at 2.4's read times, its cache and its retention across reattachment, as VERIFICATION U14 checks |
 | 3.1–3.4 | Literal arguments, reserved-option tables and aliases, short clusters and attached values, Go single-dash options, end marker versus a required value, parent/child config conflicts, per-CLI dash-prefixed values read consistently by validation/migration/settings extraction/list merging/hook merging, additive integrations and settings/hooks merges, run settings with POSIX 0600 and inherited Windows permissions, Antigravity's file with and without tools or identity tracking, Claude null conflicts, custom-program limits, native prompt mapping, folder trust and user configuration preserved |
 | 4.1–4.2 | Show Agent Command Line describes and redacts the configured launch and run-settings JSON, writes no preview files, and says where no trust entry is written; staged cwd validation |

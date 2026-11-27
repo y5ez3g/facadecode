@@ -19,8 +19,8 @@ interface LocationOptions {
 	readonly log: LogPort;
 }
 
-/** The Orchestrator's locations for this workspace, associated with their source roots (RULES-6.5). */
-export class OrchestratorLocations implements LocationPort, Disposable {
+/** Facade Code Framework's locations for this workspace, associated with their source roots (RULES-6.5). */
+export class FrameworkLocations implements LocationPort, Disposable {
 	private readonly changed = new vscode.EventEmitter<void>();
 	private readonly removed = new vscode.EventEmitter<LocationRemoval>();
 	readonly onDidChange = this.changed.event;

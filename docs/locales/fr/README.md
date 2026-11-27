@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
+<img src="../../../extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**L'orchestrateur multi-agents pour VS Code.**
+**Exécutez des agents de développement ensemble dans VS Code.**
 
 Exécutez des CLI natives d'agents, modifiez du code et relisez les modifications dans la même fenêtre d'IDE. Utilisez vos propres comptes et abonnements, et laissez les agents collaborer entre fenêtres et machines.
 
@@ -35,9 +35,9 @@ Exécutez des CLI natives d'agents, modifiez du code et relisez les modification
 code --install-extension facade.facadecode
 ```
 
-Ou installez **Facade Code** depuis le [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ou [Open VSX](https://open-vsx.org/extension/facade/facadecode). Il fonctionne sous macOS (Apple silicon), Linux (x64) et Windows (x64).
+Ou installez **Facade Code Extension** depuis le [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ou [Open VSX](https://open-vsx.org/extension/facade/facadecode). Il fonctionne sous macOS (Apple silicon), Linux (x64) et Windows (x64).
 
-Ensuite, installez les CLI d'agents prises en charge que vous prévoyez d'utiliser et connectez-vous-y : Claude Code, Codex, Antigravity, Muse Code, OpenCode ou Pi. Facade Code démarre chaque CLI en utilisant ses propres identifiants et abonnements.
+Ensuite, installez les CLI d'agents prises en charge que vous prévoyez d'utiliser et connectez-vous-y : Claude Code, Codex, Antigravity, Muse Code, OpenCode ou Pi. Facade Code Extension démarre chaque CLI en utilisant ses propres identifiants et abonnements.
 
 > **Les agents s'exécutent sans invite d'approbation par défaut.** Avec `yolo` activé par défaut, les agents peuvent exécuter des commandes et modifier des fichiers sans demander confirmation au préalable. Désactivez-le pour rétablir les invites d'approbation standard de chaque CLI. Consultez l'[extension README](../../../extension/README.md#install).
 
@@ -45,7 +45,7 @@ Ensuite, installez les CLI d'agents prises en charge que vous prévoyez d'utilis
 
 **Vos agents et votre IDE, dans la même fenêtre.**
 
-Facade Code exécute les CLI natives d'agents (Claude Code, Codex, Antigravity, Muse Code, OpenCode et Pi) dans des onglets de terminal d'éditeur aux côtés de vos fichiers, en s'appuyant sur les commandes, les outils, les comptes et les abonnements propres à chaque CLI. Une carte dans le panneau suit l'état de chaque agent.
+Facade Code Extension exécute les CLI natives d'agents (Claude Code, Codex, Antigravity, Muse Code, OpenCode et Pi) dans des onglets de terminal d'éditeur aux côtés de vos fichiers, en s'appuyant sur les commandes, les outils, les comptes et les abonnements propres à chaque CLI. Une carte dans le panneau suit l'état de chaque agent.
 
 - **Travaillez aux côtés de votre code.** Chaque agent tourne dans son propre onglet de terminal au sein de la zone d'édition. Fermer un onglet le masque sans interrompre l'agent ; cliquer sur sa carte l'affiche à nouveau.
 - **Suivez l'état de l'ensemble des agents.** Les cartes indiquent ce qui a été envoyé en dernier à chaque agent et s'il travaille, attend une autorisation ou a rencontré une erreur, avec des détails affichant son titre, son dossier et qui l'a lancé. Les agents continuent de fonctionner lors des rechargements de fenêtre et des redémarrages de l'extension.
@@ -57,19 +57,19 @@ Facade Code exécute les CLI natives d'agents (Claude Code, Codex, Antigravity, 
 
 Grâce à MCP et à un protocole de terminal, les agents peuvent démarrer, arrêter, trouver et contacter d'autres agents, lire leurs écrans de terminal, taper du texte et appuyer sur des touches.
 
-- **Démarrer et arrêter des agents.** Un agent peut démarrer d'autres agents avec n'importe laquelle des six CLI, dans n'importe quel dossier ou nouveau worktree de vos fenêtres Facade sur cet ordinateur, et leur confier leur première tâche. Une requête réessayée avec le même identifiant de requête ne démarre jamais un deuxième agent.
-- **Envoyer des messages.** Les agents échangent des messages entre eux et peuvent vous envoyer des messages. Facade colle le message entier en une seule fois et l'envoie. Si du texte non envoyé ou une question d'invite bloque la saisie, la transmission attend que la saisie soit libre.
+- **Démarrer et arrêter des agents.** Un agent peut démarrer d'autres agents avec n'importe laquelle des six CLI, dans n'importe quel dossier ou nouveau worktree de vos fenêtres Facade Code Extension sur cet ordinateur, et leur confier leur première tâche. Une requête réessayée avec le même identifiant de requête ne démarre jamais un deuxième agent.
+- **Envoyer des messages.** Les agents échangent des messages entre eux et peuvent vous envoyer des messages. Facade Code Extension colle le message entier en une seule fois et l'envoie. Si du texte non envoyé ou une question d'invite bloque la saisie, la transmission attend que la saisie soit libre.
 - **Contrôle du terminal.** Un agent peut lire l'écran d'un autre agent, taper des commandes et appuyer sur des touches pour répondre aux invites ou débloquer un pair. Lorsqu'un agent enfant attend une autorisation, une réponse ou une connexion pendant 20 secondes, l'agent qui l'a démarré est averti.
 
 ## Agent Mesh
 
 **Connectez des agents entre fenêtres, machines et environnements.**
 
-Facade Code connecte les agents de toutes vos fenêtres Facade sur cet ordinateur au sein d'un même réseau. Ouvrez une fenêtre [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) pour étendre cette collaboration à une autre machine.
+Facade Code Extension connecte les agents de toutes vos fenêtres Facade Code Extension sur cet ordinateur au sein d'un même réseau. Ouvrez une fenêtre [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) pour étendre cette collaboration à une autre machine.
 
-- **Entre les fenêtres.** Avec `yolo` activé, un agent peut joindre tous les agents de vos fenêtres Facade sur cet ordinateur, qu'ils soient locaux ou issus de Remote - SSH. Lorsqu'il est désactivé, un agent ne peut joindre que son propre groupe : l'agent que vous avez démarré et ceux lancés à partir de lui.
+- **Entre les fenêtres.** Avec `yolo` activé, un agent peut joindre tous les agents de vos fenêtres Facade Code Extension sur cet ordinateur, qu'ils soient locaux ou issus de Remote - SSH. Lorsqu'il est désactivé, un agent ne peut joindre que son propre groupe : l'agent que vous avez démarré et ceux lancés à partir de lui.
 - **Étendre via SSH.** Dans une fenêtre [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), les agents tournent directement sur la machine distante avec les outils, fichiers et comptes présents sur place. Les agents locaux peuvent démarrer des agents et leur envoyer des messages directement dans les fenêtres Remote - SSH.
-- **Coordonner depuis votre téléphone.** Connectez l'application mobile Claude à une session Claude Code sur votre ordinateur à l'aide de [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Cette session peut coordonner d'autres agents via Facade et transmettre l'avancement directement sur votre téléphone.
+- **Coordonner depuis votre téléphone.** Connectez l'application mobile Claude à une session Claude Code sur votre ordinateur à l'aide de [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Cette session peut coordonner d'autres agents via Facade Code Extension et transmettre l'avancement directement sur votre téléphone.
 
 <sub>Remote Control nécessite une version prise en charge de Claude Code, un abonnement éligible et une connexion avec étendue complète. Consultez ses [conditions de configuration](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
@@ -97,6 +97,6 @@ Pour consulter les directives de contribution et la discipline relative aux bran
 
 ## Licence
 
-MIT, identique à la version amont de VS Code. Consultez [`LICENSE.txt`](../../../LICENSE.txt) pour prendre connaissance de la notice de copyright de Microsoft et des avis des contributeurs de Facade Code.
+MIT, identique à la version amont de VS Code. Consultez [`LICENSE.txt`](../../../LICENSE.txt) pour prendre connaissance de la notice de copyright de Microsoft et des avis des contributeurs de Facade Code Extension.
 
-<sub>Facade Code est un produit indépendant qui n'est ni affilié, ni approuvé, ni sponsorisé par les fournisseurs des outils tiers présentés. Toutes les marques et tous les logos de tiers appartiennent à leurs propriétaires respectifs.</sub>
+<sub>Facade Code Extension est un produit indépendant qui n'est ni affilié, ni approuvé, ni sponsorisé par les fournisseurs des outils tiers présentés. Toutes les marques et tous les logos de tiers appartiennent à leurs propriétaires respectifs.</sub>

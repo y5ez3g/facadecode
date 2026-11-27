@@ -12,7 +12,7 @@ use crate::formats::{powershell_word, shell_word};
 const MCP_CONFIG: &str = "copilot-mcp.json";
 const PLUGIN: &str = "copilot-session";
 
-/// Copilot's highest-priority MCP override names Facade's server for the run, so it wins over a
+/// Copilot's highest-priority MCP override names Facade Code Framework's server for the run, so it wins over a
 /// `facade` server in any other source.
 pub(super) fn tools(entry: &Entry<'_>) -> Wiring {
     let mut entry = claude_entry(entry);

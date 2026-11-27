@@ -1,6 +1,6 @@
 # Base
 
-Base is what Facade's programs share: both protocols, everything that differs between operating
+Base is what Facade Code Framework's programs share: both protocols, everything that differs between operating
 systems, the settings file, and the texts a model reads. It is a library with no state of its own
 to speak of, so every other crate can depend on it and it depends on none of them. Crate
 `facade-base`, folder `framework/crates/base/`.
@@ -48,7 +48,7 @@ to speak of, so every other crate can depend on it and it depends on none of the
 
 ## Never does
 
-- Depends on another Facade crate.
+- Depends on another Facade Code Framework crate.
 - Names a CLI in non-test code, or branches by CLI, outside the texts a model reads.
 - Starts a thread, opens the store, or keeps runtime state beyond `FORK_LOCK`, the build a test
   plays, on Linux whether process descriptors work, found once, and on Windows the terminal I/O
@@ -59,7 +59,7 @@ to speak of, so every other crate can depend on it and it depends on none of the
 
 The public paths are `facade_base::<module>`. Grouped by who calls them:
 
-**The Shell and Framework MCP**
+**The Shell and Facade Code Framework MCP**
 
 - `key_input` defines the public key names and batch limit. `key_problems` checks a batch and gives the current
   spelling for a recognized alias. The shared key encoder and paste delimiters give Shell's preflight and
@@ -108,7 +108,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `boot_time`, `signal_number(name)`, `fork_lock()`. Unix only: process groups
   (`group_members`, `signal_group`), `reap_child`, `peer_pid(socket)`; Windows only: `WaitPacket`,
   and `AsHandle` and `exit` on `ProcessObservation`.
-- `terminal`: `PtyMaster`, the side of a terminal Facade holds (a PTY master on Unix; on Windows a
+- `terminal`: `PtyMaster`, the side of a terminal Facade Code Framework holds (a PTY master on Unix; on Windows a
   pseudo console's input, output and signal pipe ends and the CLI's job); `PtyIo`, how the daemon
   reads and writes one, with `stop_reading` and `let_go_before_stop`; `PASTE_BYTES_PER_MS`;
   `key_down_records`; `test_terminal`.
@@ -189,7 +189,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `framework/ssh/` folder,
   with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent
   OpenSSH login. Authorization changes and host trust changes carry the exact entries to roll back.
-  Authorization removal uses the Facade machine ID. Windows administrators use the shared OpenSSH authorization
+  Authorization removal uses the Facade Code Framework machine ID. Windows administrators use the shared OpenSSH authorization
   file with its required access list. For an unknown return host, the authenticated server key goes in a safe
   configured native user known_hosts file. The strict proof and saved reconnect apply OpenSSH's configured
   trust and revocation policy. A changed or revoked key, or no safe user file for first-time trust, fails the
@@ -233,7 +233,7 @@ time; in debug builds, `FACADE_TEST_BUILD` and `FACADE_TEST_PROGRAM`.
 
 ## Depends on
 
-No Facade crate. `serde`, `serde_json` and `schemars` for the protocol types; `tokio` for the
+No Facade Code Framework crate. `serde`, `serde_json` and `schemars` for the protocol types; `tokio` for the
 daemon's terminals, socket and process ends; on Unix `nix`, `libc` and `signal-hook`, on Windows
 `windows-sys`, for the platform; `sha2` for the home key; `base64` for terminal bytes; `unicode-segmentation` for
 display text.
@@ -283,7 +283,7 @@ The daemon and keeper types and framing, and a blocking daemon client.
 
 ### platform
 
-What Facade asks of the operating system. `framework/crates/base/src/platform/`.
+What Facade Code Framework asks of the operating system. `framework/crates/base/src/platform/`.
 - **Owns:** which system this is (`system.rs`); the socket paths and the client's socket
   (`socket_paths.rs`); the daemon's listener (`sockets.rs`); the services' locks, logs and start
   (`service.rs`); `framework/bin/` (`programs.rs`); process observation, groups, environments and
@@ -324,7 +324,7 @@ What Facade asks of the operating system. `framework/crates/base/src/platform/`.
 - **Owns:** reading `<home>/facade.json`: JSON with comments and trailing commas. It keeps `yolo`
   (true unless the file says false), `names`, and the members of `clis` in the file's order.
 - **Keeps:** a file that is missing, or holds only spaces and comments, holds every default.
-  Anything else Facade cannot read stops every start, each problem said with the file's path, line
+  Anything else Facade Code Framework cannot read stops every start, each problem said with the file's path, line
   and column; nothing is guessed and no default stands in.
 - **Never does:** writes the file; interprets a CLI entry (rules reads them from `clis`).
 - **Interface:** `read() -> Result<Settings, String>`, `read_file`, `parse(text, shown)`,
@@ -348,7 +348,7 @@ What a model reads at Facade API v1's MCP entry point in `framework/crates/base/
   use the instructions according to the CLI's rule.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}` and
   `tools::DEFINITIONS`.
-  The [Framework MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
+  The [Facade Code Framework MCP contract](../../extension/engineering/MCP.md#7-mcp-through-facade-code-framework)
   describes the tools and their results.
 
 ## Reading the code

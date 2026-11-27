@@ -1,5 +1,5 @@
 //! Tests of the command line's help definitions and of the words it prints. The scenario tests
-//! in the Framework workspace run the built program.
+//! in the Facade Code Framework workspace run the built program.
 
 mod attach;
 mod errors;

@@ -58,16 +58,16 @@ fn each_catalog_row_prints_its_error_and_tip() {
 }
 
 #[test]
-fn an_unreachable_orchestrator_names_the_log_to_check() {
+fn an_unreachable_framework_names_the_log_to_check() {
     let log = PathBuf::from("/home/you/.facade/framework/logs/keeper.log");
     let problem = Problem::Unreachable {
-        why: given("the Orchestrator keeper exited before it started"),
+        why: given("the Facade Code Framework keeper exited before it started"),
         log: Some(log.clone()),
     };
     assert_eq!(
         problem.to_string(),
         format!(
-            "error: could not connect to the Orchestrator: the Orchestrator keeper exited before it started\n  \
+            "error: could not connect to Facade Code Framework: the Facade Code Framework keeper exited before it started\n  \
              tip: check '{}' for details",
             log.display()
         )
@@ -78,7 +78,7 @@ fn an_unreachable_orchestrator_names_the_log_to_check() {
     };
     assert_eq!(
         problem.to_string(),
-        "error: could not connect to the Orchestrator: permission denied"
+        "error: could not connect to Facade Code Framework: permission denied"
     );
 }
 
@@ -144,7 +144,8 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
         Some(&agent_label("a5", "laptop", "Cursor", "online", false)),
         refusal("unsupported", "a5@laptop is a guest", Value::Null),
     );
-    let guest_line = "error: Cursor (a5@laptop) is a guest and cannot be stopped by Facade.";
+    let guest_line =
+        "error: Cursor (a5@laptop) is a guest and cannot be stopped by Facade Code Framework.";
     assert_eq!(
         stop_diagnostic(&guest, false),
         (
@@ -235,7 +236,7 @@ fn machine_rows_print_their_error_and_tip() {
             Problem::NoFacade {
                 destination: given("gpu"),
             },
-            "error: could not find facade on gpu\n  tip: run the Facade Code installer on gpu and try again",
+            "error: could not find facade on gpu\n  tip: run the Facade Code Framework installer on gpu and try again",
         ),
         (
             Problem::SshLogin {

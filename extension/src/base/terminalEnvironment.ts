@@ -45,7 +45,7 @@ const EDITOR_VARIABLES: readonly RegExp[] = [/^ELECTRON_.+$/, /^VSCODE_(?!(PORTA
 const EDITOR_VARIABLE_KEPT = 'VSCODE_IPC_HOOK_CLI';
 
 /**
- * What an inherited environment carries for the session that started the editor, never for a run: Facade's own run variables - the
+ * What an inherited environment carries for the session that started the editor, never for a run: Facade Code Extension's own run variables - the
  * alias, the session hook's file, Antigravity's title command, the shim's run and ptyd and Muse Code's reference to its runtime - which
  * each launch sets itself where it uses them; and a Claude Code session's markers, which make a CLI started from it act as that
  * session's child or background job.

@@ -1,4 +1,4 @@
-//! An agent's terminal as Facade holds it, and the daemon's reading and writing of it.
+//! An agent's terminal as Facade Code Framework holds it, and the daemon's reading and writing of it.
 //!
 //! On Unix the terminal is a PTY master, read and written without blocking on tokio's reactor. On
 //! Windows it is a pseudo console's pipes: the input pipe's write end, the output pipe's read end,
@@ -27,7 +27,7 @@ pub const PASTE_BYTES_PER_MS: usize = 4_096;
 #[cfg(windows)]
 pub const PASTE_BYTES_PER_MS: usize = 64;
 
-/// The side of an agent's terminal that Facade holds. Unix: the PTY master. Windows: the input
+/// The side of an agent's terminal that Facade Code Framework holds. Unix: the PTY master. Windows: the input
 /// pipe's write end, the output pipe's read end, the signal pipe's write end until it is let go
 /// of, and the CLI's job.
 #[derive(Debug)]
@@ -169,7 +169,7 @@ pub fn key_down_records(text: &str) -> Vec<u8> {
     records.into_bytes()
 }
 
-/// A terminal whose CLI side a unit test plays: its Facade side, and the CLI's. Unix: a PTY whose
+/// A terminal whose CLI side a unit test plays: its Facade Code Framework side, and the CLI's. Unix: a PTY whose
 /// sides no child inherits, its CLI side raw. Windows: pipes.
 pub fn test_terminal(cols: u16, rows: u16) -> io::Result<(PtyMaster, TestCli)> {
     let (master, cli) = imp::test_terminal(cols, rows)?;
@@ -185,7 +185,7 @@ impl TestCli {
         self.0.try_clone().map(TestCli)
     }
 
-    /// Reads what Facade wrote to the terminal, waiting for it.
+    /// Reads what Facade Code Framework wrote to the terminal, waiting for it.
     pub fn read_input(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.read_input(buf)
     }

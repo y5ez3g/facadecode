@@ -417,7 +417,7 @@ impl Daemon {
     }
 
     /// What the daemon before kept of the agent's state, read before serving. A run with a stop
-    /// pending was stopped by Facade.
+    /// pending was stopped by Facade Code Framework.
     async fn kept_state(
         &self,
         id: &str,

@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
+<img src="../../../extension/media/icon.png" alt="Facade Code Extension" width="112">
 
-# Facade Code
+# Facade Code Extension
 
-**VS Code のためのマルチエージェント オーケストレーター。**
+**VS Code で複数のコーディングエージェントを一緒に実行。**
 
 ネイティブなエージェント CLI の実行、コード編集、変更内容のレビューを同じ IDE ウィンドウ内で行えます。自身のアカウントやサブスクリプションを使用し、ウィンドウやマシンを越えてエージェント同士を連携させましょう。
 
@@ -35,9 +35,9 @@
 code --install-extension facade.facadecode
 ```
 
-または、[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) や [Open VSX](https://open-vsx.org/extension/facade/facadecode) から **Facade Code** をインストールします。macOS (Apple silicon)、Linux (x64)、Windows (x64) で動作します。
+または、[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) や [Open VSX](https://open-vsx.org/extension/facade/facadecode) から **Facade Code Extension** をインストールします。macOS (Apple silicon)、Linux (x64)、Windows (x64) で動作します。
 
-次に、使用予定のサポートされているエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi）をインストールしてサインインします。Facade Code は各 CLI 独自のサインインとサブスクリプションを使用して起動します。
+次に、使用予定のサポートされているエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi）をインストールしてサインインします。Facade Code Extension は各 CLI 独自のサインインとサブスクリプションを使用して起動します。
 
 > **エージェントはデフォルトで確認なしで実行されます。** `yolo` がデフォルトで有効になっているため、エージェントは確認を求めずにコマンドを実行しファイルを変更できます。これを無効にすると、各 CLI の標準の確認プロンプトに戻ります。[拡張機能の README](../../../extension/README.md#install) を参照してください。
 
@@ -45,7 +45,7 @@ code --install-extension facade.facadecode
 
 **あなたとエージェント、そして IDE が同じウィンドウに。**
 
-Facade Code は、ファイルと同じエディターのターミナルタブ内でネイティブなエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi）を直接実行し、各 CLI 自身のコマンド、ツール、アカウント、サブスクリプションを使用します。パネル内のカードで各エージェントのステータスをリアルタイムに追跡できます。
+Facade Code Extension は、ファイルと同じエディターのターミナルタブ内でネイティブなエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi）を直接実行し、各 CLI 自身のコマンド、ツール、アカウント、サブスクリプションを使用します。パネル内のカードで各エージェントのステータスをリアルタイムに追跡できます。
 
 - **コードの隣で作業。** 各エージェントはエディター領域内の専用ターミナルタブで実行されます。タブを閉じると表示が非表示になるだけで、エージェントはバックグラウンドで動き続けます。カードをクリックすればいつでも再び開きます。
 - **複数のエージェントのステータスを追跡。** カードには、各エージェントに最後に送信された内容と、作業中か、許可が必要か、エラーが発生したかが表示され、詳細にはタイトル、フォルダー、誰が起動したかが表示されます。エージェントはウィンドウの再読み込みや拡張機能の再起動を越えて実行を継続します。
@@ -57,19 +57,19 @@ Facade Code は、ファイルと同じエディターのターミナルタブ�
 
 MCP とターミナルプロトコルを介して、エージェントは他のエージェントの起動、停止、検出、メッセージのやり取り、ターミナル画面の読み取り、テキスト入力、キー送信を行うことができます。
 
-- **エージェントの起動と停止。** 任意のエージェントが、このコンピューター上の Facade ウィンドウ内にある任意のフォルダーや新しい worktree で 6 つの CLI のいずれかを使用して他のエージェントを起動し、最初のタスクを与えることができます。同一のリクエスト ID による再試行リクエストで重複したエージェントが作成されることはありません。
-- **メッセージの送信。** エージェント同士でメッセージをやり取りしたり、あなたにメッセージを送信したりできます。Facade はメッセージ全体を一度に貼り付けて送信します。未送信のテキストやプロンプトの質問が入力欄にある場合、入力欄が空くまで送信は待機します。
+- **エージェントの起動と停止。** 任意のエージェントが、このコンピューター上の Facade Code Extension ウィンドウ内にある任意のフォルダーや新しい worktree で 6 つの CLI のいずれかを使用して他のエージェントを起動し、最初のタスクを与えることができます。同一のリクエスト ID による再試行リクエストで重複したエージェントが作成されることはありません。
+- **メッセージの送信。** エージェント同士でメッセージをやり取りしたり、あなたにメッセージを送信したりできます。Facade Code Extension はメッセージ全体を一度に貼り付けて送信します。未送信のテキストやプロンプトの質問が入力欄にある場合、入力欄が空くまで送信は待機します。
 - **ターミナルの制御。** エージェントは他のエージェントの画面を読み取り、コマンドを入力し、キーを送信してプロンプトに回答したり、ブロックされた仲間を助けたりできます。子エージェントが許可、回答、またはサインインを待って 20 秒が経過すると、それを起動したエージェントに通知されます。
 
 ## Agent Mesh
 
 **ウィンドウ、マシン、拠点を越えてエージェントをつなぎます。**
 
-Facade Code は、このコンピューター上で開いている Facade ウィンドウのエージェントをひとつのネットワークに接続します。[VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) ウィンドウを開くことで、その連携を別のマシンへと拡張できます。
+Facade Code Extension は、このコンピューター上で開いている Facade Code Extension ウィンドウのエージェントをひとつのネットワークに接続します。[VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) ウィンドウを開くことで、その連携を別のマシンへと拡張できます。
 
-- **ウィンドウを越えて。** `yolo` が有効な場合、エージェントはこのコンピューター上の各 Facade ウィンドウ（ローカルと Remote - SSH の両方）のすべてのエージェントに到達できます。無効な場合、エージェントは自身が属するグループ（あなたが起動したエージェントおよびそこから起動されたエージェント）にのみ到達できます。
+- **ウィンドウを越えて。** `yolo` が有効な場合、エージェントはこのコンピューター上の各 Facade Code Extension ウィンドウ（ローカルと Remote - SSH の両方）のすべてのエージェントに到達できます。無効な場合、エージェントは自身が属するグループ（あなたが起動したエージェントおよびそこから起動されたエージェント）にのみ到達できます。
 - **SSH 経由で拡張。** [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) ウィンドウでは、エージェントはリモートマシンのツール、ファイル、アカウントを使用して直接そのマシン上で実行されます。ローカルのエージェントから Remote - SSH ウィンドウ内のエージェントを直接起動したり指示を出したりできます。
-- **スマートフォンから調整。** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) を使用して、スマートフォンの Claude アプリをコンピューター上の Claude Code セッションに接続します。そのセッションが Facade を通じて他のエージェントを調整し、進行状況をスマートフォンに報告します。
+- **スマートフォンから調整。** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) を使用して、スマートフォンの Claude アプリをコンピューター上の Claude Code セッションに接続します。そのセッションが Facade Code Extension を通じて他のエージェントを調整し、進行状況をスマートフォンに報告します。
 
 <sub>Remote Control には、サポートされているバージョンの Claude Code、対象のサブスクリプション、およびフルスコープでのサインインが必要です。[セットアップ要件](https://code.claude.com/docs/en/remote-control#requirements) を参照してください。</sub>
 
@@ -97,6 +97,6 @@ IDE プレビュー版のダウンロード：[macOS (Apple silicon, .dmg)](http
 
 ## ライセンス
 
-上流の VS Code と同じく MIT ライセンスです。Microsoft の著作権表記および Facade Code コントリビューターの表記については [`LICENSE.txt`](../../../LICENSE.txt) を参照してください。
+上流の VS Code と同じく MIT ライセンスです。Microsoft の著作権表記および Facade Code Extension コントリビューターの表記については [`LICENSE.txt`](../../../LICENSE.txt) を参照してください。
 
-<sub>Facade Code は独立した製品であり、表示されているサードパーティツールの提供元と提携、推奨、または後援の関係にはありません。すべてのサードパーティの商標およびロゴは、それぞれの所有者に帰属します。</sub>
+<sub>Facade Code Extension は独立した製品であり、表示されているサードパーティツールの提供元と提携、推奨、または後援の関係にはありません。すべてのサードパーティの商標およびロゴは、それぞれの所有者に帰属します。</sub>

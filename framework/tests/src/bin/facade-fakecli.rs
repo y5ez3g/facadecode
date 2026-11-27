@@ -80,7 +80,7 @@
 //! CLI that picks its colors by the background does: OSC 10 and 12 ended by BEL, OSC 11 by ST. Its
 //! screen shows each answer as `color <number>;<color> <bel|st>`, ended as the answer was.
 //!
-//! Tools: `--mcp-config <file>` gives the CLI Facade's relay command, arguments and environment.
+//! Tools: `--mcp-config <file>` gives the CLI Facade Code Framework's relay command, arguments and environment.
 //! It starts the server's MCP session at once and holds it until it ends. Older test launches
 //! supply the program through `FAKECLI_MCP`.
 //! `/fake mcp stop` ends the server while the CLI goes on. `FAKECLI_MCP_DELAY_MS` starts it that
@@ -92,7 +92,7 @@
 //! started and closes on Escape, and it runs the plugin's `PreInvocation` hook as each message it
 //! takes begins a turn, logging what the hook gives the model. The panel shows the server ready
 //! once it answered the start of its MCP session, and a turn that begins before that is logged as
-//! `turn without Facade's server`. `FAKECLI_PANEL_DELAY_MS` starts the server that long after the
+//! `turn without Facade Code Framework's server`. `FAKECLI_PANEL_DELAY_MS` starts the server that long after the
 //! panel opens, as a server that starts slowly does.
 //!
 //! `FAKECLI_LOOK` naming one of `Native` makes it stand in for that CLI: its input, the marks it
@@ -508,7 +508,7 @@ impl FakeCli {
                 return;
             }
             if !self.server_ready() {
-                self.log_line("turn without Facade's server");
+                self.log_line("turn without Facade Code Framework's server");
             }
             self.run_plugin_hook();
         }
@@ -732,8 +732,8 @@ impl FakeCli {
         if self.panel {
             self.panel_drawn_ready = self.server_ready();
             let server = match (self.native, self.panel_drawn_ready) {
-                (Some(_), true) => "❯ Facade (plugin) - enabled",
-                (Some(_), false) => "❯ Facade (plugin) - connecting",
+                (Some(_), true) => "❯ Facade Code Framework (plugin) - enabled",
+                (Some(_), false) => "❯ Facade Code Framework (plugin) - connecting",
                 (None, true) => ">  ✓ facade_facade  Tools: list_agents",
                 (None, false) => ">  ⋯ facade_facade",
             };
@@ -769,7 +769,7 @@ impl FakeCli {
             }
         }
         frame.push_str(&format!(
-            "\x1b[1m{}\x1b[0m \x1b[2m(Facade test CLI)\x1b[0m\r\n",
+            "\x1b[1m{}\x1b[0m \x1b[2m(Facade Code Framework test CLI)\x1b[0m\r\n",
             self.name
         ));
         let room = rows.saturating_sub(6);
@@ -934,7 +934,7 @@ impl FakeCli {
                 .collect();
             let gap = usize::from(starts_below_prompt);
             let first = rows.saturating_sub(4 + gap + lines.len()).max(1);
-            frame.push_str(&format!("\x1b[{first};1H  → "));
+            frame.push_str(&format!("\x1b[{first};1H\x1b[K  → "));
             let mut row = first + gap;
             for (index, line) in lines.iter().enumerate() {
                 let style = if line.starts_with("[Pasted text #") {
@@ -1263,7 +1263,7 @@ fn agy_title_command(arguments: &[String]) -> Option<Vec<String>> {
     Some(vec![title["command"].as_str()?.to_string()])
 }
 
-/// The trusted SessionStart commands in the hooks override Facade gives its Codex stand-in.
+/// The trusted SessionStart commands in the hooks override Facade Code Framework gives its Codex stand-in.
 #[cfg(windows)]
 fn codex_session_hooks(arguments: &[String]) -> Option<Vec<String>> {
     use sha2::{Digest, Sha256};
@@ -1498,7 +1498,7 @@ fn stand_in_mcp_args(arguments: &[String]) -> anyhow::Result<Vec<String>> {
                     .strip_prefix("pi.registerMcpServer(\"facade\", ")
                     .and_then(|line| line.strip_suffix(");"))
             })
-            .context("the Pi stand-in has no Facade relay entry")?;
+            .context("the Pi stand-in has no Facade Code Framework relay entry")?;
         let entry: serde_json::Value =
             serde_json::from_str(entry).context("reading Pi's test relay entry")?;
         return serde_json::from_value(entry["args"].clone())

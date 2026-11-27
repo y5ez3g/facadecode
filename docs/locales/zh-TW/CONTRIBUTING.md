@@ -1,6 +1,6 @@
-# 為 Facade Code 做出貢獻
+# 為 Facade Code Extension 做出貢獻
 
-感謝你的協助。Facade Code 在 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) 上公開開發。
+感謝你的協助。Facade Code Extension 在 [github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode) 上公開開發。
 
 ## Bug 和建議
 
@@ -18,7 +18,7 @@
 
 - 從 `main` 建立分支，命名為 `feature/<number>-<name>`。
 - 只用合併，不用 rebase：功能審查通過後，以 `--no-ff` 合併進 `main`。
-- Facade Code 自己的檔案集中放在一起；在 VS Code 的檔案裡只加可選的掛鉤（hook），不改寫原本的邏輯，這樣日後合併新版 VS Code 的成本才會低。
+- Facade Code Extension 自己的檔案集中放在一起；在 VS Code 的檔案裡只加可選的掛鉤（hook），不改寫原本的邏輯，這樣日後合併新版 VS Code 的成本才會低。
 - 每個功能都有開關，關閉時就是原本的 VS Code。
 - 每個變更都要附上測試。
 - 文件、註解和 commit 訊息一律使用英文。

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Facade daemon API",
+  "title": "Facade Code Framework daemon API",
   "description": "A single JSON-RPC 2.0 frame. Success result and change types are selected by the corresponding request or watch.",
   "api_versions": [
     1
@@ -1367,7 +1367,7 @@
         "available",
         "overrides"
       ],
-      "description": "A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1)."
+      "description": "A CLI a start can run: an entry of Facade Code Framework's settings file (CONFIGURATION-2.1)."
     },
     "CliListArgs": {
       "type": "object",
@@ -1825,7 +1825,7 @@
         {
           "type": "string",
           "const": "unsupported",
-          "description": "The recipient's CLI has no rule to read its input by, so Facade types no message into it."
+          "description": "The recipient's CLI has no rule to read its input by, so Facade Code Framework types no message into it."
         }
       ],
       "description": "Why a message was not delivered."
@@ -2160,7 +2160,7 @@
         {
           "type": "string",
           "const": "stopped",
-          "description": "Facade stopped it."
+          "description": "Facade Code Framework stopped it."
         },
         {
           "type": "string",
@@ -4916,7 +4916,7 @@
         },
         "at": {
           "type": "string",
-          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade Code Framework noticed it."
         }
       },
       "required": [
@@ -5506,7 +5506,7 @@
         "from",
         "at"
       ],
-      "description": "The latest submission through an agent's terminal, from a person, an `agent.type` call with\n`enter`, or a message Facade delivered."
+      "description": "The latest submission through an agent's terminal, from a person, an `agent.type` call with\n`enter`, or a message Facade Code Framework delivered."
     },
     "Scope": {
       "oneOf": [
@@ -6068,11 +6068,11 @@
           "description": "The CLI's own words where it gave any, on `waiting_for_you` and on an `error` the CLI\nreported. Untrusted text on one line."
         },
         "how": {
-          "description": "How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade\ndid not stop it; `exit.reason` says what is known.",
+          "description": "How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade Code Framework\ndid not stop it; `exit.reason` says what is known.",
           "$ref": "#/$defs/HowEnded"
         },
         "reason": {
-          "description": "Why nothing shows what the CLI is doing, on `unknown`, or what Facade found wrong, on an\n`error` it found: a start that showed nothing, or tools the CLI cannot use.",
+          "description": "Why nothing shows what the CLI is doing, on `unknown`, or what Facade Code Framework found wrong, on an\n`error` it found: a start that showed nothing, or tools the CLI cannot use.",
           "$ref": "#/$defs/StateReason"
         }
       },
@@ -6108,10 +6108,10 @@
         {
           "type": "string",
           "const": "tools_unavailable",
-          "description": "`error`: the CLI cannot use the Facade tools it was given; `tools_reason` says why."
+          "description": "`error`: the CLI cannot use the Facade Code Framework tools it was given; `tools_reason` says why."
         }
       ],
-      "description": "Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it."
+      "description": "Why nothing shows what an agent's CLI is doing, or what Facade Code Framework found wrong with it."
     },
     "StatusArgs": {
       "type": "object",
@@ -6541,22 +6541,22 @@
         {
           "type": "string",
           "const": "not_given",
-          "description": "Facade could not give them to this run's CLI; the daemon's log says why."
+          "description": "Facade Code Framework could not give them to this run's CLI; the daemon's log says why."
         },
         {
           "type": "string",
           "const": "not_connected",
-          "description": "Its Facade server did not connect within 30 seconds of the run's start or resume, or of a\ndaemon's recovery of the run."
+          "description": "Its Facade Code Framework server did not connect within 30 seconds of the run's start or resume, or of a\ndaemon's recovery of the run."
         },
         {
           "type": "string",
           "const": "not_started",
-          "description": "Its CLI starts its servers only with its first turn or its panel of servers, and the run's\nstart could not have the panel start Facade's server before the first turn; the daemon's log\nsays why. The first turn starts it."
+          "description": "Its CLI starts its servers only with its first turn or its panel of servers, and the run's\nstart could not have the panel start Facade Code Framework's server before the first turn; the daemon's log\nsays why. The first turn starts it."
         },
         {
           "type": "string",
           "const": "disconnected",
-          "description": "Its Facade server's last connection closed while the run went on."
+          "description": "Its Facade Code Framework server's last connection closed while the run went on."
         },
         {
           "type": "string",
@@ -6564,7 +6564,7 @@
           "description": "The CLI ended."
         }
       ],
-      "description": "Why an agent's CLI cannot use the Facade tools it was given."
+      "description": "Why an agent's CLI cannot use the Facade Code Framework tools it was given."
     },
     "ToolsState": {
       "oneOf": [
@@ -6589,7 +6589,7 @@
           "description": "The CLI was given the tools but cannot use them; `tools_reason` says why."
         }
       ],
-      "description": "Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that a CLI started\nby its rule is given for its run."
+      "description": "Whether an agent's CLI can use Facade Code Framework's tools: `facade-mcp`, the MCP server that a CLI started\nby its rule is given for its run."
     },
     "TypeResult": {
       "type": "object",

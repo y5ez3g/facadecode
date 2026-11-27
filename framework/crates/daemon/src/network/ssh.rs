@@ -1,4 +1,4 @@
-//! Opens one saved SSH session and negotiates the remote Facade entry point.
+//! Opens one saved SSH session and negotiates the remote Facade Code Framework entry point.
 
 use std::io;
 use std::path::Path;
@@ -118,7 +118,7 @@ impl Pipes {
             };
         let action = bootstrap_action(&probe, build, may_install).map_err(|error| {
             ErrorBody::invalid_argument(format!(
-                "Invalid Facade build reported by {}. {error}.",
+                "Invalid Facade Code Framework build reported by {}. {error}.",
                 ssh.config.ssh_destination,
             ))
         })?;
@@ -128,14 +128,14 @@ impl Pipes {
             BootstrapAction::NeedsInstall => {
                 return Err(wire::error(
                     "not_found",
-                    "Facade is not installed on the remote machine. Connect to it explicitly to install Facade.",
+                    "Facade Code Framework is not installed on the remote machine. Connect to it explicitly to install Facade Code Framework.",
                 ).into());
             }
             BootstrapAction::UpgradeLocal => {
                 return Err(wire::error(
                     "unavailable",
                     format!(
-                        "Facade on {} is newer than local build {build}. Upgrade local Facade and retry.",
+                        "Facade Code Framework on {} is newer than local build {build}. Upgrade local Facade Code Framework and retry.",
                         ssh.config.ssh_destination,
                     ),
                 ).into());
@@ -153,7 +153,7 @@ impl Pipes {
                     && let Ok(command) = remote_install_command(shell.system(), build, &remote_home)
                 {
                     failure.error.message.push_str(&format!(
-                        "\nTo install Facade {build} manually on {}, run:\n{command}\n\
+                        "\nTo install Facade Code Framework {build} manually on {}, run:\n{command}\n\
                          For offline installation, use the matching release archive and SHA256SUMS with the installer's package option.",
                         ssh.config.ssh_destination,
                     ));
@@ -212,7 +212,7 @@ impl Pipes {
         find_login_line(
             &mut self.read,
             |line| (line == REMOTE_BOOTSTRAP_BEGIN).then_some(()),
-            "SSH closed before the remote Facade bootstrap began.",
+            "SSH closed before the remote Facade Code Framework bootstrap began.",
         )
         .await?;
         let line = read_control(&mut self.read).await?.ok_or_else(|| {
@@ -226,11 +226,12 @@ impl Pipes {
         let line = read_control(&mut self.read).await?.ok_or_else(|| {
             wire::error(
                 "unavailable",
-                "SSH closed before reporting the remote Facade version.",
+                "SSH closed before reporting the remote Facade Code Framework version.",
             )
         })?;
-        let line = std::str::from_utf8(&line)
-            .map_err(|_| ErrorBody::invalid_argument("Expected a UTF-8 Facade version line."))?;
+        let line = std::str::from_utf8(&line).map_err(|_| {
+            ErrorBody::invalid_argument("Expected a UTF-8 Facade Code Framework version line.")
+        })?;
         let probe = parse_remote_probe(line)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
         Ok((shell, home, probe))
@@ -246,11 +247,11 @@ impl Pipes {
         match read_control(&mut self.read).await? {
             Some(line) if line == BOOTSTRAP_READY.as_bytes() => Ok(()),
             Some(_) => Err(ErrorBody::invalid_argument(
-                "Expected the remote Facade bootstrap to report ready.",
+                "Expected the remote Facade Code Framework bootstrap to report ready.",
             )),
             None => Err(wire::error(
                 "unavailable",
-                "SSH closed before the remote Facade bootstrap was ready.",
+                "SSH closed before the remote Facade Code Framework bootstrap was ready.",
             )),
         }
     }
@@ -294,7 +295,7 @@ async fn read_control(read: &mut BufReader<ChildStdout>) -> Result<Option<Vec<u8
     }
     if line.pop() != Some(b'\n') {
         return Err(ErrorBody::invalid_argument(
-            "Incomplete remote Facade bootstrap line.",
+            "Incomplete remote Facade Code Framework bootstrap line.",
         ));
     }
     if line.last() == Some(&b'\r') {

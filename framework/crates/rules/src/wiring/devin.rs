@@ -32,7 +32,12 @@ pub(crate) fn user_dir(environment: &BTreeMap<String, String>) -> Option<PathBuf
 }
 
 fn read_object(file: &Path) -> Result<Value, String> {
-    let invalid = || format!("{} is not a JSON object Facade can read", file.display());
+    let invalid = || {
+        format!(
+            "{} is not a JSON object Facade Code Framework can read",
+            file.display()
+        )
+    };
     match std::fs::read_to_string(file) {
         Ok(text) => parse_jsonc(&text)
             .ok()
@@ -68,7 +73,7 @@ pub(super) fn tools(
         .is_some_and(|entry| !runs_facade_mcp(entry))
     {
         return Err(format!(
-            "Devin's user MCP configuration names a {SERVER} server that is not Facade's"
+            "Devin's user MCP configuration names a {SERVER} server that is not Facade Code Framework's"
         ));
     }
     for file in project_files(
@@ -172,7 +177,7 @@ fn config_aliases(
     Ok(aliases)
 }
 
-/// Another Facade run gets the original user config root, even if it was unset.
+/// Another Facade Code Framework run gets the original user config root, even if it was unset.
 pub(super) fn restore_config_home(environment: &mut BTreeMap<String, String>) {
     let Some(original) = environment.remove(ORIGINAL_HOME) else {
         return;

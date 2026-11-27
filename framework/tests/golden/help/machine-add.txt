@@ -1,8 +1,8 @@
 Connect to a remote machine over SSH and save it.
 
 Runs SSH in this terminal so you can answer host key or password prompts,
-installs a dedicated Facade SSH key when needed for passwordless reconnects,
-and installs or upgrades Facade on the remote machine. Put Facade options
+installs a dedicated Facade Code Framework SSH key when needed for passwordless reconnects,
+and installs or upgrades Facade Code Framework on the remote machine. Put Facade Code Framework options
 before SSH options and destination; everything after is passed to ssh. Pass
 '--bidirectional' to also authorize and save a return connection from that
 machine back to this machine.

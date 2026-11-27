@@ -298,7 +298,7 @@ pub fn stopped(pid: i32) -> bool {
 }
 
 /// The processes that belong to `folder`, a test's folder: on Unix those working in it or a folder
-/// inside it; on Windows those whose program lies inside it, or whose environment names a Facade
+/// inside it; on Windows those whose program lies inside it, or whose environment names a Facade Code Framework
 /// home or a home folder inside it. macOS shows no environment for its own programs, such as
 /// `/bin/sh` and `sleep`, so this is how a test finds the scripts it started, also once they
 /// outlive the keeper that held their terminals.

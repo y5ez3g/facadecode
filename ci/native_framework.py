@@ -1,4 +1,4 @@
-"""Shared process and evidence helpers for Linux native Framework checks."""
+"""Shared process and evidence helpers for Linux native Facade Code Framework checks."""
 
 from hashlib import file_digest, sha256
 import json
@@ -54,6 +54,7 @@ def cargo_artifact(log, name, *, test):
 def owned_homes(log, test_tmp):
     homes = []
     if log.is_file():
+        test_tmp = test_tmp.resolve()
         for line in log.read_text().splitlines():
             home = Path(line)
             if not home.is_absolute() or not home.resolve().is_relative_to(test_tmp):

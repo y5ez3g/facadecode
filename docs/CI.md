@@ -1,6 +1,6 @@
-# Framework and Extension CI
+# Facade Code Framework and Facade Code Extension CI
 
-**A green CI Gate means the proposed Framework and Extension merge passed every check that its acceptance plan
+**A green CI Gate means the proposed Facade Code Framework and Facade Code Extension merge passed every check that its acceptance plan
 requires.** Each check identifies the source, target, implementation and behavior it exercised. Missing evidence
 blocks the decision. A release separately proves that the files offered to users are the files that passed
 candidate acceptance.
@@ -10,16 +10,16 @@ acceptance criteria determine when the design is in service.
 
 ## Scope and baseline
 
-This policy covers [Framework](framework/FEATURES.md) and the [standalone VS Code extension](extension/PRODUCT.md), including each implementation and native target that the extension supports. For
-an IDE-only change, CI records an empty Framework and Extension test plan. Product behavior and version support
-come from their owning specifications. Use [Framework compatibility review](framework/ENGINEERING.md#compatibility-contracts) and [Extension verification](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) when changing a compatibility boundary.
+This policy covers [Facade Code Framework](framework/FEATURES.md) and the [standalone VS Code extension](extension/PRODUCT.md), including each implementation and native target that the extension supports. For
+an IDE-only change, CI records an empty Facade Code Framework and Facade Code Extension test plan. Product behavior and version support
+come from their owning specifications. Use [Facade Code Framework compatibility review](framework/ENGINEERING.md#compatibility-contracts) and [Facade Code Extension verification](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) when changing a compatibility boundary.
 
 | Observed at `6a35d3ee` | Consequence for this design |
 | --- | --- |
-| The active `main` ruleset requires PRs and has no required CI check. Framework and Extension workflows have separate path filters. | Give every PR candidate one required conclusion and test the policy that selects the individual checks. [Main ruleset](https://github.com/y5ez3g/facadecode/rules/25134905) · [Framework workflow](../.github/workflows/framework-check.yml) · [Extension workflow](../.github/workflows/extension-check.yml) |
-| PR #103 took 45:34 for 19 jobs to go green. One editor step took about 42 minutes, including 8:28 of Framework release compilation. One Framework job waited 22:40 for its runner. | Measure queueing, build, test and cleanup separately. Move repetitive long journeys out of the routine PR path after the equivalent acceptance is proven in the new lanes. [Editor job](https://github.com/y5ez3g/facadecode/actions/runs/44944261048/job/136967976476) · [Framework job](https://github.com/y5ez3g/facadecode/actions/runs/44944261124/job/136967977192) |
-| Seven PR workflow runs in a 100-run sample initially failed and passed on a later attempt. Logs show both a VS Code download timeout and an intermittent Framework RSS assertion. | Preserve the first attempt. Classify a verified dependency error, a harness error and a possible product race by their evidence. [Download failure](https://github.com/y5ez3g/facadecode/actions/runs/44370120326/job/135034307575) · [Framework failure and rerun](https://github.com/y5ez3g/facadecode/actions/runs/44913206203) |
-| Real previous-version Framework scenarios, Extension Remote SSH and installed VSIX upgrade have explicit entry points. Release can already reuse full checks on an identical source tree. | Make applicable compatibility scenarios mandatory. Bind release reuse and installation evidence to the source and package digests. [Framework scenarios](framework/ENGINEERING.md#compatibility-contracts) · [Editor runner](../extension/src/test/integration/run.ts) · [Release workflow](../.github/workflows/extension-release.yml) |
+| The active `main` ruleset requires PRs and has no required CI check. Facade Code Framework and Facade Code Extension workflows have separate path filters. | Give every PR candidate one required conclusion and test the policy that selects the individual checks. [Main ruleset](https://github.com/y5ez3g/facadecode/rules/25134905) · [Facade Code Framework workflow](../.github/workflows/framework-check.yml) · [Facade Code Extension workflow](../.github/workflows/extension-check.yml) |
+| PR #103 took 45:34 for 19 jobs to go green. One editor step took about 42 minutes, including 8:28 of Facade Code Framework release compilation. One Facade Code Framework job waited 22:40 for its runner. | Measure queueing, build, test and cleanup separately. Move repetitive long journeys out of the routine PR path after the equivalent acceptance is proven in the new lanes. [Editor job](https://github.com/y5ez3g/facadecode/actions/runs/44944261048/job/136967976476) · [Facade Code Framework job](https://github.com/y5ez3g/facadecode/actions/runs/44944261124/job/136967977192) |
+| Seven PR workflow runs in a 100-run sample initially failed and passed on a later attempt. Logs show both a VS Code download timeout and an intermittent Facade Code Framework RSS assertion. | Preserve the first attempt. Classify a verified dependency error, a harness error and a possible product race by their evidence. [Download failure](https://github.com/y5ez3g/facadecode/actions/runs/44370120326/job/135034307575) · [Facade Code Framework failure and rerun](https://github.com/y5ez3g/facadecode/actions/runs/44913206203) |
+| Real previous-version Facade Code Framework scenarios, Facade Code Extension Remote SSH and installed VSIX upgrade have explicit entry points. Release can already reuse full checks on an identical source tree. | Make applicable compatibility scenarios mandatory. Bind release reuse and installation evidence to the source and package digests. [Facade Code Framework scenarios](framework/ENGINEERING.md#compatibility-contracts) · [Editor runner](../extension/src/test/integration/run.ts) · [Release workflow](../.github/workflows/extension-release.yml) |
 
 The baseline sample takes the latest 100 workflow runs through 2026-11-21 22:24:10 UTC, starting at
 2026-11-18 05:50:42 UTC. Retrieve that creation interval from the [workflow runs endpoint](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository). Select `pull_request` runs that
@@ -41,12 +41,12 @@ candidate.
 | Boundary | Source used to enumerate it | Required evidence |
 | --- | --- | --- |
 | Shell and invoked process entry points | [Clap commands and parser dispatch](../framework/crates/facade/src/cli.rs), [hook commands](../framework/crates/facade/src/hooks.rs) and [Shell contract](PRODUCT.md#shell) | Run the built executable with an expected argv and assert exit status, observed output and effect. Include documented modes such as foreground and detached launches. |
-| Daemon v1 requests, topics and frames | [Rust registry](../framework/crates/base/src/protocol/api_v1/daemon/registry.rs) and [generated schema](../framework/protocol/protocol.schema.json) | Cover each operation, topic and frame. Receive actual events at subscriber boundaries. Reconcile terminal, Extension, MCP and authenticated peer access with the registry. |
+| Daemon v1 requests, topics and frames | [Rust registry](../framework/crates/base/src/protocol/api_v1/daemon/registry.rs) and [generated schema](../framework/protocol/protocol.schema.json) | Cover each operation, topic and frame. Receive actual events at subscriber boundaries. Reconcile terminal, Facade Code Extension, MCP and authenticated peer access with the registry. |
 | Keeper v1 and relay connections | [Keeper schema](../framework/protocol/keeper.schema.json), [Keeper contract](../framework/protocol/KEEPER.md) and [relay handshake](../framework/crates/relay/src/daemon.rs) | Exercise requests and notifications with the real processes. Cover independent version negotiation, reconnect, and native terminal-resource ownership where used. |
-| Framework MCP | [Tool catalog](../framework/crates/base/src/texts/tools.json), [stdio transport](../framework/crates/daemon/src/mcp/lines.rs) | Exercise the same advertised tool catalog from Shell and the editor. Check the managed and Guest behavior. |
-| Extension commands | [VS Code contributions](../extension/package.json) and [command handlers](../extension/src/ui/commands/index.ts) | Invoke each supported command through VS Code. Check the handler for each implementation in which the command appears and assert the user-visible or persisted result. |
-| Extension process and UI boundaries | [Island map](../extension/islands.json), [native window contract](../extension/src/base/windowIdentity.ts), [released supervisor reader](../extension/src/host/migration/supervisor.ts), [panel host](../extension/src/ui/panel.ts) and [webview receiver](../extension/src/webview/panel.ts) | Check named interfaces, native session and terminal identity, legacy retirement, page generation and exact card targets. |
-| Configuration and reload | [Framework settings reader](../framework/crates/base/src/settings.rs), [VS Code settings](../extension/package.json) and [Extension settings schema](../extension/media/settings.schema.json) | Exercise the readers for `facade.json` and `facade.home`. Verify defaults, malformed input, scoped home and reload. Verify legacy cutover using the previous build under VERIFICATION-5.2. |
+| Facade Code Framework MCP | [Tool catalog](../framework/crates/base/src/texts/tools.json), [stdio transport](../framework/crates/daemon/src/mcp/lines.rs) | Exercise the same advertised tool catalog from Shell and the editor. Check the managed and Guest behavior. |
+| Facade Code Extension commands | [VS Code contributions](../extension/package.json) and [command handlers](../extension/src/ui/commands/index.ts) | Invoke each supported command through VS Code. Check the handler for each implementation in which the command appears and assert the user-visible or persisted result. |
+| Facade Code Extension process and UI boundaries | [Island map](../extension/islands.json), [native window contract](../extension/src/base/windowIdentity.ts), [released supervisor reader](../extension/src/host/migration/supervisor.ts), [panel host](../extension/src/ui/panel.ts) and [webview receiver](../extension/src/webview/panel.ts) | Check named interfaces, native session and terminal identity, legacy retirement, page generation and exact card targets. |
+| Configuration and reload | [Facade Code Framework settings reader](../framework/crates/base/src/settings.rs), [VS Code settings](../extension/package.json) and [Facade Code Extension settings schema](../extension/media/settings.schema.json) | Exercise the readers for `facade.json` and `facade.home`. Verify defaults, malformed input, scoped home and reload. Verify legacy cutover using the previous build under VERIFICATION-5.2. |
 
 Cover each registered, supported entry with at least one observed behavior. A read needs the expected data
 and identity. A mutation needs corroborating observation of the intended state or effect. An event needs its
@@ -81,22 +81,22 @@ missing individual case even when other cases in the same journey are present.
 
 | Journey | Required behavior and failure evidence | Required stage and existing entry point | Case ID suffixes |
 | --- | --- | --- | --- |
-| `framework/p0/start-stop` Start, resolve and stop | The selected CLI, folder and stable agent identity match the request. A failed start leaves no live process or published record. A retry with the original request ID creates one run. Stop selects the exact targets and records per-target results. Running and resumable lists show the current native session label, and resume keeps the full session ID. A managed run receives Facade's tools beside the person's configuration. An unsupported model and effort request is refused before start. | PR · [CLI scenarios](../framework/tests/tests/cli.rs), [reliability cases](../framework/tests/tests/reliability.rs), [tool integration scenarios](../framework/tests/tests/integrations.rs) | `start-and-resolve`, `failed-start`, `retry`, `targeted-stop`, `native-session-name`, `managed-tools`, `unsupported-choices` |
+| `framework/p0/start-stop` Start, resolve and stop | The selected CLI, folder and stable agent identity match the request. A failed start leaves no live process or published record. A retry with the original request ID creates one run. Stop selects the exact targets and records per-target results. Running and resumable lists show the current native session label, and resume keeps the full session ID. A managed run receives Facade Code Framework's tools beside the person's configuration. An unsupported model and effort request is refused before start. | PR · [CLI scenarios](../framework/tests/tests/cli.rs), [reliability cases](../framework/tests/tests/reliability.rs), [tool integration scenarios](../framework/tests/tests/integrations.rs) | `start-and-resolve`, `failed-start`, `retry`, `targeted-stop`, `native-session-name`, `managed-tools`, `unsupported-choices` |
 | `framework/p0/attach` Shell Attach and exit | Attach streams the selected process. Detach restores native terminal state and keeps the process alive. A foreground exit returns the child status. Reconnect uses the same run. Returning from an alternate screen restores the same host page and scrollback. | PR · [Attach scenarios](../framework/tests/tests/attach.rs), [Shell command cases](../framework/tests/tests/commands.rs) | `stream`, `detach-reconnect`, `foreground-exit`, `alternate-screen` |
 | `framework/p0/input-draft` Input and draft protection | Type the expected Unicode and keys. A mixed sequence stays ordered ahead of subsequent input. Rejected input has zero unintended effect. A person's new input cancels a pending probe and draft-safe send leaves the draft intact. | PR · [MCP cases](../framework/tests/tests/mcp.rs), [probe scenarios](../framework/tests/tests/probes.rs) | `type`, `invalid-batch`, `draft-protection`, `ordered-sequence` |
 | `framework/p0/message-receipt` Message and receipt | Delivery reaches one target with the expected sender and receipt. A deliberately lost response followed by retry with the original ID settles once. Disconnect during raw input reports the supported partial or unknown result. Check immediate inbox acceptance, explicit delivery waits, zero-budget MCP and a linked Shell reply across machines. | PR · [message scenarios](../framework/tests/tests/messages.rs), [reliability cases](../framework/tests/tests/reliability.rs) | `delivery`, `lost-reply`, `raw-disconnect`, `acceptance-and-delivery`, `mcp-zero-wait`, `shell-linked-reply` |
-| `framework/p0/guest-reply` Guest reply | A Guest sends and receives through the real MCP connection. Verify the reply points to the original request, arrives once, and cannot be fetched by a different caller. A result wait can continue by the original message ID after a reply timeout. | PR · [MCP scenarios](../framework/tests/tests/mcp.rs), [MCP contract](extension/engineering/MCP.md#7-mcp-through-the-orchestrator) | `correlated-reply`, `wrong-caller`, `result-wait` |
+| `framework/p0/guest-reply` Guest reply | A Guest sends and receives through the real MCP connection. Verify the reply points to the original request, arrives once, and cannot be fetched by a different caller. A result wait can continue by the original message ID after a reply timeout. | PR · [MCP scenarios](../framework/tests/tests/mcp.rs), [MCP contract](extension/engineering/MCP.md#7-mcp-through-facade-code-framework) | `correlated-reply`, `wrong-caller`, `result-wait` |
 | `framework/p0/authority` Authority and peer identity | Verify authorized and refused callers, a mismatched machine identity, and same names on different machines. Refusal preserves the relevant files, agents, routes and inboxes. Claude trust remains with the person for Shell and IDE starts. An agent start confirms only a recognized choice permitted by the destination. | PR · [authority cases](../framework/tests/tests/yolo.rs), [machine cases](../framework/tests/tests/machines.rs) | `authorized`, `permission-denied`, `wrong-peer`, `person-claude-trust`, `agent-claude-trust` |
-| `framework/p0/remote-execution` Discovery and remote execution | Discover and choose the expected machine. Create a worktree from the remote HEAD, run the CLI in it and reach the same process from Shell and the Extension. Verify route loss and recovery and that the local repository remained intact. Resolve an eligible bare agent name through a saved route. Deliberately lose a cross-machine reply after delivery, then retry with the original ID. Check the same settlement and exactly one delivery. Exercise a real SSH transport on SSH-sensitive changes. | PR and targeted native · [machine scenarios](../framework/tests/tests/machines.rs), [SSH smoke](../framework/scripts/ssh-check.sh) | `remote-worktree`, `route-recovery`, `saved-agent-lookup`, `retry-lost-reply`, `real-ssh` |
+| `framework/p0/remote-execution` Discovery and remote execution | Discover and choose the expected machine. Create a worktree from the remote HEAD, run the CLI in it and reach the same process from Shell and the Facade Code Extension. Verify route loss and recovery and that the local repository remained intact. Resolve an eligible bare agent name through a saved route. Deliberately lose a cross-machine reply after delivery, then retry with the original ID. Check the same settlement and exactly one delivery. Exercise a real SSH transport on SSH-sensitive changes. | PR and targeted native · [machine scenarios](../framework/tests/tests/machines.rs), [SSH smoke](../framework/scripts/ssh-check.sh) | `remote-worktree`, `route-recovery`, `saved-agent-lookup`, `retry-lost-reply`, `real-ssh` |
 | `framework/p0/watch` Watch lifecycle | Watch the initial state and a subsequent correlated update. Unwatch releases resources and ends delivery for that watch. Reconnect gives a fresh snapshot and discards stale events. | PR · [protocol scenarios](../framework/tests/tests/protocol.rs), [terminal and watch scenarios](../framework/tests/tests/attach.rs) | `snapshot-update`, `unwatch`, `reconnect` |
 | `framework/p0/service-recovery` Daemon and Keeper recovery | Replace or restart either service as applicable. Verify original CLI identity, Attach, terminal output and an exactly-once pending effect. Verify resource and process cleanup after the test. | PR and targeted native · [recovery scenarios](../framework/tests/tests/recovery.rs), [Keeper scenarios](../framework/tests/tests/keeper.rs) | `daemon-restart`, `keeper-recovery`, `pending-effect` |
 | `framework/p0/prior-build` Real prior-build compatibility | Negotiate against pinned supported builds. Compatible hot replacement keeps the live process. Disjoint versions refuse before changing state or programs. | Compatibility-sensitive PR and candidate · [compatibility scenarios](framework/ENGINEERING.md#compatibility-contracts) | `hot-replacement`, `incompatible-version` |
-| `extension/p0/activation-shell` Editor activation and Shell handoff | In isolated official VS Code with Framework active, locate the same agent from Shell and the editor. Operate on its original process and worktree. Check that the panel and commands report incompatible startup and an executable that fails to launch. | PR · [editor journeys](../extension/src/test/integration/run.ts), [Shell handoff scenario](../extension/src/test/integration/frameworkMultiWindow.ts) | `framework-handoff`, `activation-failure`, `startup-failure` |
+| `extension/p0/activation-shell` Editor activation and Shell handoff | In isolated official VS Code with Facade Code Framework active, locate the same agent from Shell and the editor. Operate on its original process and worktree. Check that the panel and commands report incompatible startup and an executable that fails to launch. | PR · [editor journeys](../extension/src/test/integration/run.ts), [Shell handoff scenario](../extension/src/test/integration/frameworkMultiWindow.ts) | `framework-handoff`, `activation-failure`, `startup-failure` |
 | `extension/p0/pin-reload` Pin, reload and multiple windows | Verify a Pin restores the exact session once. Close one member window and observe the other keeps the same run. A missing session gives the prescribed outcome and an Unpin prevents resurrection. | PR · [window journeys](../extension/src/test/integration/frameworkMultiWindow.ts) | `resume-framework`, `pinned-reload`, `close-one-window`, `missing-session-unpin` |
-| `extension/p0/message-delivery` Draft protection in the editor running Framework | Run a real CLI stand-in through Framework. An explicit delivery wait blocked by a draft never writes to it or delivers after the draft is cleared. | PR · [MCP editor journey](../extension/src/test/integration/mcp.it.ts) | `draft-protection-framework` |
-| `extension/p0/remote-host` Extension host reconnect | Test an actual Remote SSH editor host and controlled peer. Disconnect and reconnect. Verify identity, window ownership and pending message settlement. | Remote-sensitive PR, scheduled and candidate · [remote journeys](../extension/src/test/integration/remote.ts) | `ssh-connect`, `ssh-reconnect` |
-| `extension/p0/window-replacement` Window replacement and implementation behavior | Verify Window Component activation, exact agent identity and isolation between Framework windows. | PR and candidate · [editor runner](../extension/src/test/integration/run.ts), [command tests](../extension/src/test/commands.test.ts) | `window-activation-framework` |
-| `framework/p0/install-upgrade` Framework install and upgrade | Install the candidate archive, start and query a fake CLI, and upgrade a pinned prior installation. An invalid digest or incompatible target preserves the working installation. | Installer-sensitive PR and candidate · [upgrade scenarios](../framework/tests/tests/upgrade.rs), [native installers](../.github/workflows/extension-check.yml) | `install`, `upgrade`, `bad-archive` |
+| `extension/p0/message-delivery` Draft protection in the editor running Facade Code Framework | Run a real CLI stand-in through Facade Code Framework. An explicit delivery wait blocked by a draft never writes to it or delivers after the draft is cleared. | PR · [MCP editor journey](../extension/src/test/integration/mcp.it.ts) | `draft-protection-framework` |
+| `extension/p0/remote-host` Facade Code Extension host reconnect | Test an actual Remote SSH editor host and controlled peer. Disconnect and reconnect. Verify identity, window ownership and pending message settlement. | Remote-sensitive PR, scheduled and candidate · [remote journeys](../extension/src/test/integration/remote.ts) | `ssh-connect`, `ssh-reconnect` |
+| `extension/p0/window-replacement` Window replacement and implementation behavior | Verify Window Component activation, exact agent identity and isolation between Facade Code Framework windows. | PR and candidate · [editor runner](../extension/src/test/integration/run.ts), [command tests](../extension/src/test/commands.test.ts) | `window-activation-framework` |
+| `framework/p0/install-upgrade` Facade Code Framework install and upgrade | Install the candidate archive, start and query a fake CLI, and upgrade a pinned prior installation. An invalid digest or incompatible target preserves the working installation. | Installer-sensitive PR and candidate · [upgrade scenarios](../framework/tests/tests/upgrade.rs), [native installers](../.github/workflows/extension-check.yml) | `install`, `upgrade`, `bad-archive` |
 | `extension/p0/vsix-upgrade` Installed VSIX and upgrade | Install both candidate VSIX components in clean profiles and exercise activation and a real command. Upgrade the pinned prior package. Check the original Pin after confirmed exit and after an explicit live cutover. A stop with unconfirmed exit leaves the candidate pending. | Packaging-sensitive PR and candidate · [package tests](../extension/scripts/package.test.mjs), [VSIX upgrade journey](../extension/src/test/integration/run.ts) | `cutover-live`, `cutover-uncertain`, `install-pair`, `upgrade-pair` |
 | `extension/p0/release` Release promotion | The trusted candidate record accounts for every expected signed package. Corrupt, missing, wrong-version or stale-source artifacts block promotion. Verify bytes and the stable pointer after promotion. | Candidate · [release script tests](../extension/scripts/release.test.mjs), [release workflow](../.github/workflows/extension-release.yml) | `signed-artifacts`, `invalid-artifact`, `stable-pointer` |
 
@@ -106,10 +106,10 @@ missing individual case even when other cases in the same journey are present.
 
 | Input change | Before merge | After merge or on schedule |
 | --- | --- | --- |
-| Documentation or IDE-only paths | Check the changed CI and product contract documents, links and scope. Emit an explicit empty product plan when no Framework or Extension behavior is affected. | Regular scheduled matrix remains the integration baseline. |
-| Framework runtime, tests, assets or toolchain | Framework format, lint, lockfile and the every-commit build and lockfile check for a Framework change. Run all applicable Framework API smoke and fast P0 cases. Run Extension Framework contract and smoke against the same Framework source. | Expanded native Framework and Extension coverage. |
-| Extension runtime, tests, manifests or toolchain | Type, localization and spec checks as applicable, all Extension API smoke, and deterministic editor P0. Exercise Framework and the published pair where cutover can be affected. Shared contract changes also select Framework. | Expanded native and implementation coverage. |
-| Wire, durable state, PTY, paths, SSH, packaging, signing or installers | Add the corresponding exact-version, real transport, native target or candidate-package checks before merge. On shared protocol changes check Framework and Extension together. | Six native targets, supported editor versions, native combinations and release fitness. |
+| Documentation or IDE-only paths | Check the changed CI and product contract documents, links and scope. Emit an explicit empty product plan when no Facade Code Framework or Facade Code Extension behavior is affected. | Regular scheduled matrix remains the integration baseline. |
+| Facade Code Framework runtime, tests, assets or toolchain | Facade Code Framework format, lint, lockfile and the every-commit build and lockfile check for a Facade Code Framework change. Run all applicable Facade Code Framework API smoke and fast P0 cases. Run the Facade Code Extension contract and smoke checks against the same Facade Code Framework source. | Expanded native Facade Code Framework and Facade Code Extension coverage. |
+| Facade Code Extension runtime, tests, manifests or toolchain | Type, localization and spec checks as applicable, all Facade Code Extension API smoke, and deterministic editor P0. Exercise Facade Code Framework and the published pair where cutover can be affected. Shared contract changes also select Facade Code Framework. | Expanded native and implementation coverage. |
+| Wire, durable state, PTY, paths, SSH, packaging, signing or installers | Add the corresponding exact-version, real transport, native target or candidate-package checks before merge. On shared protocol changes check Facade Code Framework and Facade Code Extension together. | Six native targets, supported editor versions, native combinations and release fitness. |
 | Workflow, CI policy, shared root files or ambiguous diff | Run policy exercises and every possibly affected product and risk lane. Choose the known complete plan if a diff is ambiguous. A candidate whose source identity is unresolved is blocked. | Review scope drift and the first result on `main`. |
 
 Resolve the checked-out test merge commit's base, head and tree from Git and GitHub. Diff that base to the
@@ -118,14 +118,14 @@ that controls the real entry point, such as generated protocol copies, runtime a
 or mirror scripts and runner changes. Large or incomplete path inputs take the conservative route. Exercise
 the router with fixtures for each row and mixed changes before it can reduce any required coverage.
 
-Retain the owning checks in their defined lanes. Framework PRs run `cargo fmt --check`, Clippy, the every-commit
+Retain the owning checks in their defined lanes. Facade Code Framework PRs run `cargo fmt --check`, Clippy, the every-commit
 build and lockfile check, and affected isolated scenarios. Wire changes run `protocol_files` and
 `guide_examples`, including byte parity of generated TypeScript. The full workspace suite and native SSH
-login smoke run daily and for affected native PRs. Extension PRs run `npm run compile`, relevant `npm test`
+login smoke run daily and for affected native PRs. Facade Code Extension PRs run `npm run compile`, relevant `npm test`
 shards, `node scripts/l10n.mjs check`, the spec audit, bundling and isolated editor cases. Package changes
 and candidates run `npm run package` and `npm run test:package`. Changes to release scripts run `node --test
 scripts/release.test.mjs` before merge. The complete Mocha, native packaging and editor suites run at
-milestones and in their scheduled lanes. [Framework engineering](framework/ENGINEERING.md#tests) · [Required Extension checks](extension/engineering/ARCHITECTURE.md#51-required-checks)
+milestones and in their scheduled lanes. [Facade Code Framework engineering](framework/ENGINEERING.md#tests) · [Required Facade Code Extension checks](extension/engineering/ARCHITECTURE.md#51-required-checks)
 
 Use Linux x64 with a pinned current VS Code build as the routine smoke lane. Run platform-specific
 obligations on their actual platform. Express each supported combination in the versioned support table with
@@ -133,30 +133,30 @@ the highest-fidelity required lane.
 
 | Compatibility or native risk | Required fixtures and routing |
 | --- | --- |
-| Platform, PTY, native backend, paths and package layout | Linux x64/Arm64, macOS x64/Arm64 and Windows x64/Arm64 are the six native targets. Require every affected target when its native code, ABI, toolchain or packaging changes. Shared code affecting all targets expands the plan to all six. Test both supported Extension implementations on the scheduled native matrix. Verify installed artifacts on every released target. |
+| Platform, PTY, native backend, paths and package layout | Linux x64/Arm64, macOS x64/Arm64 and Windows x64/Arm64 are the six native targets. Require every affected target when its native code, ABI, toolchain or packaging changes. Shared code affecting all targets expands the plan to all six. Test both supported Facade Code Extension implementations on the scheduled native matrix. Verify installed artifacts on every released target. |
 | Editor host and minimum version | Include VS Code `1.105`, the manifest minimum at the baseline, and a pinned current build. Run real host and component activation on both in the candidate matrix. Manifest or API-usage changes trigger minimum-version checks before merge. A scheduled current-channel lane identifies upstream changes early. |
 | SSH, WSL and Dev Containers | Verify the declared combinations of local and remote clients and hosts using owned, disposable fixtures. Test native SSH with a real peer for remote-sensitive changes. Record local to SSH, SSH to local and SSH to SSH separately. Cover declared SSH host types, WSL on a disposable Windows host and pinned distribution, and Dev Containers with a pinned image. Require advertised directions in their scheduled and release lanes. A missing environment stays visible as an unmet obligation. |
-| Framework build pairs and storage | Use immutable Framework builds for v1 hot takeover and incompatible offers. Record both source revisions, binary digests and API versions. Exercise schema upgrades with Framework store fixtures and the range-hello refusal with its wire scenario. |
+| Facade Code Framework build pairs and storage | Use immutable Facade Code Framework builds for v1 hot takeover and incompatible offers. Record both source revisions, binary digests and API versions. Exercise schema upgrades with Facade Code Framework store fixtures and the range-hello refusal with its wire scenario. |
 | Actual extension packages and Window Component | Test the published prior VSIX pair against the new candidate pair with the installed-product harness. Changes to activation, component IPC, persisted Pins or package updates trigger their relevant pair before merge. |
 
 The support table uses the repository's advertised compatibility windows and reviewed exceptions. Align
 every included or deferred pairing with the actual contract. Pre-provision disposable native and remote
 fixtures under test-only credentials. The required run uses an isolated test host and scoped test data. A
-required fixture that is unavailable remains an explicit pending or failed obligation. [Framework compatibility inputs](framework/ENGINEERING.md#compatibility-contracts) · [Extension compatibility inputs](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) · [Current Framework targets](../.github/workflows/framework-check.yml) · [Current Extension targets](../.github/workflows/extension-check.yml)
+required fixture that is unavailable remains an explicit pending or failed obligation. [Facade Code Framework compatibility inputs](framework/ENGINEERING.md#compatibility-contracts) · [Facade Code Extension compatibility inputs](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) · [Current Facade Code Framework targets](../.github/workflows/framework-check.yml) · [Current Facade Code Extension targets](../.github/workflows/extension-check.yml)
 · [VS Code test hosts](https://code.visualstudio.com/api/working-with-extensions/testing-extension) · [Rust target-tier practice](https://doc.rust-lang.org/rustc/platform-support.html)
 
-The owner supplies the native CLI release checks and user walkthroughs required by the Extension
+The owner supplies the native CLI release checks and user walkthroughs required by the Facade Code Extension
 specification. Use isolated accounts or recorded captures as the scenario specifies. Record the exact
-candidate, host and CLI versions with the owner's observed outcome. [Extension verification](extension/engineering/VERIFICATION.md#22-coverage-matrix)
+candidate, host and CLI versions with the owner's observed outcome. [Facade Code Extension verification](extension/engineering/VERIFICATION.md#22-coverage-matrix)
 
 Run the standalone `facade-stress` program on a reserved, comparable Linux x64 runner nightly, on release
 candidates and after merges that affect scheduling, terminal throughput or delivery. Use the optimized
-fake-CLI build documented in [Framework](../framework/README.md#build-and-test), the default 100 agents and 100 flooders,
+fake-CLI build documented in [Facade Code Framework](../framework/README.md#build-and-test), the default 100 agents and 100 flooders,
 an isolated home, `--json` evidence and a same-shape, same-runner-class `--baseline`. Record the D6.7 and D6.9
 limits with source and fixture hashes. Start with a 20-minute job budget, including cleanup. The program's
-failed assertion or performance comparison opens a Framework incident and holds candidate promotion. Keep
+failed assertion or performance comparison opens a Facade Code Framework incident and holds candidate promotion. Keep
 the original result and run a same-shape comparison for diagnosis. A baseline shape or runner mismatch blocks
-the comparison. To replace the baseline, run the last fully verified Framework revision on the new runner and
+the comparison. To replace the baseline, run the last fully verified Facade Code Framework revision on the new runner and
 workload. Record its source tree, runner, fixture and result digests and obtain separate owner approval
 before testing the candidate against it. Use the expanded affected-native lane for a native regression
 when that target has an approved baseline and workload. [Stress program](../framework/tests/src/bin/facade-stress.rs)
@@ -281,10 +281,10 @@ startup first, then measure runner capacity. Keep the acceptance obligations whi
 [GitHub Actions limits](https://docs.github.com/en/actions/reference/limits)
 
 Reuse `framework/scripts/test-all.sh` or `test-all.ps1`, the existing daemon and MCP scenario clients, and the
-Extension's `test:integration` and `test:remote` harnesses. The new runner exposes each selected case and
+Facade Code Extension's `test:integration` and `test:remote` harnesses. The new runner exposes each selected case and
 its reproduction command. Keep raw first-attempt summaries and the consolidated case ledger for at least 90
 days. Maintain one weekly report of first failures, slowest cases, queue wait, cold/warm timing and
-unexplained skips. Redact credentials and user content before upload. [Framework test runner guidance](framework/ENGINEERING.md#tests) · [Extension verification evidence](extension/engineering/VERIFICATION.md#12-evidence-format)
+unexplained skips. Redact credentials and user content before upload. [Facade Code Framework test runner guidance](framework/ENGINEERING.md#tests) · [Facade Code Extension verification evidence](extension/engineering/VERIFICATION.md#12-evidence-format)
 
 ## Main and release health
 
@@ -313,7 +313,7 @@ visibility. The clock and alert path need to work when the monitored workflows d
 Use the existing prepare, mirror and owner-approved publish transaction. Resolve a release tag to an accepted
 commit reachable from protected `main` with eligible source and main evidence. A tag push or manual prepare
 requests work. Both route to the same protected main release workflow and have no signing authority of their
-own. The Extension PR and manual check workflows build unsigned artifacts or use a test certificate.
+own. The Facade Code Extension PR and manual check workflows build unsigned artifacts or use a test certificate.
 Remove the manual `sign` path's production credential access when the protected path takes over.
 
 Require two approvals bound to distinct immutable records. Before signing, the owner approves the tag,
@@ -354,7 +354,7 @@ Start the clock when a ready, mergeable candidate satisfies the base rule. Track
 for conflicts, stale bases or a documented fork approval. The first actionable result identifies a completed
 policy, contract or build check that can guide a change. A queued or planned status contributes no feedback
 sample. Count the time until the required decision, including runner queue and infrastructure retries. Split
-Framework-only, Extension-only, cross-product and expanded native or compatibility changes. Report warm and cold
+Facade Code Framework-only, Facade Code Extension-only, cross-product and expanded native or compatibility changes. Report warm and cold
 samples and each cohort's size. Exclude a canceled candidate only when a newer one is observed. A missing or
 timed-out result for the newest candidate counts as a service failure and a latency breach. Keep these
 observations in the denominator rather than measuring successful jobs alone. Record first-attempt outcomes
@@ -383,9 +383,9 @@ limits above are demonstrated. Regressions in those limits trigger investigation
 
 | Step | Change and accountable role | Exit evidence |
 | --- | --- | --- |
-| 1. Inventory and measurement | CI maintainer owns planner, case ledger and baseline timings. Framework and Extension owners verify their source registries and existing case mappings. | From one Framework and one Extension run, reconcile exact versions, required IDs and the observed test count. Omit a planned pass and verify the shadow aggregator identifies it by name. Preserve the existing required behavior and check jobs during this stage. |
+| 1. Inventory and measurement | CI maintainer owns planner, case ledger and baseline timings. Facade Code Framework and Facade Code Extension owners verify their source registries and existing case mappings. | From one Facade Code Framework and one Facade Code Extension run, reconcile exact versions, required IDs and the observed test count. Omit a planned pass and verify the shadow aggregator identifies it by name. Preserve the existing required behavior and check jobs during this stage. |
 | 2. Deterministic required cases | Product owners fill every required API and P0 mapping, using existing test harnesses. CI maintainer adds route fixtures, pinned inputs and reproductions. | All obligations pass on supported profiles. For a duplicate delivery, lost Pin and compatibility refusal, inject the controlled regression, observe the intended assertion fail, then restore and pass. Measure the intended PR lanes in cold and warm conditions. Compare at least 30 same-tree shadow candidates with the current full suite and exercise each high-risk route with fixtures. Include a measurement while native jobs compete for runners. Resolve missed obligations and attain the intended budgets before enforcement. |
-| 3. Protect the merge decision | Repository owner enables the strict `main` rule after the protected verifier is proven. Validate same-name checks, fork candidates and base churn. | Demonstrate that docs-only, Framework-plus-Extension, Windows-specific and mixed rename changes select correctly. Confirm that failing, skipped, canceled, zero-test, missing, wrong-implementation and stale-candidate evidence cannot merge. An older success cannot satisfy a new merge candidate. Rehearse a late main P0 hold with a previously green PR, a reviewed API retirement, rejected forged evidence and failure of the workflow schedule. |
+| 3. Protect the merge decision | Repository owner enables the strict `main` rule after the protected verifier is proven. Validate same-name checks, fork candidates and base churn. | Demonstrate that docs-only, Facade Code Framework-plus-Facade Code Extension, Windows-specific and mixed rename changes select correctly. Confirm that failing, skipped, canceled, zero-test, missing, wrong-implementation and stale-candidate evidence cannot merge. An older success cannot satisfy a new merge candidate. Rehearse a late main P0 hold with a previously green PR, a reviewed API retirement, rejected forged evidence and failure of the workflow schedule. |
 | 4. Transfer deep coverage | Product and CI maintainers enable post-merge and scheduled lanes, candidate verification, and the first-failure dashboard. | Keep the comparison evidence from shadow validation. Confirm post-merge and daily coverage on multiple consecutive runs before retiring duplicate jobs. Resolve any lost obligation before removal. Verify native artifacts, a tag outside verified main, corrupt-artifact refusal, partial channel promotion and safe recovery in a dry run. |
 | 5. Measure sustained operation | CI maintainer reviews the error budget and top critical-path costs weekly. Repository owner handles incidents and protected rule changes. | Use the measured criteria above. Unresolved baseline gaps and insufficient samples stay visible. Work next on the largest measured source of lost time or trust. |
 
@@ -402,10 +402,10 @@ the test service and the release workflow.
 
 The [complete acceptance table](CI-ACCEPTANCE.md) is generated from [`ci/cases.json`](../ci/cases.json),
 which holds the reviewed assertions, stages, candidate test sources and exact bindings. The catalog
-checker discovers Framework's CLI, daemon, Keeper, relay, MCP and configuration
-interfaces from their registries and schemas. It discovers Extension commands, the Window Component,
+checker discovers Facade Code Framework's CLI, daemon, Keeper, relay, MCP and configuration
+interfaces from their registries and schemas. It discovers Facade Code Extension commands, the Window Component,
 local window transport, supervisor, Webview, MCP and settings from declarations and serving code.
-Extension API IDs identify the Framework-backed editor surface and the released supervisor retirement protocol. The P0 table above
+Facade Code Extension API IDs identify the Facade Code Framework-backed editor surface and the released supervisor retirement protocol. The P0 table above
 declares each required journey case by name. Every bound PR row enters the plan automatically. Historical editor rows refer to earlier builds that still served the legacy engine.
 The catalog rejects any PR P0 row without a binding. Discovery and the P0 table are independent of
 the test bindings. Both installed VSIX rehearsals also require a binding. A surviving obligation
@@ -413,31 +413,31 @@ with a binding at the base commit must keep an executable test. The PR and main 
 changed assertions, stages and selectors and flag removed rows for review before protected enforcement.
 
 The [shadow workflow](../.github/workflows/ci-acceptance.yml) checks catalog drift and policy
-regressions on relevant PRs. Framework source or CI policy changes select both Linux x64 pilots,
-because the editor also runs Framework. Extension source changes select the editor pilot. Changes to
+regressions on relevant PRs. Facade Code Framework source or CI policy changes select both Linux x64 pilots,
+because the editor also runs Facade Code Framework. Facade Code Extension source changes select the editor pilot. Changes to
 the shared built-in names select both. Documentation updates run the catalog check. Selection
 compares the first parent of the PR merge tree to that tree and includes both paths of a rename.
 The same shadow checks run on the landed `main` tree after a relevant push. Manual and
 main runs select both pilots. A new PR head cancels the three earlier workflows of that PR.
-The Extension job builds its test stage
+The Facade Code Extension job builds its test stage
 once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs.
 It checks the pinned Linux x64 archive size and SHA-256 before each extraction, including
 cache restores. It stages the verified official bundle in fresh scratch before building the
 fixtures. A listed transient download gets one retry within the 90-second acquisition budget,
-and the download log keeps its first failure. Framework shares one run
-per scenario target and compares its exact test names. Extension shares a fixture for compatible
+and the download log keeps its first failure. Facade Code Framework shares one run
+per scenario target and compares its exact test names. Facade Code Extension shares a fixture for compatible
 Mocha selections with the same implementation and route. Multi-window and lifetime drivers use separate
 fixtures. Shared Window Component and stdio contracts also use exact compiled Mocha selectors.
 The verifier requires their complete JSON report with the selected titles and zero failures or
-skips. The native Extension matrix pins the official VS Code `1.147.0` archive for each host.
+skips. The native Facade Code Extension matrix pins the official VS Code `1.147.0` archive for each host.
 Each job checks the archive size, digest, version and build commit before building editor
 fixtures. The Remote SSH lane stages the same verified Linux x64 desktop archive. Build,
-download and test execution remain separate timed steps. The Intel Framework PR
+download and test execution remain separate timed steps. The Intel Facade Code Framework PR
 job can restore Cargo dependencies for an eligible build. It still builds from source and runs
-every case. The editor pilot runs the remote worktree case with two live Framework Shell Attach clients
+every case. The editor pilot runs the remote worktree case with two live Facade Code Framework Shell Attach clients
 and a real editor attached to the same process through a fixture SSH route. An incompatible
-Framework hello must show its error inside the actual panel, with no serving implementation or CLI launch.
-The window update installs the digest-pinned Extension 0.1.5 release into two isolated profiles,
+Facade Code Framework hello must show its error inside the actual panel, with no serving implementation or CLI launch.
+The window update installs the digest-pinned Facade Code Extension 0.1.5 release into two isolated profiles,
 then installs packages built for the current candidate while the same routed message is pending.
 The run retains both VSIX pairs and verifies their digests with the completion record. It proves
 the component replacement and one terminal submission within the original deadline.
@@ -452,7 +452,7 @@ still have to pass within the same deadlines.
 A separate two-window run checks that an old claim and an old Webview generation
 leave the current owner, both running agents and their terminals intact. The current page then
 changes only its selected agent.
-The Linux x64 PR package job also installs the candidate Framework archive with default activation.
+The Linux x64 PR package job also installs the candidate Facade Code Framework archive with default activation.
 It starts and queries a fake CLI through the installed Shell, checks the installed MCP relay,
 and proves two bad digests leave the install and the same live agent usable. The verifier
 reads the candidate archive and checksum file again, checks the installed programs and
@@ -464,7 +464,7 @@ When checking retained logs from a different runner, pass the known absolute run
 path as `verify-native-install --producer-checkout`. The current local checkout supplies the
 inspected installer source and tree.
 
-The Linux x64 Framework job starts a separate loopback OpenSSH peer with disposable keys and homes.
+The Linux x64 Facade Code Framework job starts a separate loopback OpenSSH peer with disposable keys and homes.
 It checks the selected machine, compares the same agent and process through the peer and the
 forwarded route, and verifies that only the intended peer receives the exact input bytes.
 The job reconciles the original log and scoped cleanup with the three tested binaries and the
@@ -485,8 +485,8 @@ python3 -B ci/gate_shadow.py --repo OWNER/REPO --pr NUMBER --head "$head" --base
 
 The decision records the exact candidate, plan digest, changed paths, bound pilot cases, and required
 workflows, jobs, runner labels, steps and artifacts. An IDE-only change gets an explicit empty product
-plan. Changes to product documentation that trigger CI acceptance still require the catalog job. Framework
-changes select both pilots because the Extension runs the Framework. Package and remote-sensitive
+plan. Changes to product documentation that trigger CI acceptance still require the catalog job. Facade Code Framework
+changes select both pilots because the Facade Code Extension runs the Facade Code Framework. Package and remote-sensitive
 paths select their applicable native checks. Shared policy
 and unclassified paths select the complete matrix. Each required workflow must have a supported
 `pull_request` path filter that matches the diff. The decision names absent, unsupported or unmatched
@@ -571,7 +571,7 @@ count or the loss of a binding for an existing ID fails the job. The editor's co
 built-in CLIs other than Claude Code do not count: editor journeys run with Claude Code alone, so no
 runner can bind them.
 
-For a same-repository PR that schedules the complete Framework and Extension matrix, run the
+For a same-repository PR that schedules the complete Facade Code Framework and Facade Code Extension matrix, run the
 read-only review from a clean, reviewed checkout of the exact head or matching GitHub merge.
 
 ```sh
@@ -607,12 +607,12 @@ It retains the first failed attempt and its failing step links even after a reru
 result replays both main shadow artifacts. The protected health lock and merge authority
 remain separate deployment steps.
 
-The Linux x64 Extension PR job archives the complete release-script suite with its exact
+The Linux x64 Facade Code Extension PR job archives the complete release-script suite with its exact
 test names and the producing source and attempt. Its disposable GitHub and website
 transports prove corrupt and stale candidates cannot switch stable, and an interrupted
 promotion can finish with the same verified pointer and manifest.
 
-### Signed Extension candidate evidence
+### Signed Facade Code Extension candidate evidence
 
 Replay an exact tagged release and its retained native test evidence with the read-only
 `verify` command. Use an independent digest of `native-test-evidence.json` from the reviewed
@@ -638,7 +638,7 @@ map from name to SHA-256).
 
 | Check and log name | Inputs and observations |
 | --- | --- |
-| `framework-install.log` | Run the tagged installer on the accepted Framework archive in an isolated install root. Keep the installer's output followed by the installed Shell's `facade --version` output. |
+| `framework-install.log` | Run the tagged installer on the accepted Facade Code Framework archive in an isolated install root. Keep the installer's output followed by the installed Shell's `facade --version` output. |
 | `install-pair.log` | Give `install-pair` the released native and Window Component VSIX files through `FACADE_IT_CURRENT`. Check activation and one New Agent effect in the clean profile. |
 | `upgrade-pair.log` | Give `upgrade-pair` the same candidate pair and the pinned prior pair through `FACADE_IT_RELEASED`. Check the original pinned session is resumed exactly once after confirmed legacy exit. |
 
@@ -647,10 +647,10 @@ Run the installed-pair drivers with `FACADE_IT_IMPLEMENTATION=framework`,
 `FACADE_IT_EXPECT_DRIVER`. Their final lines report isolated profile cleanup and the exact
 driver result. Hash staged inputs before and after testing, record the actual exit status
 and retain the original logs alongside the package digests.
-Replay expects the Framework marker for Framework-only workspace VSIXs. Historical workspace
+Replay expects the Facade Code Framework marker for Facade Code Framework-only workspace VSIXs. Historical workspace
 VSIXs that include the TypeScript supervisor retain their original legacy marker.
 
-Framework transcript replay checks the install report and the source-stamped Shell version. For evidence
+Facade Code Framework transcript replay checks the install report and the source-stamped Shell version. For evidence
 of installed program digests, a live fake Agent and installer refusal behavior on Linux x64,
 use the existing `ci/acceptance.py verify-native-install` with its typed receipt, original log,
 and exact tested archive and checksum sidecar. [Native install verifier](../ci/check_native_install.py)
@@ -673,7 +673,7 @@ Replay the record and check the approved producer and attestation before using i
 `signed-artifacts` case. Previous releases provide historical evidence only. The approval
 to publish and switch stable is a separate decision.
 
-### Native Framework hot takeover QA
+### Native Facade Code Framework hot takeover QA
 
 The Linux x64 replay takes two digest-pinned pairs of `facade` and `facade-mcp` from builds
 with compatible v1 APIs. To produce a source QA pair, build the current checkout and a
@@ -703,9 +703,9 @@ handshakes and owned cleanup. Separate tests exercise same-version, older-versio
 disjoint offers. This is opt-in source QA. Actual incompatible builds and signed release
 artifacts have their own catalog rows.
 
-### Native Framework Keeper recovery
+### Native Facade Code Framework Keeper recovery
 
-Run the exact native Keeper recovery scenario on Linux x64 from a committed Framework tree. Give each
+Run the exact native Keeper recovery scenario on Linux x64 from a committed Facade Code Framework tree. Give each
 attempt its own output directory and run identity.
 
 ```sh
@@ -717,7 +717,7 @@ in the receipt. The scenario replaces the Keeper while the original Daemon and C
 checks exit on the original Attach watch. This is an opt-in local replay. The native acceptance row
 also requires matching evidence from the selected hosted lane when a candidate uses that lane.
 
-### Linux x64 packaged Framework upgrade QA
+### Linux x64 packaged Facade Code Framework upgrade QA
 
 Use two compatible archives, with a higher numeric version in the candidate. Obtain an
 independent SHA-256 pin for each archive and keep its original `SHA256SUMS` file. To use
@@ -742,7 +742,7 @@ fresh submission. Retain each archive's provenance, the console output and `rece
 with the observed commands and scoped cleanup. This local QA evidence records a compatible
 packaged path. The release upgrade row requires a qualifying pinned prior and release candidate.
 
-### Native Framework incompatible build
+### Native Facade Code Framework incompatible build
 
 On unprivileged Linux x64 with OpenSSH server and pidfds, build the lower and higher
 Linux x64 pairs as described for hot takeover. Apply [the test Keeper API patch](../ci/fixtures/framework-keeper-api2.patch)
@@ -772,7 +772,7 @@ new terminal input and a fresh message reaches the same CLI once. The separate i
 check verifies that refusal leaves the selected home's program files, launchers and state
 intact. This is local source QA for the native incompatible case.
 
-### Native Extension Remote SSH
+### Native Facade Code Extension Remote SSH
 
 The Linux x64 connect proof opens official VS Code 1.147.0 against a disposable loopback
 Docker SSH guest. Use a local Docker daemon, OpenSSH client, Xvfb, Node 24 and Python 3.
@@ -785,7 +785,7 @@ The runner stages and hashes the four files before opening the editor. [Server p
 ci/check_remote_editor.sh "$asset_dir" "$vscode_executable" "$work/remote-ssh"
 ```
 
-The native test reads the actual remote Extension Host executable and the original Agent
+The native test reads the actual remote Facade Code Extension Host executable and the original Agent
 identity from the guest. The exact workspace owns one pinned viewer, and the fake CLI
 records one startup. The receipt includes the staged program and editor digests, the
 authenticated SSH observation and the verified removal of the exact guest and scratch
@@ -796,15 +796,15 @@ the actual workbench session, verify the original remote Agent identity and rest
 ownership, and settle an in-flight message exactly once before cleanup. This evidence is
 independent of the signed candidate replay. [Remote SSH workflow](../.github/workflows/extension-remote.yml)
 
-Each successful native PR package job records the VSIX pair, Framework archive and checksum file
+Each successful native PR package job records the VSIX pair, Facade Code Framework archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run
 `extension/scripts/native-package-evidence.mjs verify` on the downloaded `extension-*`
 artifacts to require an exact set of targets and recheck their bytes. The CI canary refuses a
 missing target, a wrong-version VSIX, a stale tree or attempt, and a changed archive even when
-its checksum file has also changed. It reads the Framework archive's version and checks its executable
+its checksum file has also changed. It reads the Facade Code Framework archive's version and checks its executable
 members byte for byte against the paired VSIX. This verification reads the unsigned PR artifacts.
 
-A clean checkout with a bundled editor can stage Framework programs from a verified native package on the same
+A clean checkout with a bundled editor can stage Facade Code Framework programs from a verified native package on the same
 source tree and host target. Supply the reviewed package directory and its pinned evidence digest.
 
 ```sh
@@ -812,19 +812,19 @@ source tree and host target. Supply the reviewed package directory and its pinne
   --framework-package-evidence-sha256 "$evidence_sha256")
 ```
 
-The builder checks the digest of `native-package-evidence.json` and matches the Framework archive
+The builder checks the digest of `native-package-evidence.json` and matches the Facade Code Framework archive
 and VSIX program bytes and `VERSION` marker before staging the fixture. For hosted reuse, verify
 the artifact against the intended producer run and attempt before passing its digest. A Linux x64
 fixture comparison exercises staging and refusal before fixture writes.
 
 The manual [Intel macOS handoff canary](../.github/workflows/extension-intel-framework-canary.yml) compares
-a Cargo control with the same Framework editor suite using a verified same-attempt package. Set
+a Cargo control with the same Facade Code Framework editor suite using a verified same-attempt package. Set
 `reuse_framework` to `true` for the package path. Run both on one revision once the workflow is
 registered on the default branch. Compare the ordered editor
 cases and cleanup, then compare full wall time including producer queue, packaging, handoff wait,
 artifact import and editor execution. [GitHub manual workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
 
-The Linux x64 Framework PR matrix closes every editor and removes the exact managed agents before
+The Linux x64 Facade Code Framework PR matrix closes every editor and removes the exact managed agents before
 starting its next independent fixture. Only the previous fixture's daemon and Keeper idle waits
 overlap. The native supervisor joins those waits, checks both endpoints and verifies owned
 process cleanup. It reclaims the disposable scope on an interruption or a failed timeout.
@@ -840,11 +840,11 @@ serving implementation from the live host. The status describes the shadow pilot
 jobs and merge and release rules continue to own their checks.
 
 VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method.
-The remote worktree pilot exercises Framework's worktree operation through the editor and the Shell.
+The remote worktree pilot exercises Facade Code Framework's worktree operation through the editor and the Shell.
 
 Run from the repository root on Linux x64. Install the pinned Rust toolchain and musl target, the
 Node version from `extension/.nvmrc`, `musl-gcc`, `xvfb-run` and VS Code's runtime libraries.
-The Extension runner uses the repository's lockfile and downloads the pinned editor. Supply
+The Facade Code Extension runner uses the repository's lockfile and downloads the pinned editor. Supply
 `--vscode /absolute/path/to/code` to reuse that exact editor build. On shared machines with
 a low per-user inotify limit, use `--editor-workers 1` to run the same groups in sequence.
 
