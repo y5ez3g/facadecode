@@ -112,8 +112,10 @@ impl Screen {
     pub fn view_with_history(&self, rows_above: usize) -> Option<ScreenView> {
         let rows = self.readable_rows();
         let first = rows.scrollback().checked_sub(rows_above)?;
-        let mut view = ScreenView::default();
-        view.cols = rows.grid.columns();
+        let mut view = ScreenView {
+            cols: rows.grid.columns(),
+            ..ScreenView::default()
+        };
         view.rows.reserve(rows.len() - first);
         view.continues.reserve(rows.len() - first);
         for index in first..rows.len() {
