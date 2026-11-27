@@ -23,6 +23,10 @@
 				"selected": "^ *Detected dark theme but configured for light\\. Switch\\?$",
 				"hint": { "pattern": "^ *↑↓ select · ↵ confirm$", "within": 7 }
 			},
+			{
+				"selected": "^/ Type to search$",
+				"hint": { "pattern": "^↑↓ select · opt\\+p pin · ↵ confirm · opt\\+↵ this session only · esc cancel$", "within": 20 }
+			},
 			{ "selected": "^ *[›>] +[0-9]+\\.? +\\S", "next": "^ +[0-9]+\\.? +\\S" },
 			{ "selected": "^ *[○●] /\\S", "next": "^ +/\\S" }
 		]

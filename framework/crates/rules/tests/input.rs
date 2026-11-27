@@ -125,6 +125,22 @@ fn copilot_model_selection_uses_the_session_heading_and_footer() {
 }
 
 #[test]
+fn devin_model_selection_uses_the_search_prompt_and_confirmation_footer() {
+    let input = &find("devin").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(b"\x1b[10;1H/ Type to search\x1b[10;3H");
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed(
+        "\x1b[30;1H↑↓ select · opt+p pin · ↵ confirm · opt+↵ this session only · esc cancel\x1b[10;3H"
+            .as_bytes(),
+    );
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
 fn cursor_model_selection_takes_input_below_its_visible_prompt() {
     let input = &find("agent").unwrap().unwrap().input;
     let mut screen = facade_screen::Screen::new(120, 30, 0);
