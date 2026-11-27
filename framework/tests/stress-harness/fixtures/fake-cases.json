@@ -1,0 +1,322 @@
+{
+  "stages": [
+    {
+      "args": [
+        "r0"
+      ],
+      "label": "r0",
+      "scenarios": [
+        "N2 nobody",
+        "N2 watching",
+        "N2 wheel attach",
+        "N2 typing attach",
+        "N2 mouse raw",
+        "N2 typing raw",
+        "N2 modifiers raw",
+        "N2 records attach",
+        "N2 started still",
+        "N2 started records",
+        "N2 editor still",
+        "N2 editor resize",
+        "B1 typing, echo 200 ms",
+        "B1 typing, echo 1000 ms",
+        "B1 paste in chunks, echo 200 ms",
+        "B2 enter and ctrl-c",
+        "B2 enter and escape",
+        "B3 dragging, open updates",
+        "B3 open updates alone"
+      ]
+    },
+    {
+      "args": [
+        "busy"
+      ],
+      "label": "busy",
+      "scenarios": [
+        "busy every 10 ms, sync 1",
+        "busy every 10 ms, sync 0",
+        "busy every 20 ms, sync 1",
+        "busy every 20 ms, sync 0",
+        "busy every 35 ms, sync 1",
+        "busy every 35 ms, sync 0",
+        "busy every 50 ms, sync 1",
+        "busy every 50 ms, sync 0",
+        "busy every 70 ms, sync 1",
+        "busy every 70 ms, sync 0",
+        "busy every 90 ms, sync 1",
+        "busy every 90 ms, sync 0",
+        "busy every 120 ms, sync 1",
+        "busy every 120 ms, sync 0",
+        "busy every 160 ms, sync 1",
+        "busy every 160 ms, sync 0",
+        "busy every 250 ms, sync 1",
+        "busy every 250 ms, sync 0",
+        "busy every 400 ms, sync 1",
+        "busy every 400 ms, sync 0"
+      ]
+    },
+    {
+      "args": [
+        "looks"
+      ],
+      "label": "looks",
+      "scenarios": [
+        "muse idle",
+        "muse busy every 50 ms",
+        "muse busy every 90 ms",
+        "muse busy every 120 ms",
+        "muse busy every 160 ms",
+        "muse busy every 200 ms",
+        "muse busy every 250 ms",
+        "muse busy every 300 ms",
+        "muse busy every 400 ms",
+        "muse 40 lines busy every 500 ms",
+        "agy idle",
+        "agy busy every 50 ms",
+        "agy busy every 90 ms",
+        "agy busy every 120 ms",
+        "agy busy every 160 ms",
+        "agy busy every 200 ms",
+        "agy busy every 250 ms",
+        "agy busy every 300 ms",
+        "agy busy every 400 ms",
+        "agy 40 lines busy every 500 ms"
+      ]
+    },
+    {
+      "args": [
+        "s"
+      ],
+      "label": "s",
+      "scenarios": [
+        "S1 10 starts with a first message",
+        "S2 30 starts at one moment",
+        "S5 a first message and five at once after it",
+        "S6 stopped before its first message",
+        "S8 five agents start six each",
+        "S9 starts that cannot be"
+      ]
+    },
+    {
+      "args": [
+        "k"
+      ],
+      "label": "k",
+      "scenarios": [
+        "K2 stopped with 20 waiting",
+        "K3 ten stops in a row",
+        "K5 thirty CLIs end at once",
+        "K6 stopped while a message is in its input"
+      ]
+    },
+    {
+      "args": [
+        "t"
+      ],
+      "label": "t",
+      "scenarios": [
+        "R1 reads while messages are typed",
+        "R2 pages of 200 messages",
+        "T1 typed text among messages",
+        "T3 lists and screens all the while",
+        "A7 a sender whose own input is held"
+      ]
+    },
+    {
+      "args": [
+        "w"
+      ],
+      "label": "w",
+      "scenarios": [
+        "W1 50 waits for delivery",
+        "W2 replies that are waited for",
+        "W8 600 waits at once",
+        "W9 the same call twice"
+      ]
+    },
+    {
+      "args": [
+        "g"
+      ],
+      "label": "g",
+      "scenarios": [
+        "G1 guests and agents, both ways",
+        "G3 a guest that does not read",
+        "G6 twenty guests",
+        "G8 two reads of one inbox"
+      ]
+    },
+    {
+      "args": [
+        "n"
+      ],
+      "label": "n",
+      "scenarios": [
+        "N1 10 to 1 noise",
+        "N1 10 to 1 busy",
+        "N1 10 to 1 busy noise",
+        "N1 10 to 1",
+        "N2 50 to 1 noise",
+        "N2 50 to 1 busy",
+        "N2 50 to 1 busy noise",
+        "N2 50 to 1",
+        "N3 5 by 20 noise",
+        "N3 5 by 20 busy",
+        "N3 5 by 20 busy noise",
+        "N3 5 by 20",
+        "N4 5 a second for 60 s noise",
+        "N4 5 a second for 60 s busy",
+        "N4 5 a second for 60 s busy noise",
+        "N4 5 a second for 60 s",
+        "N5 50 to 1 busy cores noise",
+        "N5 50 to 1 busy cores busy",
+        "N5 50 to 1 busy cores busy noise",
+        "N5 50 to 1 busy cores",
+        "N5 5 by 20 busy cores noise",
+        "N5 5 by 20 busy cores busy",
+        "N5 5 by 20 busy cores busy noise",
+        "N5 5 by 20 busy cores",
+        "N6 5 of 4000 noise",
+        "N6 5 of 4000 busy",
+        "N6 5 of 4000 busy noise",
+        "N6 5 of 4000",
+        "N6 5 of 4000 Chinese noise",
+        "N6 5 of 4000 Chinese busy",
+        "N6 5 of 4000 Chinese busy noise",
+        "N6 5 of 4000 Chinese",
+        "N6 5 of 500 lines noise",
+        "N6 5 of 500 lines busy",
+        "N6 5 of 500 lines busy noise",
+        "N6 5 of 500 lines",
+        "N7 100 to 1 noise",
+        "N7 100 to 1 busy",
+        "N7 100 to 1 busy noise",
+        "N7 100 to 1",
+        "N7 50 by 4 noise",
+        "N7 50 by 4 busy",
+        "N7 50 by 4 busy noise",
+        "N7 50 by 4",
+        "N9 20 to a slow CLI noise",
+        "N9 20 to a slow CLI busy",
+        "N9 20 to a slow CLI busy noise",
+        "N9 20 to a slow CLI",
+        "V5 50 of 8000 Chinese noise",
+        "V5 50 of 8000 Chinese busy",
+        "V5 50 of 8000 Chinese busy noise",
+        "V5 50 of 8000 Chinese"
+      ]
+    },
+    {
+      "args": [
+        "h"
+      ],
+      "label": "h",
+      "scenarios": [
+        "H1 slow attach N2",
+        "H1 slow attach queue",
+        "H1 slow attach alone",
+        "H1 slow attach slow draw",
+        "H1 fast attach N2",
+        "H1 fast attach queue",
+        "H1 fast attach alone",
+        "H1 fast attach slow draw",
+        "H1 fast raw N2",
+        "H1 fast raw queue",
+        "H1 fast raw alone",
+        "H1 fast raw slow draw",
+        "H1 ime raw N2",
+        "H1 ime raw queue",
+        "H1 ime raw alone",
+        "H1 ime raw slow draw",
+        "H2 half line raw N2",
+        "H2 half line raw queue",
+        "H2 half line raw alone",
+        "H2 half line raw slow draw",
+        "H3 paste whole raw N2",
+        "H3 paste whole raw queue",
+        "H3 paste whole raw alone",
+        "H3 paste whole raw slow draw",
+        "H3 paste chunked raw N2",
+        "H3 paste chunked raw queue",
+        "H3 paste chunked raw alone",
+        "H3 paste chunked raw slow draw",
+        "H3 paste slow chunks raw N2",
+        "H3 paste slow chunks raw queue",
+        "H3 paste slow chunks raw alone",
+        "H3 paste slow chunks raw slow draw",
+        "H3 paste attach N2",
+        "H3 paste attach queue",
+        "H3 paste attach alone",
+        "H3 paste attach slow draw",
+        "H4 line at once raw N2",
+        "H4 line at once raw queue",
+        "H4 line at once raw alone",
+        "H4 line at once raw slow draw",
+        "H4 line at once attach N2",
+        "H4 line at once attach queue",
+        "H4 line at once attach alone",
+        "H4 line at once attach slow draw",
+        "H4 enter alone raw N2",
+        "H4 enter alone raw queue",
+        "H5 wheel attach N2",
+        "H5 wheel attach queue",
+        "H6 mouse attach N2",
+        "H6 mouse attach queue",
+        "H7 mouse focus raw N2",
+        "H7 mouse focus raw queue",
+        "H7 modifiers raw N2",
+        "H7 modifiers raw queue",
+        "H8 keys raw N2",
+        "H8 keys raw queue",
+        "H8 backspace raw N2",
+        "H8 backspace raw queue",
+        "H9 resize attach N2",
+        "H9 resize attach queue",
+        "H9 resize editor N2",
+        "H9 resize editor queue",
+        "H10 reattach N2",
+        "H10 reattach queue",
+        "H13 menu raw N2",
+        "H13 menu raw queue",
+        "H13 menu raw alone",
+        "H13 menu raw slow draw",
+        "H11 two viewers N2"
+      ]
+    },
+    {
+      "args": [
+        "x"
+      ],
+      "label": "x",
+      "scenarios": [
+        "X5 50 agents at random",
+        "X5 50 agents at random, busy cores",
+        "X4 each other at one moment",
+        "X1 ping-pong of 6 pairs, 20 rounds",
+        "N8 two recipients that send to each other"
+      ]
+    },
+    {
+      "args": [
+        "--only",
+        "=Z1 first messages across a crash of the daemon",
+        "z"
+      ],
+      "label": "z1",
+      "scenarios": [
+        "Z1 first messages across a crash of the daemon"
+      ]
+    },
+    {
+      "args": [
+        "--only",
+        "=Z2 ends across a crash of the daemon",
+        "z"
+      ],
+      "label": "z2",
+      "scenarios": [
+        "Z2 ends across a crash of the daemon"
+      ]
+    }
+  ]
+}
