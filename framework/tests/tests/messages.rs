@@ -965,10 +965,13 @@ fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
 
     let request = "请检查构建\n\n  Keep the indentation.";
     let shell = send_in_background(&home, &["worker", request, "-r"]);
-    // The fake CLI records Enter before the daemon sees the confirming frame and saves delivery.
+    // Wait for the terminal submission and the inbox entry before sending a linked reply.
     let mut inbox = Vec::new();
     assert!(
         wait_until(secs(10), || {
+            if home.submitted_messages().is_empty() {
+                return false;
+            }
             inbox = read_messages(&mut worker_tools, json!({"last": 1}));
             !inbox.is_empty()
         }),
