@@ -495,8 +495,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
     paste, with the same person-input generation and the native disclosure visible. The CLI must
     draw after each write and earlier person input must be settled. The typist applies the normal
-    whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves
-    the draft to the person. Recovered collapsed pastes retain the existing refusal.
+    whitespace comparison to the full revealed draft before Enter. On the main screen, the part
+    that scrolls above the viewport can be read from the disclosure's original row. The frame
+    must still draw the live input after Tab. An unconfirmed reveal leaves the draft to the
+    person. Recovered collapsed pastes retain the existing refusal.
   - What the typist put into the input box is its own from the paste through submission or cleanup.
     No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
     that ownership until a complete frame reads as an empty input. A menu, question, unread frame

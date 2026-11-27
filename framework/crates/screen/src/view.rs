@@ -55,7 +55,7 @@ impl VisibleCell {
 /// The screen as drawn, with the cursor.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScreenView {
-    /// Each visible row's cells, from the top.
+    /// Each row's cells, from the top of the view.
     pub rows: Vec<Vec<VisibleCell>>,
     /// How many columns the screen has.
     pub cols: usize,
@@ -105,6 +105,31 @@ impl Screen {
         let mut view = ScreenView::default();
         self.refresh_view(&mut view);
         view
+    }
+
+    /// A view starting `rows_above` rows before the live viewport. Its cursor is relative to
+    /// that first row. Returns None if any requested history rows are unavailable.
+    pub fn view_with_history(&self, rows_above: usize) -> Option<ScreenView> {
+        let rows = self.readable_rows();
+        let first = rows.scrollback().checked_sub(rows_above)?;
+        let mut view = ScreenView::default();
+        view.cols = rows.grid.columns();
+        view.rows.reserve(rows.len() - first);
+        view.continues.reserve(rows.len() - first);
+        for index in first..rows.len() {
+            let cells = rows.with_row(index, |row| {
+                let mut cells = Vec::new();
+                visible_cells(row, view.cols, &mut cells);
+                cells
+            });
+            view.rows.push(cells);
+            view.continues.push(index > 0 && rows.wraps(index - 1));
+        }
+        let (column, row) = self.cursor();
+        view.cursor = (column.into(), usize::from(row) + rows_above);
+        view.cursor_visible = self.terminal.has(TermMode::SHOW_CURSOR);
+        view.synchronized_update = self.is_drawing();
+        Some(view)
     }
 
     /// Replaces the view's contents, reusing its row storage.

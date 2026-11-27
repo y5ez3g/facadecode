@@ -1776,6 +1776,11 @@ impl Typist {
             .is_some_and(|rule| rule.shows_tab_to_expand(reading))
     }
 
+    pub(super) fn disclosure_text_len(&self, reading: &BoxReading) -> Option<usize> {
+        self.shows_collapsed_paste(reading)
+            .then_some(self.batch.as_ref()?.draft.paste.text.len())
+    }
+
     /// Whether the typist is still following a proposed or partly issued erase.
     pub(super) fn follows_erase(&self) -> bool {
         self.batch

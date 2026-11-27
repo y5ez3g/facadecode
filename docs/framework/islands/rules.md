@@ -370,7 +370,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     the original paste and its canonical spellings under either deletion unit.
   - Kiro's `tab_to_expand` cue matches the colored single-row disclosure at its native caret.
     It offers Tab to reveal a paste. The resulting draft must show the full text for
-    confirmation, with the usual whitespace handling.
+    confirmation, with the usual whitespace handling. If the prompt scrolls above the viewport,
+    the reader can follow the complete draft from the disclosure's original row to its live cursor.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.

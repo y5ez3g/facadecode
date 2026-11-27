@@ -25,7 +25,7 @@ use facade_base::{
     },
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
-use facade_rules::{BoxReading, InputRule, Rule};
+use facade_rules::{BoxReading, InputRule, PasteDisclosure, Rule};
 use facade_screen::{CursorRowWrites, InputEvent, ParsedOutput, StatusEvent, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -265,6 +265,8 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
 #[derive(Default)]
 struct DeliveryFrames {
     drawn: Option<BoxReading>,
+    /// Where the current paste's disclosure was shown before its key reached the terminal.
+    disclosure: Option<PasteDisclosure>,
     /// The empty frame's output position while it awaits confirmation.
     pending_empty_at: Option<u64>,
     /// When the ready output first confirmed an eligible, complete empty frame.
@@ -272,6 +274,18 @@ struct DeliveryFrames {
 }
 
 impl DeliveryFrames {
+    fn read_disclosure(
+        &self,
+        rule: Option<&InputRule>,
+        screen: &facade_screen::Screen,
+        live: &BoxReading,
+    ) -> Option<(BoxReading, usize)> {
+        if !live.is_unread() {
+            return None;
+        }
+        self.disclosure?.read(rule?, screen)
+    }
+
     fn observe(&mut self, reading: BoxReading, position: u64, before_edit: bool, typist: &Typist) {
         if self.confirmed_empty_at.is_none() {
             match typist.delivery_frame_state(&typist.recall(reading.clone())) {
@@ -1290,6 +1304,7 @@ impl Actor {
     /// size changed, which redraws viewers.
     fn resize(&mut self, cols: u16, rows: u16) -> bool {
         if (cols, rows) != self.size() {
+            self.delivery_frames.disclosure = None;
             self.screen_mut().checkpoint_if_due();
             if self.pending_delivery.take().is_some() {
                 self.typist_at = Some(Instant::now());
@@ -1349,6 +1364,13 @@ impl Actor {
                     .take()
                     .expect("the terminal issued its intent");
                 self.delivery_frames = DeliveryFrames::default();
+                if matches!(pending.kind, DeliveryWrite::Reveal) {
+                    let reading = self.read_input_box(false);
+                    self.delivery_frames.disclosure = self
+                        .typist
+                        .disclosure_text_len(&reading)
+                        .and_then(|len| PasteDisclosure::at(self.screen().screen(), &reading, len));
+                }
                 if matches!(pending.kind, DeliveryWrite::Paste) {
                     self.screen_mut().observe_paint(false);
                     self.escape_may_edit = false;
@@ -1711,6 +1733,9 @@ impl Actor {
                 state.take_event(event.clone(), sync_open);
                 let native_wait = state.native_wait();
                 gate.report(native_wait);
+                if native_wait.is_some() || matches!(event, StatusEvent::Reset) {
+                    delivery.disclosure = None;
+                }
                 if native_wait.is_some() {
                     let evidence = report_start.filter(|_| matches!(event, StatusEvent::Report(_)));
                     if native_wait == Some(WaitKind::Question)
@@ -1746,9 +1771,21 @@ impl Actor {
                         || waiting_for_menu_composer);
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
+                if reading.info.state == InputState::Interaction || screen.on_alternate_screen() {
+                    delivery.disclosure = None;
+                }
+                let disclosed = if observes_delivery && complete && before_edit && !ended {
+                    delivery
+                        .read_disclosure(rule, screen, &reading)
+                        .filter(|(_, row)| {
+                            screen.frame_row_writes(*row) == CursorRowWrites::Current
+                        })
+                } else {
+                    None
+                };
                 let menu_composer_redrawn = waiting_for_menu_composer && complete && redrawn;
                 let input_written = writes == CursorRowWrites::Current;
-                *drew_input.get_or_insert(false) |= input_written;
+                *drew_input.get_or_insert(false) |= input_written || disclosed.is_some();
                 if after_probe && (input_written || complete) {
                     let probe_reading = if untouched && input_written {
                         read_box(rule, ended, None, screen, true, false)
@@ -1795,7 +1832,9 @@ impl Actor {
                         before_next,
                     );
                 }
-                if writes == CursorRowWrites::Current {
+                if let Some((reading, _)) = disclosed {
+                    delivery.observe(reading, position, before_edit, typist);
+                } else if input_written {
                     if observes_delivery {
                         let reading = if untouched {
                             read_box(rule, ended, None, screen, true, false)
@@ -2474,11 +2513,15 @@ impl Actor {
             self.delivery_frames.confirm_empty();
         }
         let empty_after_write = self.delivery_frames.confirmed_empty_at;
+        let disclosure_rule = rule.filter(|_| !ended && undrawn.is_none());
         let observe = || {
             let current = if cleanup_frame {
                 read_box(rule, ended, cleanup_undrawn, screen.screen(), false, true)
             } else {
-                read_screen()
+                let live = read_screen();
+                self.delivery_frames
+                    .read_disclosure(disclosure_rule, screen.screen(), &live)
+                    .map_or(live, |(reading, _)| reading)
             };
             InputObservation {
                 after_write: !waits_for_frame

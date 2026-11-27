@@ -37,7 +37,7 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, PasteDrawing, ProbeVerdict, canonical_text,
+    BoxReading, InputLine, LineCell, PasteDisclosure, PasteDrawing, ProbeVerdict, canonical_text,
     could_be_paste_prefix, draft_backspace_count, is_full_draft, is_legacy_split_paste,
     is_own_draft, is_own_paste_tail, is_own_recovered_draft, is_paste_placeholder, is_same_draft,
     read_box, read_box_after_paint, read_box_for_screen, read_box_for_typing, read_box_with_redraw,

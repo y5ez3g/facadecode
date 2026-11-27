@@ -93,6 +93,74 @@ pub struct PasteDrawing {
     pub final_line_breaks: usize,
 }
 
+/// The location of a one-row paste disclosure before its key was written.
+#[derive(Clone, Copy)]
+pub struct PasteDisclosure {
+    first_row: usize,
+    columns: usize,
+    rows: usize,
+    max_scrolled: usize,
+}
+
+impl PasteDisclosure {
+    /// Marks the disclosed input's position while it is still confined to its original row.
+    pub fn at(
+        screen: &facade_screen::Screen,
+        reading: &BoxReading,
+        max_scrolled: usize,
+    ) -> Option<Self> {
+        let line = reading.line.as_ref().filter(|line| !line.rest)?;
+        if screen.on_alternate_screen() || !screen.output_frame_complete() {
+            return None;
+        }
+        let view = screen.view();
+        // Any text already below the disclosure could later reach history with the input.
+        if view.rows.iter().skip(line.row + 1).flatten().any(draws) {
+            return None;
+        }
+        Some(Self {
+            first_row: screen.scrollback_range().end + line.row,
+            columns: view.cols,
+            rows: view.rows.len(),
+            max_scrolled,
+        })
+    }
+
+    /// Reads a prompt that scrolled away while its expanded draft was drawn. The cursor must
+    /// still be live. Returns its live row for the caller's output-boundary checks.
+    pub fn read(
+        &self,
+        rule: &InputRule,
+        screen: &facade_screen::Screen,
+    ) -> Option<(BoxReading, usize)> {
+        if !matches!(
+            rule,
+            InputRule::PromptRow {
+                drawn_cursor: true,
+                ..
+            }
+        ) || !screen.output_frame_complete()
+        {
+            return None;
+        }
+        let history = screen.scrollback_range();
+        let above = history.end.checked_sub(self.first_row)?;
+        if above == 0 || above > self.max_scrolled || self.first_row < history.start {
+            return None;
+        }
+        let view = screen.view_with_history(above)?;
+        if view.cols != self.columns || view.rows.len() != self.rows + above {
+            return None;
+        }
+        let mut reading = read_box_for_typing(rule, &view, false);
+        let line = reading.line.take()?;
+        if reading.info.state != InputState::Draft || line.row >= above {
+            return None;
+        }
+        Some((reading, line.cursor.1.checked_sub(above)?))
+    }
+}
+
 impl BoxReading {
     /// A reading without captured input geometry, paste evidence or probe evidence.
     pub fn new(info: InputInfo, draft: Option<String>) -> Self {

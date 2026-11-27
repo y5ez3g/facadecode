@@ -13,11 +13,11 @@ use facade_base::model::{
     terminal::{HiddenRows, InputState},
 };
 use facade_rules::{
-    InputRule, PasteDrawing, Pattern, ProbeVerdict, find, is_own_draft, read_box,
-    read_box_for_screen, read_box_for_typing, read_draft, read_input, restored, shows_paste_end,
-    space_taken, verdict_of,
+    InputRule, PasteDisclosure, PasteDrawing, Pattern, ProbeVerdict, find, is_full_draft,
+    is_own_draft, read_box, read_box_for_screen, read_box_for_typing, read_draft, read_input,
+    restored, shows_paste_end, space_taken, verdict_of,
 };
-use facade_screen::{ScreenView, VisibleCell};
+use facade_screen::{Screen, ScreenView, VisibleCell};
 use recorded::view_of;
 
 fn recorded(cli: &str) -> Vec<serde_json::Value> {
@@ -566,6 +566,36 @@ fn kiro_offers_tab_only_on_the_captured_collapse_cue() {
     let mut other_caret = observed;
     other_caret.line.as_mut().unwrap().cursor.0 += 1;
     assert!(!rule.paste.shows_tab_to_expand(&other_caret));
+}
+
+#[test]
+fn kiro_reads_the_whole_revealed_draft_when_its_prompt_scrolls_off() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let mut screen = Screen::new(60, 5, 100);
+    screen.feed(
+        "\x1b[?25lPrevious output\x1b[4;1H› \x1b[38;5;245m 6 lines ▸ \x1b[0m\x1b[7m \x1b[0m\x1b[38;5;245m Press Tab to expand\x1b[0m"
+            .as_bytes(),
+    );
+    let collapsed = read_box_for_screen(&rule.input, &screen, false);
+    assert!(rule.paste.shows_tab_to_expand(&collapsed), "{collapsed:?}");
+    let original = "first\nsecond\nthird\nfourth\nfifth\nlast 你好";
+    let disclosure = PasteDisclosure::at(&screen, &collapsed, original.len()).unwrap();
+    let draft = original.replace('\n', "\r\n  ");
+    screen.feed(format!("\r\x1b[2K› {draft}\x1b[7m \x1b[0m").as_bytes());
+    let visible = read_box_for_screen(&rule.input, &screen, false);
+    assert!(visible.is_unread(), "{visible:?}");
+    let (reading, row) = disclosure.read(&rule.input, &screen).unwrap();
+    assert_eq!(row, 4);
+    assert!(is_full_draft(
+        reading.draft.as_deref().unwrap(),
+        original,
+        reading.draft_hidden(),
+    ));
+    assert!(!is_full_draft(
+        reading.draft.as_deref().unwrap(),
+        &original.replacen("first", "different", 1),
+        reading.draft_hidden(),
+    ));
 }
 
 #[test]
