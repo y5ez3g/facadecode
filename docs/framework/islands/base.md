@@ -222,7 +222,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   start or send. Shell captures its launch environment.
 - `programs::{install_running, current_build, point_launchers_at, launcher, start_keeper}` manages
   the installed services. `service::{create_private_home, live_holder}` prepares the home and
-  observes services. `unix_process::calling_program()` identifies a hook's CLI.
+  observes services. `service::alternate_daemon_socket` gives Shell the endpoint and lock identity of
+  a live daemon that uses an equivalent spelling of the home path. `unix_process::calling_program()`
+  identifies a hook's CLI.
 - `ssh` prepares the selected-home administration bootstrap and SSH arguments for Shell. It resolves the SSH account
   and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `framework/ssh/` folder,
   with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent

@@ -71,8 +71,10 @@ adds Shell guidance to the Orchestrator's diagnostics.
 The layers share the terminal formatters, the selected client's connection and the display name and address returned
 by the Orchestrator. Persistent Agent, machine and message records belong to the Orchestrator.
 
-`daemon_client.rs` opens the socket for the selected `FACADE_HOME`. For an ordinary command, it starts a keeper when
-neither service is running. The keeper starts the daemon. Local `status` probes without starting or upgrading
+`daemon_client.rs` opens the socket for the selected `FACADE_HOME`. If the command and a live daemon use spellings
+with the same path components, including redundant separators, Shell can use the daemon's original socket after
+verifying the selected home's daemon lock. For an ordinary command, it starts a keeper when neither service is
+running. The keeper starts the daemon. Local `status` probes without starting or upgrading
 services. When they sleep, local status and start help use the committed machine name through the daemon's offline
 reader. Agent status uses the normal connection and the Orchestrator routes that query. The caller can cancel an
 Attach reconnect while the socket opens or while the Orchestrator answers hello.

@@ -3,6 +3,7 @@
 //! The socket paths, [`ClientSocket`] and [`is_connection_lost`] come from the platform: on Unix a
 //! socket is a file in this user's socket folder, on Windows a named pipe.
 
+use std::ffi::OsString;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +15,13 @@ pub use crate::platform::paths::*;
 /// the user's home folder, `HOME` or else `USERPROFILE`. A `FACADE_HOME` that is set but empty,
 /// as a CLI passes on a variable it refers to that is unset, counts as unset.
 pub fn facade_home() -> anyhow::Result<PathBuf> {
-    match std::env::var_os("FACADE_HOME").map(PathBuf::from) {
+    home_from(|name| std::env::var_os(name))
+}
+
+pub(crate) fn home_from(
+    mut variable: impl FnMut(&str) -> Option<OsString>,
+) -> anyhow::Result<PathBuf> {
+    match variable("FACADE_HOME").map(PathBuf::from) {
         Some(named) if named.as_os_str().is_empty() => {}
         Some(named) if named.is_absolute() => return Ok(named),
         Some(named) => anyhow::bail!(
@@ -25,7 +32,7 @@ pub fn facade_home() -> anyhow::Result<PathBuf> {
     }
     let user = ["HOME", "USERPROFILE"]
         .into_iter()
-        .find_map(std::env::var_os)
+        .find_map(variable)
         .ok_or_else(|| {
             anyhow::anyhow!("cannot locate the Facade home: HOME and USERPROFILE are unset")
         })?;

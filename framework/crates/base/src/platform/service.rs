@@ -252,6 +252,28 @@ pub fn live_holder(framework: &Path, service: Service) -> io::Result<Option<Proc
     Ok(lock_record(framework, service)?.filter(|holder| !ended(holder)))
 }
 
+/// Finds the socket named by a live daemon whose home has the same path components as `home`.
+/// The caller authenticates the connection against the returned lock holder before using it.
+pub fn alternate_daemon_socket(home: &Path) -> anyhow::Result<Option<(PathBuf, ProcessIdentity)>> {
+    let Some(holder) = live_holder(&home.join("framework"), Service::Daemon)? else {
+        return Ok(None);
+    };
+    let Some(environment) = super::unix_process::environment(&holder).ok().flatten() else {
+        return Ok(None);
+    };
+    let Ok(running_home) =
+        crate::paths::home_from(|name| super::system::env_var(&environment, name).map(Into::into))
+    else {
+        return Ok(None);
+    };
+    if running_home == home && running_home.as_os_str() != home.as_os_str() {
+        let socket = crate::paths::daemon_socket_for(&running_home)?;
+        Ok(Some((socket, holder)))
+    } else {
+        Ok(None)
+    }
+}
+
 /// At the daemon's start, while the keeper's lock file names no keeper: the keeper's lock, where no
 /// process holds it. The daemon keeps it through its recovery, so that no keeper starts meanwhile.
 /// None where another process holds it.

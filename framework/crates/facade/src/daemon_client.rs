@@ -100,7 +100,7 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
 pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
     let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
     let until = Instant::now() + RUNNING_TIMEOUT;
-    let client = DaemonClient::connect(&socket, until, &mut |_| true).map_err(explicit)?;
+    let client = connect_local(&socket, until, &mut |_| true).map_err(explicit)?;
     if client.is_none() && services_running(&facade_base::paths::framework_dir()?)? {
         return Err(explicit(anyhow::anyhow!(errors::daemon_slow(
             true,
@@ -108,6 +108,27 @@ pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
         ))));
     }
     Ok(client)
+}
+
+/// Tries the requested endpoint, then the one the same home's daemon bound under another spelling.
+fn connect_local(
+    socket: &Path,
+    until: Instant,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+) -> anyhow::Result<Option<DaemonClient>> {
+    let client = DaemonClient::connect(socket, until, opening)?;
+    if client.is_some() || Instant::now() >= until {
+        return Ok(client);
+    }
+    let home = facade_base::paths::facade_home()?;
+    let Some((alternate, holder)) = service::alternate_daemon_socket(&home)? else {
+        return Ok(None);
+    };
+    let framework = home.join("framework");
+    DaemonClient::connect(&alternate, until, &mut |stream| {
+        service::authenticate_server(stream, &framework, Service::Daemon).as_ref() == Ok(&holder)
+            && opening(stream)
+    })
 }
 
 /// An explicit failure to reach a daemon that runs, such as an unusable home, a permission error
@@ -180,7 +201,7 @@ fn connect_with_takeover(
         cancelled,
         DAEMON_CONNECT_TIMEOUT,
         purpose.deadline(),
-        |socket, until| DaemonClient::connect(socket, until, opening),
+        |socket, until| connect_local(socket, until, opening),
     )?;
     let running = &client.hello_result.build;
     if !facade_base::takes_over(&ours, running)
@@ -207,12 +228,10 @@ fn connect_with_takeover(
                 timeout,
                 Some(until),
                 |socket, until| {
-                    Ok(
-                        DaemonClient::connect(socket, until, opening)?.filter(|client| {
-                            let build = &client.hello_result.build;
-                            build == &ours || facade_base::takes_over(build, &ours)
-                        }),
-                    )
+                    Ok(connect_local(socket, until, opening)?.filter(|client| {
+                        let build = &client.hello_result.build;
+                        build == &ours || facade_base::takes_over(build, &ours)
+                    }))
                 },
             )
         })
