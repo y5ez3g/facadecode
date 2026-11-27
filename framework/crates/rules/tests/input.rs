@@ -90,6 +90,30 @@ fn agy_screens_read_as_recorded() {
     reads_as_recorded("agy");
 }
 
+#[test]
+fn antigravity_reads_switch_model_with_its_keyboard_footer() {
+    let input = &find("agy").unwrap().unwrap().input;
+    let options = concat!(
+        "\x1b[?25lSwitch Model\r\n\r\n",
+        "  Search:  \r\n          ────────────────────\r\n\r\n",
+        "  Gemini 4 Neon\r\n  Gemini 4 Carbon\r\n  Gemini 4 Argon\r\n",
+        "> Gemini 4 Hydrogen     (current)\r\n  Orchestrator\r\n",
+        "  Gemini 3.8 Flash\r\n  Claude Opus 5.5\r\n",
+        "  Claude Sonnet 5.5\r\n  GPT-OSS 120B (Medium)\r\n\r\n",
+        "  Effort  ◂      ◉──────────○──────────○──────────○      ▸\r\n",
+        "                low      medium      high       xhigh\r\n",
+        "            Faster responses, lighter reasoning — great for simpler tasks\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(options.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("Keyboard: ↑/↓ Navigate  ←/→ Effort  enter Select  esc Go Back".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
 /// Antigravity's command list under a draft that starts with `/` is no question of the CLI's, also
 /// behind a hidden cursor: its selected row names a command, and the screen reads unknown there,
 /// not as a menu waiting for the person.

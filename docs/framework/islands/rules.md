@@ -234,6 +234,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     below the Cursor Agent splash title. Those login notices also report authentication waits.
     Kiro trust and Devin's `✱` trust question are also interactions. Devin's startup theme choice
     reads as an interaction when its question and confirmation footer are visible.
+    Antigravity's Switch Model panel is an interaction when its heading and keyboard footer appear.
     Kiro's option menus read as interactions by the footer below their selected `❯` row, so its
     trust-all-tools warning does at any window height.
     When the workspace trust heading scrolls away, the selected workspace choice and the nearby
