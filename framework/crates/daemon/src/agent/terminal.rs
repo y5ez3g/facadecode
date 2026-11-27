@@ -1550,7 +1550,9 @@ mod tests {
         let (mut terminal, mut cli) = opened();
         cli.write_output(b"last words").unwrap();
         terminal.push(b"never read");
-        drop(cli);
+        // Darwin's closing slave waits for the master to read its output. A real CLI closes it
+        // independently of the daemon, so the reader must be able to run during the close.
+        let closing = tokio::task::spawn_blocking(move || drop(cli));
         let mut read = Vec::new();
         loop {
             assert!(terminal.is_open(), "open until its output was read");
@@ -1567,6 +1569,7 @@ mod tests {
                 TerminalEvent::WriteFailed(_) => terminal.clear(),
             }
         }
+        closing.await.unwrap();
         assert_eq!(read, b"last words");
         assert!(let_go(&terminal));
     }
@@ -1751,7 +1754,7 @@ mod tests {
     async fn a_read_that_does_not_wait_lets_go_of_an_ended_terminal() {
         let (mut terminal, mut cli) = opened();
         cli.write_output(b"last words").unwrap();
-        drop(cli);
+        let closing = tokio::task::spawn_blocking(move || drop(cli));
         let mut read = Vec::new();
         let ended = async {
             while terminal.is_open() {
@@ -1764,6 +1767,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), ended)
             .await
             .expect("let go of at its end");
+        closing.await.unwrap();
         assert_eq!(read, b"last words");
         assert!(let_go(&terminal));
     }
