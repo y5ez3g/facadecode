@@ -281,8 +281,9 @@ fn paste_paint(screen: &facade_screen::Screen) -> BoxPaint<'_> {
 }
 
 /// Reads the input and its redraw evidence using the caller's input boundary. For an interaction,
-/// the flag covers the menu anchor. For a complete ordinary frame, it covers the borders, prompt
-/// and visible text. The caller observes frames in output order.
+/// the flag covers the menu anchor. For an unsure reading, it covers the prompt row. For a
+/// complete framed input, it covers the borders, prompt and visible text. The caller observes
+/// frames in output order.
 pub fn read_box_with_redraw(
     rule: &InputRule,
     screen: &facade_screen::Screen,
@@ -1278,8 +1279,12 @@ impl<'a> Screen<'a> {
             };
         }
         let framed = |reading: Reading| Reading {
-            redraw_rows: matches!(reading.state, InputState::Usable | InputState::Draft)
-                .then_some(upper..lower + 1),
+            redraw_rows: if reading.unsure {
+                Some(first..first + 1)
+            } else {
+                matches!(reading.state, InputState::Usable | InputState::Draft)
+                    .then_some(upper..lower + 1)
+            },
             ..reading
         };
         if let Some(hint) = &frame.dim_cursor_hint

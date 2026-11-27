@@ -544,6 +544,8 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     Its first complete redraw after Space can move that input to another row before the echo.
     The whole line and the cursor column must match the original reading before the probe uses
     the new row. The Space echo and Backspace restoration still need their own evidence.
+    When a person dismisses a menu during the run, a fresh complete redraw of an ambiguous
+    input row lets the typist use a previous hint verdict or apply the same reversible probe.
     A confirmed hint provides the empty reading.
   - From the write receipt for Space or Backspace, the probe checks the row every 100 ms and waits
     up to two seconds for that key's redraw. Two matching complete readings can establish whether

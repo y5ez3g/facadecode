@@ -1739,14 +1739,14 @@ impl Actor {
                 let frame_closed = screen.synchronized_update_deadline().is_none();
                 let frame_follows_write = screen.frame_follows_input_boundary();
                 let complete = frame_closed && frame_follows_write;
-                let startup_menu = first_hint && gate.waits_for_startup_composer();
+                let waiting_for_menu_composer = gate.waits_for_menu_composer();
                 let check_composer = complete
                     && (state.watches_question_composer()
                         || gate.needs_recovery_redraw()
-                        || startup_menu);
+                        || waiting_for_menu_composer);
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
-                let startup_redraw = startup_menu && complete && redrawn;
+                let menu_composer_redrawn = waiting_for_menu_composer && complete && redrawn;
                 *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
                 if after_probe && writes == CursorRowWrites::Current {
                     let probe_reading = if untouched {
@@ -1756,7 +1756,7 @@ impl Actor {
                     };
                     typist.observe_probe_frame(
                         probe_reading,
-                        startup_redraw && gate.has_post_wait_composer(),
+                        first_hint && menu_composer_redrawn && gate.has_post_wait_composer(),
                     );
                 }
                 if !watch {
@@ -1779,8 +1779,8 @@ impl Actor {
                     &reading,
                     (writes, redrawn, frame_follows_write, frame_closed),
                 );
-                if startup_redraw {
-                    gate.startup_composer(&reading);
+                if menu_composer_redrawn && (first_hint || reading.unsure) {
+                    gate.menu_composer(&reading);
                 }
                 if !gate.blocks_delivery() && (observes_submission || before_next) {
                     Self::observe_submissions(
@@ -7584,6 +7584,47 @@ mod tests {
                 b" ",
                 "consent={consent:?}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn devin_probes_a_fresh_hint_after_the_model_selector_closes() {
+        for hint in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-devin-model-menu-probe");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "devin").await;
+            let _settled = queue_a_message(
+                &mut actor,
+                &messages,
+                Instant::now() + Duration::from_secs(15),
+            );
+            let menu = synchronized(
+                "\x1b[10;1H/ Type to search\x1b[23;1H↑↓ select · opt+p pin · ↵ confirm · opt+↵ this session only · esc cancel\x1b[10;3H",
+            );
+            read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+            actor.type_next();
+            assert_eq!(
+                actor.read_screen_input().info.state,
+                InputState::Interaction
+            );
+            assert_eq!(actor.terminal.queued(), 0);
+
+            let border = "─".repeat(60);
+            let text = if hint {
+                "\x1b[38;2;107;107;107mAsk Devin to build features\x1b[0m"
+            } else {
+                "a draft already in the input"
+            };
+            let row =
+                format!("\x1b[?2026h\x1b[2J\x1b[9;1H{border}\r\n❭ {text}\r\n{border}\x1b[10;3H");
+            read_output(&mut actor, &mut cli, row.as_bytes()).await;
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), 0);
+            read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+            actor.type_next();
+            let keys = read_queued_probe_input(&mut actor, &mut cli).await;
+            assert_eq!(keys, if hint { b" ".as_slice() } else { b"" });
+            assert_eq!(pending_delivery_bytes(&actor), 0);
         }
     }
 
