@@ -83,6 +83,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         plugin: Vec::new(),
         workspace_file: None,
         tools: Tools::NotInjected,
+        tools_config: None,
         uses_run_credential: false,
     };
     assert_eq!(launch, launched);

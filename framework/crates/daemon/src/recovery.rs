@@ -475,6 +475,7 @@ impl Daemon {
             .and_then(|_| facade_base::time::parse_iso_time(&info.created_at))
             .map_or_else(Instant::now, agent::instant_of);
         Ok(StateStart {
+            tools_config: None,
             file,
             kept,
             started,

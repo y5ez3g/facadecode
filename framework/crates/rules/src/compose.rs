@@ -57,6 +57,8 @@ pub struct CommandLine {
     pub workspace_file: Option<(PathBuf, String)>,
     /// How the CLI was given Facade's tools.
     pub tools: Tools,
+    /// A configuration file that names a Facade server, for connection diagnostics.
+    pub tools_config: Option<PathBuf>,
     /// The run's credential is present in the relay configuration this command will load.
     pub uses_run_credential: bool,
 }
@@ -135,6 +137,7 @@ pub fn start_managed_launch_command(
         plugin: wiring.plugin,
         workspace_file: wiring.workspace_file,
         tools,
+        tools_config: wiring.tools_config,
         uses_run_credential,
     }
 }
@@ -192,6 +195,7 @@ pub fn resume_managed_launch_command(
         plugin: wiring.plugin,
         workspace_file: wiring.workspace_file,
         tools,
+        tools_config: wiring.tools_config,
         uses_run_credential,
     })
 }

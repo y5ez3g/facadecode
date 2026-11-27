@@ -739,6 +739,7 @@ impl Daemon {
             deliveries: self.messages.delivery_handle(),
             observed_loss: false,
             state: StateStart {
+                tools_config: prepared.tools_config.take(),
                 file: agent::state_file(&screen),
                 kept: Kept::new_run(prepared.tools),
                 started: tokio::time::Instant::now(),
@@ -1362,6 +1363,7 @@ impl Daemon {
             captures: prepared.captures,
             launch_command: prepared.launch_command.take(),
             tools: prepared.tools,
+            tools_config: prepared.tools_config.take(),
             colors: args.colors,
             reply,
         };

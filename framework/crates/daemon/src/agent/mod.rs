@@ -261,6 +261,7 @@ pub(crate) enum AgentCommand {
         captures: bool,
         launch_command: Option<String>,
         tools: ToolsGiven,
+        tools_config: Option<PathBuf>,
         /// None leaves the screen's colors in use. Some replaces all of them, an omitted entry included.
         colors: Option<TerminalColors>,
         reply: oneshot::Sender<ManagedAgent>,
@@ -328,6 +329,8 @@ pub(crate) struct ActorStart {
 
 /// What an agent's state starts from.
 pub(crate) struct StateStart {
+    /// A configuration file that names a Facade server, for connection diagnostics.
+    pub(crate) tools_config: Option<PathBuf>,
     /// The file beside the screen that keeps the state's facts.
     pub(crate) file: PathBuf,
     /// What an earlier daemon kept there.

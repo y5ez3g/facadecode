@@ -119,6 +119,8 @@ pub(crate) struct PreparedRun {
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,
     pub(crate) tools: ToolsGiven,
+    /// Where the CLI reads an existing server it uses for the run.
+    pub(crate) tools_config: Option<PathBuf>,
     /// Facade's plugin in the folder the CLI starts in, held until the agent is listed.
     pub(crate) plugin: Option<PluginHold>,
     /// The run's folder and what goes in it.

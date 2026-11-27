@@ -541,7 +541,8 @@ session. It also defines the formats of Facade's hooks.
   - A server named `facade` that runs a different program takes precedence, and the reason goes
     back as `Tools::NotGiven`. Antigravity calls the project plugin's server `facade_facade`, so it
     can load both servers. Muse Code uses a hand-configured `facade-mcp` server and can pass the
-    CLI's session evidence. Pi prefers its `mcp.json` entries over extensions of the same name.
+    CLI's session evidence. The managed launch carries the configuration path for a connection
+    timeout diagnostic. Pi prefers its `mcp.json` entries over extensions of the same name.
     When a hand-configured Facade entry uses that name, the run's extension registers its
     managed server under a different name and gives the model the managed tool names. The
     hand-configured Pi relay joins as a Guest.

@@ -334,6 +334,8 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     A dedicated Shell viewer signals the watched run's terminal exit independently of queued screen changes.
     Inspect includes the authenticated client kind and source machine of shell and editor viewers.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
+  - If a configured Facade server fails to connect by the managed run's startup deadline, the
+    actor logs the configuration path supplied when the run was prepared.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits, counted as the CLI's terminal takes it.
     The first prompt reserves room for its rendered text before the agent is listed. Later
     messages use the remaining room. The actor gives back input that must wait for room and

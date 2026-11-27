@@ -206,6 +206,7 @@ impl Harness {
         let dir = home.join("screens").join("a1");
         let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
         let state = StateStart {
+            tools_config: None,
             file: super::state::state_file(&dir),
             kept,
             started,
@@ -1001,6 +1002,7 @@ impl Harness {
             captures: false,
             launch_command: None,
             tools,
+            tools_config: None,
             colors: Default::default(),
             reply,
         })
@@ -1611,6 +1613,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
     let dir = home.join("screens").join("a1");
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
+        tools_config: None,
         file: super::state::state_file(&dir),
         kept: Kept::new_run(ToolsGiven::Injected),
         started: Instant::now(),
@@ -1658,6 +1661,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     let dir = home.join("screens").join("a1");
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
+        tools_config: None,
         file: super::state::state_file(&dir),
         kept: Kept::new_run(ToolsGiven::Injected),
         started: Instant::now(),
@@ -1796,6 +1800,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         .checked_sub(START_TIMEOUT * 2)
         .expect("a clock that has run two minutes");
     let state = StateStart {
+        tools_config: None,
         file: super::state::state_file(&dir),
         kept: Kept::new_run(ToolsGiven::Injected),
         started: long_ago,
@@ -3979,6 +3984,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
         observed_loss: false,
         deliveries: post.delivery_handle(),
         state: StateStart {
+            tools_config: None,
             file: super::state::state_file(&dir),
             kept: Kept::default(),
             started: Instant::now(),

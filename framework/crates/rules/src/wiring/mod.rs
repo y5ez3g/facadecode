@@ -87,6 +87,7 @@ pub enum Tools {
 pub(crate) struct Wiring {
     pub(crate) args: Vec<String>,
     pub(crate) env: Vec<(String, String)>,
+    pub(crate) tools_config: Option<PathBuf>,
     /// Files in the run's folder: each name and its text.
     pub(crate) files: Vec<(String, String)>,
     /// A relative alias and the existing user configuration entry it points to.
@@ -178,11 +179,10 @@ pub(crate) fn wire_managed(
         }
         "muse" => {
             let configured = conflicts::muse_config(server.cwd, environment)?;
-            let entry = (!configured).then_some(&entry);
-            (
-                run_tools::muse_run(server, entry),
-                uses_credential && !configured,
-            )
+            let inject = configured.is_none();
+            let mut wiring = run_tools::muse_run(server, inject.then_some(&entry));
+            wiring.tools_config = configured;
+            (wiring, uses_credential && inject)
         }
         "agy" => (run_tools::agy_managed(server, credential), uses_credential),
         "copilot" => (copilot::tools(&entry), uses_credential),

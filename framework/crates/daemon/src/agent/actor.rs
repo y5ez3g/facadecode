@@ -20,7 +20,8 @@ use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::{
     model::agent::{
-        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState, WaitKind,
+        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsReason,
+        ToolsState, WaitKind,
     },
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
@@ -193,6 +194,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         screen: None,
         screen_start: Some(screen),
         state: tracker,
+        tools_config: state.tools_config,
         input_gate,
         glyph: Glyph::new(rule.and_then(|rule| rule.status_glyph.as_ref())),
         glyph_at: None,
@@ -311,6 +313,8 @@ struct Actor {
     /// What the screen starts from, taken as the task begins.
     screen_start: Option<ScreenStart>,
     state: StateTracker,
+    /// The run's configured server file, kept until a connection deadline is reported.
+    tools_config: Option<PathBuf>,
     input_gate: InputGate,
     glyph: Glyph,
     /// When the next working glyph frame is due.
@@ -955,6 +959,7 @@ impl Actor {
                 captures,
                 launch_command,
                 tools,
+                tools_config,
                 colors,
                 reply,
             } => {
@@ -991,6 +996,7 @@ impl Actor {
                 self.links.settled.send_replace(false);
                 let _ = self.links.exit.send(None);
                 self.state.restarted(Instant::now(), tools);
+                self.tools_config = tools_config;
                 self.input_gate = InputGate::default();
                 self.glyph.restart();
                 self.glyph_at = None;
@@ -3352,6 +3358,18 @@ impl Actor {
             Viewing::Unwatched
         };
         let reading = self.state.read(Instant::now(), viewing);
+        if reading.tools_reason == Some(ToolsReason::NotConnected)
+            && let Some(file) = self.tools_config.take()
+        {
+            log(
+                "warn",
+                &format!(
+                    "#{}: {} names a facade server. Its connection to this managed run was not verified before the startup deadline",
+                    self.id,
+                    file.display(),
+                ),
+            );
+        }
         self.start_rows &= !matches!(
             reading.state,
             ManagedAgentState::Working | ManagedAgentState::JustDone
@@ -3650,6 +3668,7 @@ mod tests {
             deliveries: messages.delivery_handle(),
             observed_loss: false,
             state: StateStart {
+                tools_config: None,
                 file: super::super::state::state_file(folder),
                 kept: Kept::default(),
                 started: Instant::now(),
@@ -3782,6 +3801,7 @@ mod tests {
             deliveries,
             observed_loss: false,
             state: StateStart {
+                tools_config: None,
                 file: super::super::state::state_file(folder),
                 kept: Kept::default(),
                 started: Instant::now(),

@@ -269,12 +269,12 @@ fn registers_facade(text: &str) -> bool {
     })
 }
 
-/// Whether a run can use a configured Facade server, or why its MCP configuration precludes it.
+/// The file that supplies the run's configured Facade server, or why the configuration precludes it.
 pub(super) fn muse_config(
     cwd: &Path,
     environment: &BTreeMap<String, String>,
-) -> Result<bool, String> {
-    let mut has_server = false;
+) -> Result<Option<PathBuf>, String> {
+    let mut settings_server = None;
     let named = |file: &Path| {
         format!(
             "{} names a {SERVER} server, beside which Muse Code refuses to run with Facade's; \
@@ -295,8 +295,9 @@ pub(super) fn muse_config(
         if entry["enabled"] == false {
             return Err(format!("{} disables the {SERVER} server", file.display()));
         }
-        has_server = true;
+        settings_server = Some(file);
     }
+    let mut project_server = None;
     for file in project_files(cwd, &[MCP_FILE]) {
         let text = match std::fs::read_to_string(&file) {
             Ok(text) => text,
@@ -319,7 +320,7 @@ pub(super) fn muse_config(
                     if entry["enabled"] == false {
                         return Err(format!("{} disables the {SERVER} server", file.display()));
                     }
-                    has_server = true;
+                    project_server.get_or_insert(file);
                 }
             }
             Err(why) => {
@@ -331,7 +332,7 @@ pub(super) fn muse_config(
             }
         }
     }
-    Ok(has_server)
+    Ok(project_server.or(settings_server))
 }
 
 /// A project MCP file's `text` as Muse Code loads it, or why it cannot: text that is not plain JSON

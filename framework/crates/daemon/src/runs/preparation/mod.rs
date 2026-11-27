@@ -87,6 +87,7 @@ impl Preparation {
                 env,
                 captures: false,
                 tools: ToolsGiven::NotInjected,
+                tools_config: None,
                 plugin: None,
                 files: RunFiles::default(),
                 rule: None,
@@ -195,6 +196,7 @@ impl Preparation {
             config_links,
             workspace_file,
             tools,
+            tools_config,
             ..
         } = command_line;
         environment::apply(&mut env, added, launch_env);
@@ -243,6 +245,7 @@ impl Preparation {
             env,
             captures,
             tools,
+            tools_config,
             plugin,
             files,
             rule: Some(rule),
@@ -408,6 +411,7 @@ fn new_credential() -> String {
 fn with_tools(program: &Path, composed: Option<CommandLine>) -> Option<CommandLine> {
     let mut command_line = composed?;
     if command_line.tools == facade_rules::Tools::Injected && !program.is_file() {
+        command_line.tools_config = None;
         command_line.tools = facade_rules::Tools::NotGiven(format!(
             "there is no facade-mcp at {}",
             program.display()
