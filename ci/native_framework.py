@@ -1,4 +1,4 @@
-"""Shared process and evidence helpers for Linux native Framework checks."""
+"""Shared process and evidence helpers for Linux native Facade Code Framework checks."""
 
 from hashlib import file_digest, sha256
 import json

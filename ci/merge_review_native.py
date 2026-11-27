@@ -40,7 +40,7 @@ def check_ssh(folder, source):
     if (receipt['source'] != source or not file_digests(receipt['program_sha256'], ssh.PROGRAMS)
             or receipt['success'] != ssh.ssh_success(receipt)
             or read_markers(folder / 'console.log', ssh.SUCCESS_MARKER) != [receipt['success']]):
-        raise AcceptanceError('native Framework SSH receipt does not match the original route and attempt')
+        raise AcceptanceError('native Facade Code Framework SSH receipt does not match the original route and attempt')
     return NATIVE_SSH_CASE
 
 

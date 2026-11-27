@@ -1,4 +1,4 @@
-"""Review a same-repository PR with the complete Framework and Extension matrix."""
+"""Review a same-repository PR with the complete Facade Code Framework and Facade Code Extension matrix."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor

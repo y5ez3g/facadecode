@@ -124,7 +124,7 @@ def validate_binding(value, case_id):
             or value.keys() != {'runner', 'target', 'name'}
             or not all(NAME.fullmatch(value[key]) for key in ('target', 'name'))
         ):
-            raise AcceptanceError(f'{case_id}: invalid Framework scenario binding')
+            raise AcceptanceError(f'{case_id}: invalid Facade Code Framework scenario binding')
     elif runner == 'extension-unit':
         if (not case_id.startswith('extension/') or '/p0/' in case_id
                 or value.keys() != {'runner', 'target', 'name'}

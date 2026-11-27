@@ -1,4 +1,4 @@
-"""The local and CI entry point for Facade acceptance."""
+"""The local and CI entry point for product acceptance."""
 
 import argparse
 import json
@@ -205,7 +205,7 @@ def main():
         if args.command == 'verify-native-ssh':
             from check_real_ssh_route import verified_ssh
             verified_ssh(args.bin_dir, args.receipt, args.output, run_identity(args.run_id, environ))
-            print('Linux x64 real SSH machine route passed and matched the tested Framework programs')
+            print('Linux x64 real SSH machine route passed and matched the tested Facade Code Framework programs')
             return 0
         cases, inventory, required_p0, pilots = load(ROOT)
         if args.command == 'catalog':

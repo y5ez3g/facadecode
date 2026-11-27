@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay Linux x64 Framework compatibility with identified native program pairs."""
+"""Replay Linux x64 Facade Code Framework compatibility with identified native program pairs."""
 
 import argparse
 from hashlib import sha256

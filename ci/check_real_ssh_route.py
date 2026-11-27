@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a real Framework machine route with a private Linux OpenSSH peer.
+"""Check a real Facade Code Framework machine route with a private Linux OpenSSH peer.
 
 Run beside framework/scripts/ssh-check.sh after it has built the three test binaries.
 """
