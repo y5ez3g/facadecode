@@ -258,9 +258,6 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   on macOS and the desktop's on Windows, without a permission, and loads their libraries only when
   asked. It sees no keys on Linux, over SSH, outside a desktop session, or in a terminal that
   another computer can show: tmux, Screen, Zellij and VS Code's remote terminals.
-- `desktop::{clicks, pointer, right_click_at, press_left_at, left_button_down}`: the pointer and the
-  buttons, for Attach's clicks in macOS Terminal. Posting a click needs Accessibility for the
-  terminal app; `clicks` checks it and never asks. Elsewhere there are none.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use facade_base::console::PointerAction;
-use facade_base::desktop::{self, Arrows, Point};
+use facade_base::desktop::Arrows;
 
 use super::win32_key_prefix;
 
@@ -18,12 +18,6 @@ const KEY_REPEAT: Duration = Duration::from_millis(150);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Take {
     Reports,
-    /// The terminal app has the drags and right clicks of a CLI that tracks the mouse: Attach takes
-    /// a left press until it turns into a click, which goes on to the CLI, or a drag, takes right
-    /// clicks, and takes the app's reply that it has followed what Attach wrote, if one is to come.
-    Lends {
-        awaits_reply: bool,
-    },
     /// The host sends application cursor keys, and the wheel as Up and Down. The CLI asked for such
     /// keys, or gets the ordinary ones.
     CursorKeys {
@@ -41,22 +35,7 @@ pub(super) enum MouseInput<'a> {
         row: u16,
         action: PointerAction,
     },
-    /// The left button went down while the terminal app has drags: a click or a drag follows.
-    Press,
-    /// The left button moved while down: the terminal app takes the drag over from `from`, where the
-    /// button went down.
-    Drag {
-        from: Option<Point>,
-    },
-    /// The right button came up.
-    RightClick,
-    /// The reply to [`FOLLOWED_QUERY`].
-    Followed,
 }
-
-/// Asks the terminal app to reply once it has followed everything written before.
-pub(super) const FOLLOWED_QUERY: &[u8] = b"\x1b[5n";
-const FOLLOWED_REPLY: &[u8] = b"\x1b[0n";
 
 #[derive(Default)]
 pub(super) struct LocalMouseInput {
@@ -67,28 +46,6 @@ pub(super) struct LocalMouseInput {
     pressed: Option<(Arrow, Instant)>,
     /// The key whose release belongs to the wheel as well.
     wheel_key: Option<Arrow>,
-    /// The left press held back while it can still turn into a click or a drag.
-    left_press: Option<LeftPress>,
-    /// Whether the left button moved since it went down, so that its reports are the terminal app's.
-    dragged: bool,
-}
-
-/// A left press as the host reported it, the cell it reported, and where the pointer was.
-struct LeftPress {
-    report: Vec<u8>,
-    cell: (u16, u16),
-    at: Option<Point>,
-}
-
-/// What Attach makes of a report while the terminal app has drags and right clicks.
-enum Lent {
-    /// It reaches no one.
-    Kept,
-    Press,
-    /// The press of a click, which goes on to the CLI with the release.
-    Click(Vec<u8>),
-    Drag(Option<Point>),
-    RightClick,
 }
 
 impl LocalMouseInput {
@@ -114,8 +71,6 @@ impl LocalMouseInput {
         emit: &mut impl FnMut(MouseInput<'_>),
     ) {
         let local = take != Take::Nothing;
-        let lends = matches!(take, Take::Lends { .. });
-        let awaits_reply = take == Take::Lends { awaits_reply: true };
         let mut start = 0;
         let mut search = 0;
         let mut candidate = had_pending.then_some(0);
@@ -129,44 +84,8 @@ impl LocalMouseInput {
             let Some(at) = candidate.take() else {
                 break;
             };
-            if awaits_reply && keys[at..].starts_with(FOLLOWED_REPLY) {
-                emit(MouseInput::Keys(&keys[start..at]));
-                emit(MouseInput::Followed);
-                start = at + FOLLOWED_REPLY.len();
-                search = start;
-                continue;
-            }
-            if awaits_reply && FOLLOWED_REPLY.starts_with(&keys[at..]) {
-                emit(MouseInput::Keys(&keys[start..at]));
-                self.pending.extend_from_slice(&keys[at..]);
-                return;
-            }
             match sgr_report(&keys[at..]) {
-                Report::Complete {
-                    length,
-                    event,
-                    right,
-                } if lends => {
-                    let report = &keys[at..at + length];
-                    let Some(lent) = self.lent(report, event, right) else {
-                        search = at + length;
-                        continue;
-                    };
-                    emit(MouseInput::Keys(&keys[start..at]));
-                    match lent {
-                        Lent::Kept => {}
-                        Lent::Press => emit(MouseInput::Press),
-                        Lent::Click(press) => {
-                            emit(MouseInput::Keys(&press));
-                            emit(MouseInput::Keys(report));
-                        }
-                        Lent::Drag(from) => emit(MouseInput::Drag { from }),
-                        Lent::RightClick => emit(MouseInput::RightClick),
-                    }
-                    start = at + length;
-                    search = start;
-                }
-                Report::Complete { length, event, .. } => {
+                Report::Complete { length, event } => {
                     emit(MouseInput::Keys(&keys[start..at]));
                     if local && let Some(event) = event {
                         emit(event);
@@ -188,51 +107,6 @@ impl LocalMouseInput {
             rest = before;
         }
         emit(MouseInput::Keys(rest));
-    }
-
-    /// What a report comes to while the terminal app has drags and right clicks; None leaves it to
-    /// the CLI.
-    fn lent(
-        &mut self,
-        report: &[u8],
-        event: Option<MouseInput<'static>>,
-        right: Option<Button>,
-    ) -> Option<Lent> {
-        if let Some(right) = right {
-            return Some(match right {
-                Button::Up => Lent::RightClick,
-                Button::Down => Lent::Kept,
-            });
-        }
-        let Some(MouseInput::Pointer { col, row, action }) = event else {
-            return None;
-        };
-        match action {
-            PointerAction::LeftDown => {
-                self.dragged = false;
-                self.left_press = Some(LeftPress {
-                    report: report.to_vec(),
-                    cell: (col, row),
-                    at: desktop::pointer(),
-                });
-                Some(Lent::Press)
-            }
-            PointerAction::LeftDrag => match &self.left_press {
-                Some(press) if press.cell != (col, row) => {
-                    let from = press.at;
-                    self.left_press = None;
-                    self.dragged = true;
-                    Some(Lent::Drag(from))
-                }
-                Some(_) => Some(Lent::Kept),
-                None => self.dragged.then_some(Lent::Kept),
-            },
-            PointerAction::LeftUp => match self.left_press.take() {
-                Some(press) => Some(Lent::Click(press.report)),
-                None => std::mem::take(&mut self.dragged).then_some(Lent::Kept),
-            },
-            PointerAction::RightDown => None,
-        }
     }
 
     /// Tells the wheel from the cursor keys it is sent as: the person presses none.
@@ -344,18 +218,10 @@ pub(super) fn without_reports(keys: &[u8]) -> Vec<u8> {
     rest
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Button {
-    Down,
-    Up,
-}
-
 enum Report {
     Complete {
         length: usize,
         event: Option<MouseInput<'static>>,
-        /// What the right button did, if the report is of it.
-        right: Option<Button>,
     },
     Incomplete,
     Other,
@@ -384,15 +250,9 @@ fn sgr_report(bytes: &[u8]) -> Report {
                 digits = 0;
             }
             b'M' | b'm' if separators == 2 && digits > 0 => {
-                let right = matches!(numbers[0] & !28, 2 | 34).then_some(if byte == b'm' {
-                    Button::Up
-                } else {
-                    Button::Down
-                });
                 return Report::Complete {
                     length: 3 + at + 1,
                     event: sgr_event(numbers, byte),
-                    right,
                 };
             }
             _ => return Report::Other,
@@ -498,8 +358,7 @@ fn starts_arrow_record(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    /// The pointer moving after a drag the terminal app took over reaches the CLI as reports, which
-    /// are no typing: only the keys around them remain.
+    /// Mouse reports are no typing. Only the keys around them remain.
     #[test]
     fn reports_leave_only_the_keys_around_them() {
         assert_eq!(without_reports(b"\x1b[<35;20;16M"), b"");
@@ -526,10 +385,7 @@ mod tests {
             mouse.read(part, take, |event| match event {
                 MouseInput::Keys(more) => keys.extend_from_slice(more),
                 MouseInput::Wheel(more) => ticks += more,
-                MouseInput::Pointer { .. } | MouseInput::Press => {}
-                MouseInput::Drag { .. } => ticks += 10,
-                MouseInput::RightClick => ticks += 100,
-                MouseInput::Followed => ticks += 1000,
+                MouseInput::Pointer { .. } => {}
             });
         }
         keys.extend(mouse.give_up());
@@ -570,69 +426,15 @@ mod tests {
     }
 
     #[test]
-    fn a_right_click_is_taken_from_a_cli_s_reports() {
-        let input = "x\x1b[<2;3;4M\x1b[<34;3;5M\x1b[<2;3;5my\x1b[<64;1;1M\x1b[<35;2;2M";
-        let others = "xy\x1b[<64;1;1M\x1b[<35;2;2M";
-        for cut in 1..input.len() {
+    fn a_cli_that_tracks_the_mouse_gets_drags_and_right_clicks_unchanged() {
+        let input = "\x1b[<0;3;4M\x1b[<32;5;4M\x1b[<0;5;4m\x1b[<2;3;4M\x1b[<2;3;4m";
+        for cut in 0..=input.len() {
             let (first, rest) = input.as_bytes().split_at(cut);
-            let take = Take::Lends {
-                awaits_reply: false,
-            };
-            let routed = routed([first, rest], take);
-            assert_eq!(routed, (others.into(), 100), "cut at {cut}");
-        }
-    }
-
-    #[test]
-    fn a_click_goes_on_to_the_cli_and_a_drag_to_the_terminal_app() {
-        let lends = |input: &str| {
-            let whole = routed(
-                [input.as_bytes(), b""],
-                Take::Lends {
-                    awaits_reply: false,
-                },
-            );
-            for cut in 1..input.len() {
-                let (first, rest) = input.as_bytes().split_at(cut);
-                let take = Take::Lends {
-                    awaits_reply: false,
-                };
-                assert_eq!(routed([first, rest], take), whole, "{input:?} cut at {cut}");
-            }
-            whole
-        };
-        let click = "\x1b[<0;3;4M\x1b[<0;3;4m";
-        assert_eq!(lends(&format!("a{click}b")), (format!("a{click}b"), 0));
-        // A press that moves within its cell is still a click.
-        assert_eq!(
-            lends("\x1b[<0;3;4M\x1b[<32;3;4M\x1b[<0;3;4m"),
-            (click.into(), 0)
-        );
-        // A drag is the terminal app's from where it began; a click after it is the CLI's again.
-        assert_eq!(
-            lends(&format!(
-                "\x1b[<0;3;4M\x1b[<32;5;4M\x1b[<32;6;4M\x1b[<0;6;4m{click}"
-            )),
-            (click.into(), 10)
-        );
-        // Another button's reports and the motion of no button stay the CLI's.
-        let others = "\x1b[<1;3;4M\x1b[<1;3;4m\x1b[<35;9;9M";
-        assert_eq!(lends(others), (others.into(), 0));
-    }
-
-    #[test]
-    fn the_terminal_app_s_reply_stays_with_attach() {
-        let input = "x\x1b[0ny\x1b[<64;3;4M\x1b[0m";
-        for cut in 1..input.len() {
-            let (first, rest) = input.as_bytes().split_at(cut);
-            let parts = [first, rest];
-            let reply = |awaits_reply| routed(parts, Take::Lends { awaits_reply });
             assert_eq!(
-                reply(true),
-                ("xy\x1b[<64;3;4M\x1b[0m".into(), 1000),
+                routed([first, rest], Take::Nothing),
+                (input.into(), 0),
                 "cut at {cut}"
             );
-            assert_eq!(reply(false), (input.into(), 0), "cut at {cut}");
         }
     }
 

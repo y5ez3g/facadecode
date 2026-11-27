@@ -116,16 +116,16 @@ wake it when needed.
   the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
   screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
   and prints one receipt.
-- In macOS Terminal, in VS Code and the Facade Code editor on macOS and Windows, and in Windows terminals, selecting,
-  copying and the right click are the terminal app's own, for every CLI. The wheel scrolls a CLI that tracks the
-  mouse, as when it runs alone, and browses the scrollback of one that does not, never leaving the agent's screen.
-  Scrolling back down or typing returns to the live screen. A CLI that tracks the mouse also receives its clicks in
-  macOS Terminal, once Accessibility allows Terminal to control the computer, and none in VS Code and Windows
-  terminals.
+- In every terminal app, a CLI that tracks the mouse gets the wheel, clicks and drags as when it runs alone, so its own
+  selection and copying work where it has them. To select with the terminal app, hold its own selection key, such as Fn
+  in macOS Terminal.
+- For a CLI that leaves the mouse alone, macOS Terminal, VS Code and the Facade Code editor on macOS and Windows, and
+  Windows terminals keep their own selection, copying and right click. The wheel browses the CLI's scrollback without
+  leaving the agent's screen. Scrolling back down or typing returns to the live screen.
 - A CLI's question taller than the window, such as Kiro's trust-all-tools warning, leaves its top in the
   scrollback. Once you answer it, Facade drops that part, and scrolling back shows the CLI's start as it redrew it.
-- In other terminal apps, on Linux, over SSH and inside tmux, Screen or Zellij, a CLI that tracks the mouse receives
-  it, as when it runs alone, and Attach takes the mouse of one that leaves it alone. The wheel browses the CLI's scrollback there too. Drag to select text in the live view or its
+- In other terminal apps, on Linux, over SSH and inside tmux, Screen or Zellij, Attach handles the mouse for a CLI that
+  leaves it alone. The wheel browses the CLI's scrollback there too. Drag to select text in the live view or its
   scrollback. Releasing the button copies it to the clipboard of the computer Attach runs on, and asks the terminal app
   to copy it as well. Over SSH only the terminal app can. Ctrl+C and a right click copy a selection again.
 - The Facade Code editor labels the terminal with the CLI's title

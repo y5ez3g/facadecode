@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{IsTerminal, Write};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use facade_base::api_v1::daemon::{
@@ -36,7 +36,7 @@ use crate::{ExitText, Opening, agent_address, single_line};
 mod mouse;
 mod palette;
 
-use mouse::{FOLLOWED_QUERY, LocalMouseInput, MouseInput, Take, without_reports};
+use mouse::{LocalMouseInput, MouseInput, Take, without_reports};
 pub(crate) use palette::Probe;
 use palette::Replies;
 
@@ -49,12 +49,6 @@ const DETACH_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 const READ_BYTES: usize = 8 * 1024;
 /// How long the rest of a cut-off mouse report may take.
 const REPORT_REST: Duration = Duration::from_millis(50);
-/// How long the terminal app may take to follow a change of its mouse modes.
-const MODES_FOLLOWED: Duration = Duration::from_millis(500);
-/// How long it may take to open its menu.
-const MENU_OPENS: Duration = Duration::from_millis(250);
-/// How often a lent drag looks whether the button is up again.
-const BUTTON_POLL: Duration = Duration::from_millis(15);
 /// The wait between attempts to reconnect an attached terminal.
 const RECONNECT_DELAY: Duration = Duration::from_millis(500);
 const RECONNECT_TIMED_OUT: &str = "the terminal did not reconnect in time";
@@ -83,9 +77,6 @@ static TERMINAL: Mutex<Display> = Mutex::new(Display {
     host_alternate: false,
     cli_title_shown: false,
     mouse: MouseOwner::Host,
-    lends_mouse: false,
-    followed: None,
-    host_selects: false,
     captured: None,
     input_modes: Vec::new(),
     held: None,
@@ -1435,10 +1426,10 @@ fn write_terminal(bytes: &[u8]) -> std::io::Result<()> {
 /// Who takes the person's mouse.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MouseOwner {
-    /// The terminal app: where it sends the wheel as keys that Attach tells apart, unless Attach lends
-    /// a CLI its clicks; until the agent's screen shows; and while the connection is lost.
+    /// The terminal app, where it sends the wheel as keys that Attach tells apart, before the
+    /// agent's screen shows, and while the connection is lost.
     Host,
-    /// Attach, for such a CLI where the terminal app cannot have it.
+    /// Attach, for a CLI that leaves the mouse alone where the terminal app cannot keep it.
     Local,
     /// The CLI, which asked for mouse reports.
     Cli,
@@ -1446,11 +1437,10 @@ enum MouseOwner {
 
 impl MouseOwner {
     fn for_screen(grid_fits: bool, screen: &Screen) -> Self {
-        let reports = grid_fits && screen.reports_mouse();
-        if host_tells_the_wheel() && !(reports && lends_the_mouse()) {
-            Self::Host
-        } else if reports {
+        if grid_fits && screen.reports_mouse() {
             Self::Cli
+        } else if host_tells_the_wheel() {
+            Self::Host
         } else {
             Self::Local
         }
@@ -1468,14 +1458,6 @@ fn host_tells_the_wheel() -> bool {
             || program_is(VS_CODE);
         sends_the_wheel && desktop::sees_keys()
     })
-}
-
-/// Whether a CLI that tracks the mouse can have its clicks while the terminal app keeps its own
-/// selection and menu: macOS Terminal reports the mouse to Attach, which lends it back for each drag
-/// and right click, as the person allowed Facade to post them.
-fn lends_the_mouse() -> bool {
-    static LENDS: OnceLock<bool> = OnceLock::new();
-    *LENDS.get_or_init(|| host_tells_the_wheel() && program_is(MACOS_TERMINAL) && desktop::clicks())
 }
 
 const MACOS_TERMINAL: &str = "Apple_Terminal";
@@ -1497,12 +1479,6 @@ struct Display {
     /// Whether the attachment has written a CLI title, including an explicit empty title.
     cli_title_shown: bool,
     mouse: MouseOwner,
-    /// Whether the terminal app has the mouse back for a click that it reported.
-    lends_mouse: bool,
-    /// Told once the terminal app has followed that.
-    followed: Option<mpsc::Sender<()>>,
-    /// Whether the terminal app may show a selection of its own from a lent drag or right click.
-    host_selects: bool,
     /// Whether Attach last took the mouse of a Windows console or gave it back.
     captured: Option<bool>,
     /// The mouse and cursor key modes last written to the host.
@@ -1657,9 +1633,6 @@ impl Display {
                 down: arrows,
                 application: self.cli_asks_for_application_cursor_keys(),
             },
-            MouseOwner::Cli if lends_the_mouse() => Take::Lends {
-                awaits_reply: self.followed.is_some(),
-            },
             MouseOwner::Cli | MouseOwner::Host => Take::Nothing,
         };
         mouse.read(keys, take, |event| {
@@ -1680,15 +1653,6 @@ impl Display {
             routed = match event {
                 MouseInput::Keys(keys) => self.forward_keys(input, keys, copy_key),
                 MouseInput::Pointer { col, row, action } => self.pointer(col, row, action),
-                MouseInput::Press => self.leave_host_selection(),
-                MouseInput::Drag { from } => self.lend_drag(from),
-                MouseInput::RightClick => self.hand_back_right_click(),
-                MouseInput::Followed => {
-                    if let Some(followed) = self.followed.take() {
-                        let _ = followed.send(());
-                    }
-                    Ok(())
-                }
                 MouseInput::Wheel(_) => Ok(()),
             };
         });
@@ -1728,12 +1692,8 @@ impl Display {
     }
 
     fn forward_ordinary_keys(&mut self, input: &AgentInput, keys: &[u8]) -> std::io::Result<()> {
-        let typing = has_typing(&without_reports(keys));
-        if self.held.is_some() && typing {
+        if self.held.is_some() && has_typing(&without_reports(keys)) {
             self.draw(None)?;
-        }
-        if typing && !self.lends_mouse {
-            self.leave_host_selection()?;
         }
         input.push_keys(keys);
         Ok(())
@@ -1918,19 +1878,6 @@ impl Display {
         if self.mouse == MouseOwner::Cli || !fits(shared.grid(), shared.capacity) || ticks == 0 {
             return Ok(());
         }
-        if shared.screen.reports_mouse() {
-            // The CLI scrolls what it shows, as by a report of the wheel over the middle.
-            let (cols, rows) = shared.grid();
-            let delta = ticks.saturating_mul(120);
-            if let Some(reports) =
-                shared
-                    .screen
-                    .encode_wheel(cols.div_ceil(2), rows.div_ceil(2), delta, 0)
-            {
-                input.push_keys(&reports);
-            }
-            return Ok(());
-        }
         if shared.screen.on_alternate_screen() {
             // A full-screen program without mouse reports has no scrollback here. As in the terminal
             // app, the wheel presses its cursor keys: in macOS Terminal once it has asked for
@@ -2030,84 +1977,6 @@ impl Display {
         self.set_mouse(mouse)
     }
 
-    /// Draws in a new alternate buffer, where the terminal app has selected nothing.
-    fn draw_in_a_new_buffer(&mut self) -> std::io::Result<()> {
-        if self.host_alternate {
-            write_terminal(&[LEAVE_ALTERNATE, ENTER_ALTERNATE].concat())?;
-            self.draw(None)?;
-        }
-        Ok(())
-    }
-
-    /// Gives the terminal app the mouse for a right click, so that it shows its menu where the person
-    /// clicked, and takes the mouse again once the menu is open.
-    fn hand_back_right_click(&mut self) -> std::io::Result<()> {
-        let Some(at) = desktop::pointer() else {
-            return Ok(());
-        };
-        self.lend(move || {
-            desktop::right_click_at(at);
-            std::thread::sleep(MENU_OPENS);
-        })
-    }
-
-    /// Gives the terminal app the mouse for a drag the person began at `from`, so that it selects
-    /// from there as its own, and takes the mouse again once the button is up.
-    fn lend_drag(&mut self, from: Option<desktop::Point>) -> std::io::Result<()> {
-        self.lend(move || {
-            if !desktop::left_button_down() {
-                return;
-            }
-            if let Some(from) = from {
-                desktop::press_left_at(from);
-            }
-            while desktop::left_button_down() {
-                std::thread::sleep(BUTTON_POLL);
-            }
-        })
-    }
-
-    /// Gives the terminal app the mouse, runs `use_it` once the app has followed that, and takes the
-    /// mouse back.
-    fn lend(&mut self, use_it: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
-        if self.lends_mouse {
-            return Ok(());
-        }
-        self.lends_mouse = true;
-        self.set_mouse(self.mouse)?;
-        let (sender, followed) = mpsc::channel();
-        self.followed = Some(sender);
-        write_terminal(FOLLOWED_QUERY)?;
-        std::thread::spawn(move || {
-            // The app answers at once. Without its answer, or once Attach has ended, the gesture is
-            // over, and nothing is posted for it.
-            let lent =
-                followed.recv_timeout(MODES_FOLLOWED).is_ok() && attached_terminal().is_some();
-            if lent {
-                use_it();
-            }
-            if let Some(mut terminal) = attached_terminal()
-                && let Some(input) = terminal.active_input().cloned()
-            {
-                terminal.present(&input, |terminal| {
-                    terminal.lends_mouse = false;
-                    terminal.host_selects |= lent;
-                    terminal.set_mouse(terminal.mouse)
-                });
-            }
-        });
-        Ok(())
-    }
-
-    /// Typing or a click for the CLI leaves the selection the terminal app made from a drag, or from
-    /// its menu, which selects the word under the pointer: in a new buffer it has nothing selected.
-    fn leave_host_selection(&mut self) -> std::io::Result<()> {
-        if !std::mem::take(&mut self.host_selects) {
-            return Ok(());
-        }
-        self.draw_in_a_new_buffer()
-    }
-
     /// Whether the host sends the wheel as cursor keys now.
     fn wheel_is_cursor_keys(&self) -> bool {
         self.host_alternate && self.mouse == MouseOwner::Host && host_tells_the_wheel()
@@ -2125,11 +1994,6 @@ impl Display {
         if !self.host_alternate {
             return Ok(());
         }
-        let owner = if self.lends_mouse {
-            MouseOwner::Host
-        } else {
-            owner
-        };
         // Native capture serves both local browsing and CLI mouse reporting.
         let capture = owner != MouseOwner::Host;
         if self.captured != Some(capture)

@@ -388,6 +388,8 @@ receipt. Automatic reconnect retries reuse the original request's outcome when i
   change the shared grid. VS Code can supply terminal colors.
 - Press Ctrl+] to detach from Shell and leave the agent running. A CLI exit also returns to the same shell and
   preserves its history. `facade status <AGENT>` lists active viewers under `Attached in`.
+- A CLI that tracks the mouse receives its wheel and clicks in Shell Attach as when it runs alone. Hold the terminal
+  app's selection key, such as Fn in macOS Terminal, to select with the terminal app.
 - On reconnect, the client redraws from the current screen. Shell reports any dropped input in bytes.
 - Remote terminal operations use the same permission checks as local operations.
 
