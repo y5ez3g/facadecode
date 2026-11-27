@@ -49,7 +49,7 @@ fn detach_starts_a_daemon_once_one_that_held_the_lock_has_ended() {
     assert_ne!(answering, i64::from(holder.id()));
 }
 
-/// Commands that find no Facade start it together, as an editor does with several connections:
+/// Commands that find no Facade Code Framework start it together, as an editor does with several connections:
 /// one keeper wins the keeper lock, the others say so and exit, and every command reaches the one
 /// daemon that keeper starts.
 #[test]
@@ -134,7 +134,7 @@ fn a_daemon_outlives_the_terminal_that_launched_it() {
 
 /// With no agent running, the keeper exits on the daemon's next idle offer. The daemon stays while
 /// a client is connected and exits 30 seconds after the last one leaves, removing its socket last.
-/// Records, screens, and numbering survive, and the next command starts Facade again.
+/// Records, screens, and numbering survive, and the next command starts Facade Code Framework again.
 #[test]
 fn the_services_exit_when_idle_and_the_records_survive() {
     let home = TestHome::new("idle");
@@ -425,7 +425,7 @@ fn detach_reports_a_living_worker_still_recovering_as_starting() {
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success()
-            && stderr(&output).contains("facade: Orchestrator is still starting; see "),
+            && stderr(&output).contains("facade: Facade Code Framework is still starting; see "),
         "{}",
         stderr(&output)
     );
@@ -448,7 +448,8 @@ fn detach_fails_when_no_daemon_started() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("the Orchestrator daemon did not start within 10 seconds; see "),
+        stderr(&output)
+            .contains("the Facade Code Framework daemon did not start within 10 seconds; see "),
         "{}",
         stderr(&output)
     );

@@ -2,7 +2,7 @@
 //! to run them, with the fields `type`, `icon`, `program`, `args`, `env`, `model`, `effort` and
 //! `enabled`. The key of a built-in edits that built-in; whatever it leaves out keeps the
 //! built-in's default. Any other key adds a CLI, which runs either like the built-in named by its
-//! `type` or, with type `custom`, as a bare program in a terminal with nothing from Facade.
+//! `type` or, with type `custom`, as a bare program in a terminal with nothing from Facade Code Framework.
 //!
 //! Entries never borrow from each other: a CLI added with type `codex` ignores the `codex` entry.
 //! A mistake therefore disables only the entry it is in. It is reported by setting path, never
@@ -21,7 +21,7 @@ use regex::{Captures, Regex};
 
 use crate::{FILES, Rule, rules};
 
-/// The `type` of a bare program: Facade runs it in a terminal and adds nothing to it
+/// The `type` of a bare program: Facade Code Framework runs it in a terminal and adds nothing to it
 /// (CONFIGURATION-2.3).
 pub const PROGRAM_TYPE: &str = "custom";
 
@@ -120,7 +120,7 @@ pub struct Entry {
     /// How it runs. None if `type` is missing or names nothing known; that is then a problem.
     pub kind: Option<Kind>,
     /// The icon on its card (CONFIGURATION-2.4): its own pick, or else its type's. Terminal
-    /// commands of Facade show no icon.
+    /// commands of Facade Code Framework show no icon.
     pub icon: String,
     /// The program as written in `program` or legacy `command`. None means the type's program, looked up on `PATH`.
     pub program: Option<String>,
@@ -306,7 +306,7 @@ impl Entry {
         }
     }
 
-    /// Whether its type accepts `choice` (`model` or `effort`) from Facade (CLIS-1.4).
+    /// Whether its type accepts `choice` (`model` or `effort`) from Facade Code Framework (CLIS-1.4).
     pub fn takes(&self, choice: &str) -> bool {
         let rule = self.kind.and_then(|kind| kind.rule());
         rule.is_some_and(|rule| rule.choices.takes(choice))
@@ -853,7 +853,7 @@ impl Reader<'_> {
         }
     }
 
-    /// `model` or `effort`, kept only when the entry's type accepts it from Facade.
+    /// `model` or `effort`, kept only when the entry's type accepts it from Facade Code Framework.
     fn choice(&mut self, key: &str, written: Option<&Node>, kind: Option<Kind>) -> Option<String> {
         let written = written?;
         let value = self.text(key, Some(written))?;
@@ -1429,7 +1429,7 @@ mod tests {
         );
     }
 
-    /// An icon is a built-in's own or one of Facade's robots, said by the icons there are and never
+    /// An icon is a built-in's own or one of Facade Code Framework's robots, said by the icons there are and never
     /// by what it holds; without one an entry shows its type's, a program the whitest robot.
     #[test]
     fn an_icon_is_a_built_in_s_or_a_robot() {
@@ -1517,7 +1517,7 @@ mod tests {
             mine.problems,
             [at(
                 135,
-                "clis.mine.args[0] is --yolo, which Facade sets or decides itself; remove it"
+                "clis.mine.args[0] is --yolo, which Facade Code Framework sets or decides itself; remove it"
             )]
         );
     }

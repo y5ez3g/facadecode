@@ -1,15 +1,15 @@
-//! `facade.json`, Facade's settings file in the Facade home (CONFIGURATION-1). The editor windows
+//! `facade.json`, Facade Code Framework's settings file in the Facade home (CONFIGURATION-1). The editor windows
 //! and the `facade` commands of the home's execution environment share it. It is JSON with comments
 //! and trailing commas, read strictly:
 //!
 //! - a file that does not exist, or holds nothing but spaces and comments, holds every default;
-//! - anything else Facade cannot read as it must stops every launch, each problem said with the
+//! - anything else Facade Code Framework cannot read as it must stops every launch, each problem said with the
 //!   file's path and, where known, its line and column (CONFIGURATION-4.1). Nothing is guessed, and
 //!   no default stands in.
 //!
 //! The whole file is checked as the extension checks it. `yolo`, the names of `names` and the
 //! members of `clis` are kept, each on its own; `facade_rules::entries` reads the CLI entries
-//! (CONFIGURATION-2). The Framework reads the file and never writes it.
+//! (CONFIGURATION-2). The Facade Code Framework reads the file and never writes it.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -22,8 +22,8 @@ pub use crate::whitespace::is_space;
 /// The settings file's name, in the Facade home.
 pub const SETTINGS_FILE: &str = "facade.json";
 
-/// The settings file Facade writes where there is none (CONFIGURATION-1.3): YOLO on, the built-in
-/// names, every built-in CLI's entry with its fields, and what Facade gives each CLI and why. It
+/// The settings file Facade Code Framework writes where there is none (CONFIGURATION-1.3): YOLO on, the built-in
+/// names, every built-in CLI's entry with its fields, and what Facade Code Framework gives each CLI and why. It
 /// holds the defaults, so a home reads the same before and after it is written.
 pub const TEMPLATE: &str = include_str!("texts/settings.jsonc");
 
@@ -237,7 +237,7 @@ pub fn parse(text: &str, shown: &str) -> Result<Settings, Vec<String>> {
             (key, other) => problems.push(match SETTINGS.iter().find(|(name, _)| *name == key) {
                 Some((_, must)) => format!("{}: {must}; received {}", place(at), other.kind()),
                 None => format!(
-                    "{}: {} is not a Facade setting; the settings are yolo, names and clis",
+                    "{}: {} is not a Facade Code Framework setting; the settings are yolo, names and clis",
                     place(at),
                     quoted(key)
                 ),
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!(
             said(r#"{"color": 1}"#),
             [format!(
-                r#"{FILE}:1:2: "color" is not a Facade setting; the settings are yolo, names and clis"#
+                r#"{FILE}:1:2: "color" is not a Facade Code Framework setting; the settings are yolo, names and clis"#
             )]
         );
         assert_eq!(

@@ -154,7 +154,7 @@ pub struct WindowDeliveryFailure {
     pub reason: String,
 }
 
-/// The sender of Facade's own results.
+/// The sender of Facade Code Framework's own results.
 pub const FACADE: &str = "facade";
 
 /// A message: one sender, one recipient, the complete text, and what became of it.
@@ -165,7 +165,7 @@ pub struct Message {
     /// The full reference for a window notification to the person or a remote send receipt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_ref: Option<MessageRef>,
-    /// The sender: an agent ID, `human` for the person, or `facade` for a result: Facade's own
+    /// The sender: an agent ID, `human` for the person, or `facade` for a result: Facade Code Framework's own
     /// words on what became of a start, not an agent's.
     pub from: String,
     /// The sender's machine, when different from the one that stored the message.
@@ -198,7 +198,7 @@ pub struct Message {
     /// A result's facts, which its text words. Omitted for any other message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<StartOutcome>,
-    /// When Facade received it, in UTC ISO 8601 format with milliseconds.
+    /// When Facade Code Framework received it, in UTC ISO 8601 format with milliseconds.
     pub at: String,
     pub delivery: Delivery,
 }
@@ -218,7 +218,7 @@ pub struct PromptOutcome {
     pub delivery: Delivery,
 }
 
-/// A start result's words, as Facade's editor extension words them: the agent started, whether its
+/// A start result's words, as Facade Code Framework's editor extension words them: the agent started, whether its
 /// tools are there, and what became of its prompt, with what of it reached the terminal and, where
 /// it was not delivered, why.
 pub fn start_result_text(outcome: &StartOutcome) -> String {
@@ -237,13 +237,15 @@ pub fn start_result_text_at(
         display_name(&agent.name)
     )];
     match (agent.tools_state, agent.tools_reason) {
-        (ToolsState::Connecting, _) => lines.push("Its Facade tools are still connecting.".into()),
+        (ToolsState::Connecting, _) => {
+            lines.push("Its Facade Code Framework tools are still connecting.".into())
+        }
         (ToolsState::Unavailable, Some(reason)) => lines.push(format!(
-            "Its Facade tools are unavailable: {}.",
+            "Its Facade Code Framework tools are unavailable: {}.",
             reason.words()
         )),
         (ToolsState::Unavailable | ToolsState::NotInjected, _) => {
-            lines.push("Its Facade tools are unavailable.".into())
+            lines.push("Its Facade Code Framework tools are unavailable.".into())
         }
         _ => {}
     }
@@ -294,11 +296,11 @@ pub fn start_result_text_at(
                 lines.push(format!("The agent {exit}."));
                 lines.push(match &agent.session {
                     Some(session) => format!(
-                        "Facade recorded session {}. Check `facade resume` for that session \
+                        "Facade Code Framework recorded session {}. Check `facade resume` for that session \
                          before starting it again.",
                         display_name(session)
                     ),
-                    None => "Facade has no recorded session to resume. Read its screen before \
+                    None => "Facade Code Framework has no recorded session to resume. Read its screen before \
                              starting it again."
                         .into(),
                 });
@@ -331,7 +333,7 @@ pub fn send_failure_text(
         && delivery.text_written == TextWritten::None
         && delivery.enter_written == Some(false)
     {
-        "Facade withdrew the message. You can resend it."
+        "Facade Code Framework withdrew the message. You can resend it."
     } else {
         "Check the recipient's terminal before retrying."
     };
@@ -451,7 +453,7 @@ pub struct Delivery {
 
 impl Delivery {
     /// Why the message to `to` was not delivered, then what of it was typed, in words: `a draft
-    /// held #a2's input until the deadline; Facade never types over a draft; nothing was typed`. It
+    /// held #a2's input until the deadline; Facade Code Framework never types over a draft; nothing was typed`. It
     /// says no more than `text_written` and `enter_written`.
     pub fn failure_words(&self, to: &str) -> String {
         let typed = match (self.text_written, self.enter_written) {
@@ -481,7 +483,7 @@ impl Delivery {
         match self.reason.unwrap_or(DeliveryFailure::Unknown) {
             DeliveryFailure::Ended => format!("{to} ended before the message was delivered"),
             DeliveryFailure::InputDraft => format!(
-                "a draft held {to}'s input until the deadline; Facade never types over a draft"
+                "a draft held {to}'s input until the deadline; Facade Code Framework never types over a draft"
             ),
             DeliveryFailure::InputInteraction => format!(
                 "a menu, login, or question of {to}'s CLI held its input until the deadline"
@@ -494,10 +496,12 @@ impl Delivery {
                 format!("{to}'s CLI did not take the message before the deadline")
             }
             DeliveryFailure::SubmissionUnconfirmed => {
-                format!("Facade could not confirm by the deadline that {to}'s CLI took the message")
+                format!(
+                    "Facade Code Framework could not confirm by the deadline that {to}'s CLI took the message"
+                )
             }
             DeliveryFailure::Unsupported => format!(
-                "Facade types no messages into {to}'s CLI: it has no rule to read its input by"
+                "Facade Code Framework types no messages into {to}'s CLI: it has no rule to read its input by"
             ),
             DeliveryFailure::Unknown => format!("the message was not delivered to {to}"),
         }
@@ -540,7 +544,7 @@ pub enum DeliveryFailure {
     /// Its paste began, but the recipient's CLI did not take the message before the deadline. A
     /// paste its terminal had not taken whole by then still goes in, and no Enter follows it.
     SubmissionUnconfirmed,
-    /// The recipient's CLI has no rule to read its input by, so Facade types no message into it.
+    /// The recipient's CLI has no rule to read its input by, so Facade Code Framework types no message into it.
     Unsupported,
     /// A reason this build does not recognize.
     #[serde(other)]
@@ -894,7 +898,7 @@ mod tests {
         };
         assert!(words(&ended_agent, ended.clone()).ends_with(
             "The agent ended. Its exit status is unavailable.\n\
-             Facade has no recorded session to resume. Read its screen before starting it again."
+             Facade Code Framework has no recorded session to resume. Read its screen before starting it again."
         ));
         let ended_with_session = ManagedAgent {
             exit: Some(crate::process::ProcessExit {
@@ -908,7 +912,7 @@ mod tests {
         };
         assert!(words(&ended_with_session, ended).ends_with(
             "The agent ended with exit code 7.\n\
-             Facade recorded session recorded-session. Check `facade resume` for that session \
+             Facade Code Framework recorded session recorded-session. Check `facade resume` for that session \
              before starting it again."
         ));
         let unconfirmed = delivery(
@@ -933,7 +937,7 @@ mod tests {
         assert_eq!(
             words(&unavailable, typed.clone()).lines().nth(1),
             Some(
-                "Its Facade tools are unavailable: its Facade server did not connect within \
+                "Its Facade Code Framework tools are unavailable: its Facade Code Framework server did not connect within \
                  30 seconds."
             )
         );
@@ -991,7 +995,7 @@ mod tests {
         use DeliveryFailure::{InputDraft, SubmissionUnconfirmed, Timeout};
         assert_eq!(
             failed(InputDraft, TextWritten::None, Some(false)),
-            "a draft held #a2's input until the deadline; Facade never types over a draft; \
+            "a draft held #a2's input until the deadline; Facade Code Framework never types over a draft; \
              nothing was typed"
         );
         assert_eq!(
@@ -1020,7 +1024,7 @@ mod tests {
         }
         assert_eq!(
             failed(SubmissionUnconfirmed, TextWritten::Unknown, None),
-            "Facade could not confirm by the deadline that #a2's CLI took the message; what of it \
+            "Facade Code Framework could not confirm by the deadline that #a2's CLI took the message; what of it \
              was typed is not known"
         );
     }

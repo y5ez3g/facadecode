@@ -30,7 +30,7 @@ pub(super) fn open_with(
                 continue;
             }
             Ok(None) => format!(
-                "Facade did not respond within {} seconds; nothing was done",
+                "Facade Code Framework did not respond within {} seconds; nothing was done",
                 timeout.as_secs()
             ),
             Err(err) => {
@@ -40,7 +40,7 @@ pub(super) fn open_with(
                 if let Some(error) = err.downcast_ref::<RelayError>() {
                     return Err(envelope::refusal(error));
                 }
-                format!("cannot reach Facade: {err:#}; nothing was done")
+                format!("cannot reach Facade Code Framework: {err:#}; nothing was done")
             }
         };
         return Err(envelope::failure("unavailable", unavailable));
@@ -55,6 +55,8 @@ pub(super) fn failed(err: &anyhow::Error, consequence: &str) -> Value {
     }
     envelope::failure(
         "unavailable",
-        format!("Facade stopped answering before it finished: {err:#}; {consequence}"),
+        format!(
+            "Facade Code Framework stopped answering before it finished: {err:#}; {consequence}"
+        ),
     )
 }

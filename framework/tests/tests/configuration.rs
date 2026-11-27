@@ -1,4 +1,4 @@
-//! The CLIs and names of Facade's settings file (CONFIGURATION-1.4, 2, 3, 4; LIFECYCLE-2.1;
+//! The CLIs and names of Facade Code Framework's settings file (CONFIGURATION-1.4, 2, 3, 4; LIFECYCLE-2.1;
 //! CLIS-1.4): `facade start`, `start_agent` and `facade resume` run a CLI as its entry in
 //! `facade.json` says - its program, `args`, `env`, `model` and `effort` - an added CLI of a
 //! built-in's type as that built-in runs, and one of type `custom` as a program; an entry that is
@@ -13,7 +13,7 @@ use facade_scenarios::*;
 
 const SESSION: &str = "86da4482-2bae-4a45-b193-a5664c19826a";
 
-/// Writes Facade's settings file, `facade.json` in the test's Facade home, as `settings`.
+/// Writes Facade Code Framework's settings file, `facade.json` in the test's Facade home, as `settings`.
 fn settings(home: &TestHome, settings: &Value) {
     std::fs::create_dir_all(&home.path).unwrap();
     std::fs::write(home.path.join("facade.json"), settings.to_string()).unwrap();
@@ -192,7 +192,7 @@ fn an_added_entry_of_each_built_in_s_type_runs_its_program_with_that_cli_s_rule(
     }
 }
 
-/// `args` without the `--mcp-config <file>` the test CLI's rule gives its run: Facade's server, in
+/// `args` without the `--mcp-config <file>` the test CLI's rule gives its run: Facade Code Framework's server, in
 /// a file of the run's own.
 fn without_wiring(home: &TestHome, mut args: Vec<String>) -> Vec<String> {
     let wiring = args
@@ -211,7 +211,7 @@ fn without_wiring(home: &TestHome, mut args: Vec<String>) -> Vec<String> {
     args
 }
 
-/// A CLI of type `custom` runs its `command` and `args` as a program, which Facade gives nothing of
+/// A CLI of type `custom` runs its `command` and `args` as a program, which Facade Code Framework gives nothing of
 /// its own: no rule, no tools. It takes no messages, so a start with a first prompt is refused
 /// before it starts anything.
 #[test]
@@ -519,7 +519,7 @@ fn an_agent_started_without_a_name_is_named_from_names() {
         built_in
             .split(',')
             .any(|name| fallback == name.trim().trim_matches('\'')),
-        "the Framework falls back to a built-in name: {fallback}"
+        "the Facade Code Framework falls back to a built-in name: {fallback}"
     );
 }
 
@@ -661,7 +661,7 @@ fn a_model_or_effort_in_a_start_s_own_words_wins_over_its_entry_s() {
             .iter()
             .filter(|arg| options.contains(&arg.as_str()))
             .count();
-        // Muse Code takes an effort from Facade as a `-c reasoning_effort=` override
+        // Muse Code takes an effort from Facade Code Framework as a `-c reasoning_effort=` override
         let overridden = args.iter().any(|arg| arg.starts_with("reasoning_effort="));
         assert_eq!(
             (chosen, overridden),
@@ -681,7 +681,7 @@ fn a_model_or_effort_in_a_start_s_own_words_wins_over_its_entry_s() {
     );
 }
 
-/// An entry's `args` are read as its CLI reads them where Facade merges them with its own
+/// An entry's `args` are read as its CLI reads them where Facade Code Framework merges them with its own
 /// (CLIS-3.1, 3.4): Antigravity's `-settings` is its `--settings`, merged into the one the run
 /// gets, and Claude Code's `--append-system-prompt` keeps its text, which looks like `--settings`.
 #[test]
@@ -1167,7 +1167,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
         &repo,
         &[
             "-c",
-            "user.name=Facade",
+            "user.name=Facade Code Framework",
             "-c",
             "user.email=facade@example.invalid",
             "commit",

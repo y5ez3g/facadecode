@@ -12,7 +12,7 @@ fn command_of(pid: i32) -> String {
     command_line_of(pid)
 }
 
-/// When the first line of `log` that says `text` was written, in milliseconds of its day, as Facade
+/// When the first line of `log` that says `text` was written, in milliseconds of its day, as Facade Code Framework
 /// stamps each line: `2026-11-13T22:50:45.971Z daemon[6355] info: …`.
 fn logged_at(log: &str, text: &str) -> u64 {
     let line = log
@@ -64,7 +64,7 @@ fn gone(pid: i32) -> bool {
     process_state(pid).is_empty()
 }
 
-/// This Facade's version, the workspace's: the builds the tests make are named from it, so a
+/// This Facade Code Framework's version, the workspace's: the builds the tests make are named from it, so a
 /// release that changes the version changes none of them.
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -266,7 +266,7 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
         if cfg!(windows) {
             "param([string] $Version, [string] $ExpectedBuild, [string] $InstallRoot, [switch] $NoPath)\n\
              if (!$ExpectedBuild -or !$NoPath -or $InstallRoot -ne $env:FACADE_HOME) { exit 64 }\n\
-             [Console]::WriteLine(\"Installed Facade $ExpectedBuild in qa-bin.\")\n"
+             [Console]::WriteLine(\"Installed Facade Code Framework $ExpectedBuild in qa-bin.\")\n"
         } else {
             r#"version= expected= root= no_path=no
 while [ "$#" -gt 0 ]; do
@@ -279,7 +279,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 test -n "$version" && test -n "$expected" && test "$no_path" = yes && test "$root" = "$FACADE_HOME" || exit 64
-printf 'Installed Facade %s in qa-bin.\n' "$expected"
+printf 'Installed Facade Code Framework %s in qa-bin.\n' "$expected"
 "#
         }
     }
@@ -297,7 +297,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
         assert_eq!(
             stdout(&output),
-            format!("Installed Facade {build} in qa-bin.\n")
+            format!("Installed Facade Code Framework {build} in qa-bin.\n")
         );
         assert_eq!(
             sources.requests().last(),
@@ -349,7 +349,10 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
             assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
             assert_eq!(
                 stdout(&output),
-                format!("Installed Facade {} in qa-bin.\n", dated_build(wanted))
+                format!(
+                    "Installed Facade Code Framework {} in qa-bin.\n",
+                    dated_build(wanted)
+                )
             );
             assert!(output.stderr.is_empty(), "{}", stderr(&output));
             let requests = sources.requests();
@@ -392,7 +395,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
             assert_eq!(
                 stdout(&output),
                 format!(
-                    "Facade {CURRENT} is already up to date in {}.\n",
+                    "Facade Code Framework {CURRENT} is already up to date in {}.\n",
                     home.path.join("framework").join("bin").display()
                 )
             );
@@ -460,7 +463,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
         assert_eq!(
             stdout(&output),
-            format!("Installed Facade {build} in qa-bin.\n")
+            format!("Installed Facade Code Framework {build} in qa-bin.\n")
         );
         assert!(output.stderr.is_empty(), "{}", stderr(&output));
         let mut expected = fixed_marker_requests(CURRENT);
@@ -507,7 +510,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
         assert_eq!(
             stdout(&output),
             format!(
-                "Facade {build} is already up to date in {}.\n",
+                "Facade Code Framework {build} is already up to date in {}.\n",
                 home.path.join("framework").join("bin").display()
             )
         );
@@ -561,7 +564,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
         assert_eq!(
             stdout(&output),
-            format!("Installed Facade {build} in qa-bin.\n")
+            format!("Installed Facade Code Framework {build} in qa-bin.\n")
         );
         assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
     }
@@ -614,7 +617,9 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
         let asset = github.rsplit_once('/').unwrap().1;
         assert_eq!(
             stderr(&output),
-            format!("error: Could not upgrade Facade to {version}: {asset} returned HTTP 404.\n")
+            format!(
+                "error: Could not upgrade Facade Code Framework to {version}: {asset} returned HTTP 404.\n"
+            )
         );
         assert_eq!(
             sources.requests(),
@@ -641,14 +646,14 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
         format!("facade-framework-{os}-{arch}.{archive}")
     }
 
-    fn package_download_error(version: &str, asset: &str) -> String {
+    fn package_download_error(version: &str, asset: &str, product: &str) -> String {
         let prefix = if cfg!(windows) {
             ""
         } else {
             "facade install: "
         };
         format!(
-            "{prefix}Could not download {asset} and its checksums for Facade {version} from GitHub or facadecode.com."
+            "{prefix}Could not download {asset} and its checksums for {product} {version} from GitHub or facadecode.com."
         )
     }
 
@@ -656,7 +661,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
     fn an_older_installers_missing_asset_is_reported_with_confirmed_http_status() {
         let version = newer();
         let asset = target_asset();
-        let detail = package_download_error(&version, &asset);
+        let detail = package_download_error(&version, &asset, "Facade");
         let installer = if cfg!(windows) {
             format!(
                 "param([string] $Version, [string] $ExpectedBuild)\nif (!$ExpectedBuild) {{ exit 64 }}\n[Console]::Error.WriteLine('{detail}')\nexit 1\n"
@@ -684,7 +689,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
             assert_eq!(
                 stderr(&output),
                 format!(
-                    "error: Could not upgrade Facade to {version}: {missing} returned HTTP 404.\n"
+                    "error: Could not upgrade Facade Code Framework to {version}: {missing} returned HTTP 404.\n"
                 )
             );
             let mut expected = fixed_marker_requests(&version);
@@ -706,7 +711,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
     fn the_shell_uses_the_asset_receipt_it_requested_from_the_installer() {
         let version = newer();
         let archive = target_asset();
-        let detail = package_download_error(&version, &archive);
+        let detail = package_download_error(&version, &archive, "Facade Code Framework");
         for (status, transport) in [
             ("404", "curl: (22) The requested URL returned error: 404"),
             ("-", "curl: (7) Failed to connect to the release host"),
@@ -733,11 +738,13 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
                 assert_eq!(
                     error,
                     format!(
-                        "error: Could not upgrade Facade to {version}: SHA256SUMS returned HTTP 404.\n"
+                        "error: Could not upgrade Facade Code Framework to {version}: SHA256SUMS returned HTTP 404.\n"
                     )
                 );
             } else {
-                assert!(error.contains(&format!("Could not upgrade Facade to {version}")));
+                assert!(error.contains(&format!(
+                    "Could not upgrade Facade Code Framework to {version}"
+                )));
                 assert!(error.contains("SHA256SUMS"), "{error}");
                 assert_eq!(error.lines().filter(|line| *line == transport).count(), 1);
                 assert_eq!(error.lines().filter(|line| *line == detail).count(), 1);
@@ -769,7 +776,7 @@ printf 'Installed Facade %s in qa-bin.\n' "$expected"
     }
 }
 
-/// The numbers of this Facade's version: major, minor and patch.
+/// The numbers of this Facade Code Framework's version: major, minor and patch.
 fn version() -> [u64; 3] {
     let numbers: Vec<u64> = CURRENT
         .split(['.', '-', '+'])
@@ -779,13 +786,13 @@ fn version() -> [u64; 3] {
     [numbers[0], numbers[1], numbers[2]]
 }
 
-/// A version newer than this Facade's: its next patch.
+/// A version newer than this Facade Code Framework's: its next patch.
 fn newer() -> String {
     let [major, minor, patch] = version();
     format!("{major}.{minor}.{}", patch + 1)
 }
 
-/// A version older than this Facade's.
+/// A version older than this Facade Code Framework's.
 fn older() -> String {
     match version() {
         [major, minor, patch] if patch > 0 => format!("{major}.{minor}.{}", patch - 1),
@@ -794,7 +801,7 @@ fn older() -> String {
     }
 }
 
-/// A pre-release of this Facade's version.
+/// A pre-release of this Facade Code Framework's version.
 fn pre_release() -> String {
     format!("{CURRENT}-rc1")
 }
@@ -1250,7 +1257,7 @@ fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
     let text = stdout(&status);
     assert_eq!(
         text.lines().next().unwrap(),
-        format!("Facade {CURRENT} is running on {machine}.")
+        format!("Facade Code Framework {CURRENT} is running on {machine}.")
     );
     assert_eq!(
         status_field(&text, "CLI version"),
@@ -1279,7 +1286,7 @@ fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
     assert_eq!(
         (&after["pid"], &after["build"]),
         (&daemon, &json!(CURRENT)),
-        "status upgraded the running Facade"
+        "status upgraded the running Facade Code Framework"
     );
 }
 
@@ -1340,7 +1347,7 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     );
     assert!(
         said.starts_with(&format!(
-            "note: upgraded Orchestrator {CURRENT} to {}. 2 agents kept running",
+            "note: upgraded Facade Code Framework {CURRENT} to {}. 2 agents kept running",
             newer()
         )),
         "{said}"
@@ -1469,7 +1476,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1491,7 +1498,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     );
 }
 
-/// A message whose Enter went as a newer Facade takes over is settled by the daemon before, which
+/// A message whose Enter went as a newer Facade Code Framework takes over is settled by the daemon before, which
 /// reads its agent until the CLI took the message, before the agent goes quiet: the send answers
 /// success, and the message is typed once.
 #[test]
@@ -1532,7 +1539,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1629,7 +1636,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1706,7 +1713,7 @@ fn start_asking_from_its_screen(home: &TestHome, name: &str) {
     );
 }
 
-/// An agent whose CLI asks from its screen still waits for the person after a newer Facade takes
+/// An agent whose CLI asks from its screen still waits for the person after a newer Facade Code Framework takes
 /// over: the next daemon asks no CLI to redraw after a clean end, so it reads the screen it
 /// recovered at once.
 #[test]
@@ -1722,7 +1729,7 @@ fn an_agent_asking_from_its_screen_still_waits_for_the_person_after_a_takeover()
         .unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1791,7 +1798,7 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1802,7 +1809,7 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
     );
 }
 
-/// Facade's plugin, which the build before wrote in the folder of an Antigravity run, stays as the
+/// Facade Code Framework's plugin, which the build before wrote in the folder of an Antigravity run, stays as the
 /// run has it through a takeover and through a start beside it, as every run keeps the files of the
 /// build that started it. It goes with the last run that uses it, and the next start places the new
 /// build's.
@@ -1863,7 +1870,7 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("upgraded Orchestrator "),
+        listed.status.success() && stderr(&listed).contains("upgraded Facade Code Framework "),
         "{}",
         stderr(&listed)
     );
@@ -1954,7 +1961,7 @@ fn a_pending_inbox_send_keeps_its_failure_notice_through_takeover() {
         .unwrap();
     assert!(
         upgraded.status.success()
-            && stderr(&upgraded).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&upgraded).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}\n{}\n{}",
         stderr(&upgraded),
         home.daemon_log(),
@@ -2003,7 +2010,7 @@ fn a_pending_inbox_send_keeps_its_failure_notice_through_takeover() {
     }
 }
 
-/// Sends waiting on their recipient's draft when a newer Facade takes over are typed once after it:
+/// Sends waiting on their recipient's draft when a newer Facade Code Framework takes over are typed once after it:
 /// facade-mcp's caller and `facade send` each answer what became of their message, not that it is
 /// unknown. The old daemon's drain does not wait for them, as the store keeps their messages.
 #[test]
@@ -2054,7 +2061,7 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
         .unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -2155,7 +2162,7 @@ fn the_daemon_refuses_a_takeover_by_an_equal_or_older_build() {
         .unwrap()
         .to_owned();
     for build in [current.clone(), older()] {
-        let why = format!("{build} is not newer than this Facade, {current}");
+        let why = format!("{build} is not newer than this Facade Code Framework, {current}");
         let args = json!({
             "program": program, "build": build, "daemon_api_versions": DAEMON_API_VERSIONS,
             "keeper_api_versions": [1],
@@ -2510,7 +2517,7 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     );
     assert_eq!(process_identity(agent.pid), agent.process);
     println!(
-        "Facade hot takeover evidence {}",
+        "Facade Code Framework hot takeover evidence {}",
         json!({
             "from_build": CURRENT, "to_build": next_build,
             "daemon_api_version": DAEMON_API_VERSIONS[0],
@@ -2701,7 +2708,7 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         ("FACADE_TEST_GATES", "upgrade-draining,upgrade-quiet"),
         ("FACADE_TEST_ENTER_HELD_MS", "10000"),
     ]);
-    // By its rule, whose CLI's input Facade reads, so that the person's Enter waits to see its
+    // By its rule, whose CLI's input Facade Code Framework reads, so that the person's Enter waits to see its
     // input drawn.
     home.start_named_fake("w1", &[]);
     // An agent that ended does not count as kept running.
@@ -2758,7 +2765,7 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
     assert!(
         listed.status.success()
             && stderr(&listed).contains(&format!(
-                "upgraded Orchestrator {CURRENT} to {}. 1 agent kept running",
+                "upgraded Facade Code Framework {CURRENT} to {}. 1 agent kept running",
                 newer()
             )),
         "{}",
@@ -2792,7 +2799,7 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
     );
 }
 
-/// An older build's command and facade-mcp work with the running Facade and take nothing over, as
+/// An older build's command and facade-mcp work with the running Facade Code Framework and take nothing over, as
 /// N−1 does with N.
 #[test]
 fn an_older_build_s_command_and_server_work_with_the_running_facade() {
@@ -2829,7 +2836,7 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
     assert_eq!(home.hello_result().unwrap()["build"], CURRENT);
 }
 
-/// Messages sent without pause through facade-mcp and `facade send` while a newer Facade takes over
+/// Messages sent without pause through facade-mcp and `facade send` while a newer Facade Code Framework takes over
 /// are all answered and typed once each. One agent holds a draft, and a message to it from each way
 /// of sending waits through the takeover. Every CLI and the keeper keep their processes, and a new
 /// daemon serves. The longest wait between two deliveries of the messages sent without pause, the
@@ -2943,7 +2950,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
     });
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -3060,7 +3067,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
     assert_ne!(hello["pid"].as_i64(), Some(daemon as i64));
 }
 
-/// A start, a stop and a `facade type` under way when a newer Facade takes over finish before the
+/// A start, a stop and a `facade type` under way when a newer Facade Code Framework takes over finish before the
 /// daemon before it ends: its drain waits for them, and each command answers what it did.
 #[test]
 fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
@@ -3124,7 +3131,7 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     let asked = asking.wait_with_output().unwrap();
     assert!(
         asked.status.success()
-            && stderr(&asked).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+            && stderr(&asked).contains(&format!("upgraded Facade Code Framework {CURRENT} to ")),
         "{}",
         stderr(&asked)
     );
@@ -3224,7 +3231,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         if cli == "devin" {
             start.env("FAKECLI_MCP_TAKEOVER", &probe);
         }
-        // Antigravity starts its plugin's server from its `/mcp` panel, which Facade's start opens;
+        // Antigravity starts its plugin's server from its `/mcp` panel, which Facade Code Framework's start opens;
         // the test CLI runs the others' from the launcher their settings name, as each CLI does.
         match cli {
             "agy" => start.env("FAKECLI_LOOK", "agy"),
@@ -3271,7 +3278,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("upgraded Orchestrator "),
+        listed.status.success() && stderr(&listed).contains("upgraded Facade Code Framework "),
         "{}",
         stderr(&listed)
     );
@@ -3326,7 +3333,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             run(name)
         );
     }
-    // What each run was given, its arguments, its environment and its files, names Facade's
+    // What each run was given, its arguments, its environment and its files, names Facade Code Framework's
     // programs by their launchers only.
     let mut hooks = Vec::new();
     for (cli, name, process) in &runs {
@@ -3406,7 +3413,10 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     // run the new build. Windows deletes no program while it runs, so there the build stays.
     #[cfg(unix)]
     std::fs::remove_dir_all(bin.join(CURRENT)).unwrap();
-    assert!(!hooks.is_empty(), "no run's hook runs Facade's launcher");
+    assert!(
+        !hooks.is_empty(),
+        "no run's hook runs Facade Code Framework's launcher"
+    );
     let ran = home.folder().join(format!("build-{}/ran.log", newer()));
     let hooks_ran = || {
         std::fs::read_to_string(&ran)
@@ -3532,7 +3542,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     assert_eq!(takeover_responses(&probe, &[2, 3, 4]).0, devin_relay);
 }
 
-/// The hook lines in `text` that run Facade's launcher `facade`: each whole command as a CLI's
+/// The hook lines in `text` that run Facade Code Framework's launcher `facade`: each whole command as a CLI's
 /// settings hold it, the string it stands in or its line.
 #[cfg(windows)]
 fn hook_lines(text: &str, facade: &Path) -> Vec<String> {

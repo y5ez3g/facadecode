@@ -115,7 +115,7 @@ impl Service for Hellos {
     }
 
     fn draining(&self) -> Option<ErrorBody> {
-        let refused = operation_error("upgrading", "a newer Facade is taking over");
+        let refused = operation_error("upgrading", "a newer Facade Code Framework is taking over");
         self.draining.lock().unwrap().then_some(refused)
     }
 

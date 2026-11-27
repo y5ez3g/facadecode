@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::{Problems, envelope};
 
-/// Refuses a start's prompt as Facade refuses a message's text, and a model or an effort that is
+/// Refuses a start's prompt as Facade Code Framework refuses a message's text, and a model or an effort that is
 /// blank: a start leaves either out for its CLI's own.
 pub(super) fn check_start(arguments: &Map<String, Value>, problems: &mut Problems) {
     for field in ["model", "effort"] {

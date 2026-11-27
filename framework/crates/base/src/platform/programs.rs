@@ -1,6 +1,6 @@
-//! Programs: the one a command names, and Facade's own, installed per build.
+//! Programs: the one a command names, and Facade Code Framework's own, installed per build.
 //!
-//! Facade's programs live in `framework/bin/`: each build's `facade` and `facade-mcp` in a folder named
+//! Facade Code Framework's programs live in `framework/bin/`: each build's `facade` and `facade-mcp` in a folder named
 //! after the build, which the services run from, and two launchers, `facade` and `facade-mcp`,
 //! symbolic links into the current build's folder. A run is only ever given a launcher's path, so
 //! whatever build started it, its next hook or MCP server is the current build's. The person may
@@ -34,11 +34,11 @@ use windows::{copy_from_start, place};
 #[cfg(windows)]
 pub use windows::{on_path, program_of, quoted_command, runnable};
 
-/// Facade's programs by file name: `facade`, then its MCP server, which lies beside it.
+/// Facade Code Framework's programs by file name: `facade`, then its MCP server, which lies beside it.
 #[cfg(unix)]
 pub const PROGRAMS: [&str; 2] = ["facade", "facade-mcp"];
 
-/// Facade's programs by file name: `facade.exe`, then its MCP server, which lies beside it.
+/// Facade Code Framework's programs by file name: `facade.exe`, then its MCP server, which lies beside it.
 #[cfg(windows)]
 pub const PROGRAMS: [&str; 2] = ["facade.exe", "facade-mcp.exe"];
 
@@ -192,7 +192,7 @@ pub fn command(program: impl AsRef<OsStr>) -> std::process::Command {
     }
 }
 
-// Facade's installed programs.
+// Facade Code Framework's installed programs.
 
 /// `framework/bin/`, where the programs are installed.
 pub fn bin_dir() -> anyhow::Result<PathBuf> {
@@ -228,7 +228,7 @@ pub fn install_running() -> anyhow::Result<PathBuf> {
     }
     ensure!(
         bin.should_select(&build)?,
-        "Facade {build} is no longer selected. Run {}",
+        "Facade Code Framework {build} is no longer selected. Run {}",
         bin.0.join(PROGRAMS[0]).display()
     );
     bin.install_set(&program, &build)
@@ -300,7 +300,7 @@ pub fn select_for_takeover(program: &Path, build: &str, running: &[String]) -> a
         }
         ensure!(
             bin.current().as_deref() == Some(build),
-            "Facade {build} was superseded. Run {}",
+            "Facade Code Framework {build} was superseded. Run {}",
             bin.0.join(PROGRAMS[0]).display()
         );
         Ok(false)
@@ -329,7 +329,7 @@ pub fn point_launchers_at(build: &str, running: &[String]) -> anyhow::Result<()>
     }
     ensure!(
         bin.current().as_deref() == Some(build),
-        "Facade {build} is no longer selected. Run {}",
+        "Facade Code Framework {build} is no longer selected. Run {}",
         bin.0.join(PROGRAMS[0]).display()
     );
     Ok(())
@@ -384,7 +384,7 @@ impl Bin {
         let framework = self
             .0
             .parent()
-            .expect("bin is inside the Framework directory");
+            .expect("bin is inside the Facade Code Framework directory");
         #[cfg(unix)]
         if !framework.is_dir() {
             let home = framework.parent().expect("framework is inside the home");
@@ -417,7 +417,7 @@ impl Bin {
         match crate::compare_builds(candidate, &current) {
             Some(order) => Ok(order == Ordering::Greater),
             None => bail!(
-                "cannot compare Facade {candidate} with selected build {current} at {}. Both builds must be stable",
+                "cannot compare Facade Code Framework {candidate} with selected build {current} at {}. Both builds must be stable",
                 self.0.join(PROGRAMS[0]).display()
             ),
         }
@@ -426,7 +426,7 @@ impl Bin {
     fn validate_build(&self, build: &str) -> anyhow::Result<()> {
         ensure!(
             crate::compare_builds(build, build).is_some(),
-            "cannot select invalid or prerelease Facade build {build} at {}. Use a stable build",
+            "cannot select invalid or prerelease Facade Code Framework build {build} at {}. Use a stable build",
             self.0.join(PROGRAMS[0]).display()
         );
         Ok(())
@@ -667,7 +667,7 @@ impl Held {
     /// path to nothing. A failure to put back is logged.
     fn launcher(&self, program: &str) -> PathBuf {
         if let Err(err) = self.restore() {
-            let message = format!("could not put back Facade's programs: {err:#}");
+            let message = format!("could not put back Facade Code Framework's programs: {err:#}");
             crate::log::write("daemon", "warn", &message);
         }
         self.bin.0.join(program)

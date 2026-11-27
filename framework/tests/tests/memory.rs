@@ -31,7 +31,7 @@ fn agent(home: &TestHome, id: &str) -> Option<Value> {
         .find(|agent| agent["reference"]["agent_id"] == id)
 }
 
-/// Starts Facade with the marks of debug builds on, which the keeper and every later daemon
+/// Starts Facade Code Framework with the marks of debug builds on, which the keeper and every later daemon
 /// inherit.
 fn start_marking(home: &TestHome) {
     home.start_facade_with(&[("FACADE_TEST_GATES", "none")]);

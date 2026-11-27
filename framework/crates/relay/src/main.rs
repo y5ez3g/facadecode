@@ -1,9 +1,9 @@
-//! `facade-mcp`, the relay between a CLI's MCP client and the Facade daemon's MCP server.
+//! `facade-mcp`, the relay between a CLI's MCP client and the Facade Code Framework daemon's MCP server.
 //!
 //! The CLI starts it and speaks MCP over its standard input and output, one JSON-RPC message per
 //! line. The relay passes each line on to the daemon of the Facade home its environment names,
 //! and each line the daemon writes back to its standard output. Where no daemon listens, it runs
-//! `facade daemon --detach` from its own folder once and connects when Facade is up. It reads only
+//! `facade daemon --detach` from its own folder once and connects when Facade Code Framework is up. It reads only
 //! three things of what it passes on: its own hello, the daemon's `closing`, and each line's
 //! `id`, by which it keeps the requests that have no response yet, for the next daemon when this
 //! one ends or a newer one takes over. Its arguments go into the hello and nothing else.

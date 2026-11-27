@@ -4,7 +4,7 @@
 //! `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo run --release -p facade-scenarios --bin
 //! facade-stress -- [--agents 100] [--flooders 100] [--large 0] [--json <file>] [--baseline <file>]`
 //!
-//! Optimized, with debug assertions on: the fake CLI's rule, `fake`, which tells Facade how to
+//! Optimized, with debug assertions on: the fake CLI's rule, `fake`, which tells Facade Code Framework how to
 //! read its input box, is only in such builds.
 //!
 //! For `--agents` fake CLIs: the time to start them all, and until each draws its input box; the
@@ -274,7 +274,7 @@ fn message_everyone(
     let took = began.elapsed();
     let mut submitted = 0;
     wait_until(secs(10), || {
-        // Each message is submitted under the line Facade heads it with.
+        // Each message is submitted under the line Facade Code Framework heads it with.
         let lines: std::collections::HashSet<String> = home
             .submitted_messages()
             .iter()

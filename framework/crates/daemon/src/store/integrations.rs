@@ -1,4 +1,4 @@
-//! The `integration_files` table, in which earlier versions kept each file Facade wrote for a CLI's
+//! The `integration_files` table, in which earlier versions kept each file Facade Code Framework wrote for a CLI's
 //! integration. The schema keeps it.
 
 use rusqlite::Connection;

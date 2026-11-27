@@ -196,7 +196,7 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
     for (name, said) in [
         ("normal", "Ended (code 0)"),
         ("crashed", "Ended (code 3)"),
-        ("stopped", "Ended (stopped by Facade)"),
+        ("stopped", "Ended (stopped by Facade Code Framework)"),
     ] {
         let inspected = home.run_facade_ok(&["status", name]);
         assert!(
@@ -574,7 +574,7 @@ fn an_enter_the_cli_does_not_take_says_nothing() {
     assert!(home.agent_from_watch("w1").unwrap().get("said").is_none());
 }
 
-/// Text an agent types with Enter, and a message it sends, through Facade's tools, are said by that
+/// Text an agent types with Enter, and a message it sends, through Facade Code Framework's tools, are said by that
 /// agent. A `facade` command acts for no agent, also in an agent's terminal: what it types or
 /// sends is said by the command line.
 #[test]
@@ -659,7 +659,7 @@ fn an_agent_stopped_while_its_daemon_failed_is_listed_as_ended() {
         "the daemon did not stop before saving the exit"
     );
     kill_process(daemon);
-    // With no CLI left to hold, the keeper may end with the daemon: the next client starts Facade.
+    // With no CLI left to hold, the keeper may end with the daemon: the next client starts Facade Code Framework.
     drop(connect(&home));
     reaches(&home, "w1", "ended");
 }
@@ -694,7 +694,7 @@ fn opencode_s_failed_model_call_is_an_error() {
     );
 }
 
-/// Turns YOLO off in Facade's settings file, `facade.json`, for the launches after it: the
+/// Turns YOLO off in Facade Code Framework's settings file, `facade.json`, for the launches after it: the
 /// questions their CLIs ask on their screens, Claude Code's trust question among them, are then the
 /// person's to answer.
 fn yolo_off(home: &TestHome) {
@@ -772,7 +772,7 @@ fn an_enter_that_answers_the_cli_s_question_asks_for_nothing() {
 
 /// Muse Code's screen shows what it does: working while it starts. That work is no turn, also with
 /// words after its name, which are the CLI's own: once it rests, each run reads starting again,
-/// never just done, as Muse Code is given Facade's tools, which this script never connects.
+/// never just done, as Muse Code is given Facade Code Framework's tools, which this script never connects.
 #[test]
 fn muse_code_s_screen_shows_what_it_does() {
     let home = TestHome::new("musescreen");
@@ -803,7 +803,7 @@ fn muse_code_s_screen_shows_what_it_does() {
 
 /// Work a CLI does before it is asked to do anything is no turn, also after it first rested, as
 /// Codex 0.167.0 works on after its first idle when it starts slowly. An Enter typed through
-/// Facade, alone, asks it to do something.
+/// Facade Code Framework, alone, asks it to do something.
 #[test]
 fn work_no_one_asked_for_is_no_turn() {
     let home = TestHome::new("unasked");
@@ -841,7 +841,7 @@ fn a_child_waiting_for_30_seconds_is_reported_once_with_actions() {
         json!({ "name": "child", "cli": "fake", "folder": cwd }),
     );
     assert_eq!(started["status"], "success", "{started}");
-    // Facade names an agent by its address, such as `a2@host`.
+    // Facade Code Framework names an agent by its address, such as `a2@host`.
     let child = home.agent_from_watch("child").unwrap()["address"]
         .as_str()
         .unwrap()

@@ -14,7 +14,7 @@ use super::message::{
     WindowDeliveryOutcome,
 };
 
-/// JSON-RPC's own error codes, and the one it leaves to servers that Facade uses for every other
+/// JSON-RPC's own error codes, and the one it leaves to servers that Facade Code Framework uses for every other
 /// failure.
 const INVALID_PARAMS: i64 = -32602;
 const SERVER_ERROR: i64 = -32000;
@@ -183,12 +183,12 @@ pub enum Reason {
     /// A message exceeds the line limit, or input exceeds the per-call limit or available queue
     /// room.
     CapacityExceeded,
-    /// An internal Facade error.
+    /// An internal Facade Code Framework error.
     Internal,
     /// The caller is not allowed to perform this operation. The keeper accepts only the daemon
     /// holding the daemon lock.
     Refused,
-    /// Facade's settings file, `facade.json` in the Facade home, cannot be read as it must, which
+    /// Facade Code Framework's settings file, `facade.json` in the Facade home, cannot be read as it must, which
     /// stops every launch until it is fixed. The message says each problem, with the file's path
     /// and, where known, its line and column.
     #[serde(rename = "configuration_invalid")]
@@ -202,7 +202,7 @@ pub enum Reason {
     Cancelled,
     /// Git could not make a worktree it was asked for: `data.kept` says what it made, which stays.
     WorktreeFailed,
-    /// A newer Facade is taking over: the call did nothing, and a client repeats it once the new
+    /// A newer Facade Code Framework is taking over: the call did nothing, and a client repeats it once the new
     /// daemon answers.
     Upgrading,
     /// The CLI cannot do what the call asks of it: take a model or an effort it has no way to set,
@@ -260,7 +260,7 @@ impl ErrorBody {
         ErrorBody::new(Reason::Refused, message)
     }
 
-    /// Creates an error for an internal Facade failure. Its message keeps the error's causes.
+    /// Creates an error for an internal Facade Code Framework failure. Its message keeps the error's causes.
     pub fn internal(error: impl fmt::Display) -> Self {
         ErrorBody::new(Reason::Internal, format!("{error:#}"))
     }

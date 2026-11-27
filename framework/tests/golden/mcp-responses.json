@@ -17,7 +17,7 @@
           "name": "facade",
           "version": "<version>"
         },
-        "instructions": "If a \"📨 Message\" needs a reply and has a reply address, call send_message (to=address, reply_to=its number, text=answer). Printed text never reaches the sender. Facade Code runs you as a managed agent. 📨 messages and 🔔 notices arrive as your input.\n\"📨 Message m42 from Ada (a2@devbox) · in reply to m17\" is Ada's m42, answering your m17. A waiting command shows \"from command line (#c44@devbox)\" and takes one reply. Plain \"from command line\" has no reply address.\nA 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work.\nAfter you send a message or start an agent, keep working or end your turn. Successful delivery of a message or start prompt produces no notice. Replies arrive on their own, so do not poll read_messages or read_screen. Wait in a send only to confirm delivery or get a linked reply within 30 seconds. If your client has tool search, load the Facade tools you need in one search.\nYOLO is on: your tools reach agents on all reachable machines. Your address is a1@golden-host. You were started from the command line in <test>/project on golden-host."
+        "instructions": "To answer a \"📨 Message\" with a reply address, call send_message (to=address, reply_to=its number, text=answer). Printed text never reaches the sender. Facade Code Framework runs you as a managed agent. 📨 messages and 🔔 notices arrive as your input.\n\"📨 Message m42 from Ada (a2@devbox) · in reply to m17\" is Ada's m42, answering your m17. A waiting command shows \"from command line (#c44@devbox)\" and takes one reply. Plain \"from command line\" has no reply address.\nA 🔔 notice comes from Facade Code Framework, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work.\nAfter you send a message or start an agent, keep working or end your turn. Successful delivery of a message or start prompt produces no notice. Replies arrive on their own, so do not poll read_messages or read_screen. Wait in a send only to confirm delivery or get a linked reply within 30 seconds. If your client has tool search, load the Facade Code Framework tools you need in one search.\nYOLO is on: your tools reach agents on all reachable machines. Your address is a1@golden-host. You were started from the command line in <test>/project on golden-host."
       }
     }
   },
@@ -38,7 +38,7 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Start a managed agent, a coding CLI in a terminal Facade holds; a prompt goes to it as a message from you.\nIt returns at launch: data.id is the agent's address and data.folder where it runs; readiness and the prompt's delivery are not confirmed. The prompt is the agent's first inbox message: Facade types it in once the start settles unless the agent has read it, and if its delivery fails, a notice says so. A reply, if the agent sends one, comes to you as a message; a Guest reads it with read_messages.",
+            "description": "Start a managed agent, a coding CLI in a terminal Facade Code Framework holds. It gets your prompt as a message.\nIt returns at launch: data.id is the agent's address and data.folder where it runs; readiness and the prompt's delivery are not confirmed. The prompt is the agent's first inbox message: Facade Code Framework types it in once the start settles unless the agent has read it, and if its delivery fails, a notice says so. A reply, if the agent sends one, comes to you as a message; a Guest reads it with read_messages.",
             "inputSchema": {
               "type": "object",
               "properties": {
@@ -93,7 +93,7 @@
               "readOnlyHint": true,
               "openWorldHint": false
             },
-            "description": "List agents you can reach and known CLIs; with YOLO off a Guest reaches only itself and agents started under it.\nRows are running managed agents and online Guests; use a row's id as the agent's address. state is the CLI's activity, not task progress; \"waiting_for_you\" means it needs someone's input, which read_screen shows. For start_agent, use a machine row's selector and a name from its clis, the CLIs Facade found for its default folder; without clis, status, cli_error or error may say why.",
+            "description": "List agents you can reach and known CLIs; with YOLO off a Guest reaches only itself and agents started under it.\nRows are running managed agents and online Guests; use a row's id as the agent's address. state is the CLI's activity, not task progress; \"waiting_for_you\" means it needs someone's input, which read_screen shows. For start_agent, use a machine row's selector and a name from its clis, the CLIs Facade Code Framework found for its default folder; without clis, status, cli_error or error may say why.",
             "inputSchema": {
               "type": "object",
               "properties": {},
@@ -748,7 +748,7 @@
         "process": "running",
         "observed_at": "<time>",
         "buffer": "normal",
-        "text": "fakecli {{(Facade test CLI)}}\n> hello there\n> hi\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n{{────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────}}\n❯\n{{────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────}}\n{{  Enter to send}}",
+        "text": "fakecli {{(Facade Code Framework test CLI)}}\n> hello there\n> hi\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n{{────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────}}\n❯\n{{────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────}}\n{{  Enter to send}}",
         "line_count": 30,
         "older_lines": false,
         "trimmed": false

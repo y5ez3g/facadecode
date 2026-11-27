@@ -143,7 +143,7 @@ fn full_id(id: &str) -> anyhow::Result<String> {
                     byte.is_ascii_hexdigit()
                 }
             }),
-        "expected a full Facade machine ID"
+        "expected a full Facade Code Framework machine ID"
     );
     Ok(id.to_ascii_lowercase())
 }

@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// Opens a daemon protocol connection, without starting Facade.
+/// Opens a daemon protocol connection, without starting Facade Code Framework.
 fn open(home: &TestHome) -> DaemonTestClient {
     let mut wire = DaemonTestClient::open(home);
     assert!(wire.hello("terminal", DAEMON_API_VERSIONS, json!({}))["result"].is_object());
     wire
 }
 
-/// Starts Facade with a pause marker already present, so the first daemon passes the pause point.
+/// Starts Facade Code Framework with a pause marker already present, so the first daemon passes the pause point.
 /// Returns the marker path; deleting it makes the next daemon pause there.
 #[cfg(unix)]
 fn start_facade_with_pause_disarmed(home: &TestHome, point: &str) -> PathBuf {
@@ -428,9 +428,9 @@ fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     );
 }
 
-/// When the keeper and the daemon both end, no Facade process holds the terminals any more. The
+/// When the keeper and the daemon both end, no Facade Code Framework process holds the terminals any more. The
 /// next daemon recovers the saved screens and lists the agents as ended because their terminals
-/// closed. A CLI that ignores the hangup may still run; Facade never signals its recorded process
+/// closed. A CLI that ignores the hangup may still run; Facade Code Framework never signals its recorded process
 /// ID. Stop, input and attach refuse the ended agent, and remove deletes the record.
 #[test]
 fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_nothing_is_signalled()
@@ -840,7 +840,11 @@ fn a_recovered_cli_s_screen_reads_as_before_after_the_nudge_s_redraws() {
         screen()
     );
     let after = screen();
-    assert_eq!(after.matches("(Facade test CLI)").count(), 1, "{after}");
+    assert_eq!(
+        after.matches("(Facade Code Framework test CLI)").count(),
+        1,
+        "{after}"
+    );
     assert_eq!(after, before);
 }
 

@@ -1,5 +1,5 @@
 //! The words of a CLI's command line that come from its rule and the person's settings, not from
-//! Facade's wiring: what YOLO adds, the model and effort chosen, the session a resume names, and
+//! Facade Code Framework's wiring: what YOLO adds, the model and effort chosen, the session a resume names, and
 //! the `clis` entries of `facade.json` that name each CLI. The rules layer puts these together
 //! with the wiring's words in `compose`.
 

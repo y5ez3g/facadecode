@@ -7,7 +7,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Start a managed agent, a coding CLI in a terminal Facade holds; a prompt goes to it as a message from you.\nIt returns at launch: data.id is the agent's address and data.folder where it runs; readiness and the prompt's delivery are not confirmed. The prompt is the agent's first inbox message: Facade types it in once the start settles unless the agent has read it, and if its delivery fails, a notice says so. A reply, if the agent sends one, comes to you as a message; a Guest reads it with read_messages.",
+    "description": "Start a managed agent, a coding CLI in a terminal Facade Code Framework holds. It gets your prompt as a message.\nIt returns at launch: data.id is the agent's address and data.folder where it runs; readiness and the prompt's delivery are not confirmed. The prompt is the agent's first inbox message: Facade Code Framework types it in once the start settles unless the agent has read it, and if its delivery fails, a notice says so. A reply, if the agent sends one, comes to you as a message; a Guest reads it with read_messages.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -62,7 +62,7 @@
       "readOnlyHint": true,
       "openWorldHint": false
     },
-    "description": "List agents you can reach and known CLIs; with YOLO off a Guest reaches only itself and agents started under it.\nRows are running managed agents and online Guests; use a row's id as the agent's address. state is the CLI's activity, not task progress; \"waiting_for_you\" means it needs someone's input, which read_screen shows. For start_agent, use a machine row's selector and a name from its clis, the CLIs Facade found for its default folder; without clis, status, cli_error or error may say why.",
+    "description": "List agents you can reach and known CLIs; with YOLO off a Guest reaches only itself and agents started under it.\nRows are running managed agents and online Guests; use a row's id as the agent's address. state is the CLI's activity, not task progress; \"waiting_for_you\" means it needs someone's input, which read_screen shows. For start_agent, use a machine row's selector and a name from its clis, the CLIs Facade Code Framework found for its default folder; without clis, status, cli_error or error may say why.",
     "inputSchema": {
       "type": "object",
       "properties": {},

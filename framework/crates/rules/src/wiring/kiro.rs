@@ -108,7 +108,7 @@ pub(super) fn profile(
         })
     });
     config["name"] = json!(name);
-    config["description"] = json!("Facade Code");
+    config["description"] = json!("Facade Code Framework");
     config["tools"] = json!(["@builtin", "@mcp"]);
     config["includeMcpJson"] = json!(true);
     config["includePowers"] = json!(true);
@@ -142,7 +142,7 @@ fn agent_name(folder: &Path) -> String {
     format!("facade-{prefix}")
 }
 
-/// A managed profile can be re-created when the same conversation acquires a new Facade ID.
+/// A managed profile can be re-created when the same conversation acquires a new Facade Code Framework ID.
 fn managed_profile(name: &str) -> bool {
     name.strip_prefix("facade-").is_some_and(|hash| {
         hash.len() == 16

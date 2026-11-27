@@ -1,4 +1,4 @@
-//! Facade's service log lines and their retention.
+//! Facade Code Framework's service log lines and their retention.
 
 use std::io::{self, Write};
 use std::path::Path;

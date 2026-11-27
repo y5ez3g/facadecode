@@ -7,7 +7,7 @@ use crate::{TestHome, install_script};
 
 /// Installs the SSH substitute for these homes before their daemons start.
 /// A destination must name one of the test homes. The fixture runs the tested bootstrap and
-/// installed Facade on the original standard streams. It can also serve the actual v2 fixture.
+/// installed Facade Code Framework on the original standard streams. It can also serve the actual v2 fixture.
 pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
     let programs: Vec<_> = machines
         .iter()

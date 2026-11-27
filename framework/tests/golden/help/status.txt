@@ -1,6 +1,6 @@
-Show Facade or agent status.
+Show Facade Code Framework or agent status.
 
-Without arguments, checks the local Facade service without starting it.
+Without arguments, checks the local Facade Code Framework service without starting it.
 Pass an agent to inspect its state, working directory, and launch details.
 
 Usage: facade status [AGENT]

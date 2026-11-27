@@ -176,11 +176,11 @@ pub(crate) trait Service: Send + Sync + 'static {
         peer_pid: Option<u32>,
     ) -> impl Future<Output = Result<(Value, Arc<dyn RelayLines>), ErrorBody>> + Send;
 
-    /// The build of the newer Facade taking over, once there is one: every connection is told
+    /// The build of the newer Facade Code Framework taking over, once there is one: every connection is told
     /// `closing`.
     fn closing(&self) -> watch::Receiver<Option<String>>;
 
-    /// While a newer Facade takes over: the error that a new hello, call or watch gets.
+    /// While a newer Facade Code Framework takes over: the error that a new hello, call or watch gets.
     fn draining(&self) -> Option<ErrorBody>;
 
     /// Counts a new connection, or None while the daemon decides to exit.

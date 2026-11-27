@@ -1,6 +1,6 @@
 //! Help as the built `facade` prints it: every public page against its file in
 //! `framework/tests/golden/help/`, each page the same from every way of asking, and help that reaches no
-//! Facade. Where a change to a page is meant, regenerate the files and read every changed one:
+//! Facade Code Framework. Where a change to a page is meant, regenerate the files and read every changed one:
 //! `FACADE_REGENERATE=1 cargo test -p facade-scenarios --test help`.
 
 use std::path::PathBuf;
@@ -130,7 +130,7 @@ fn forms<'a>(path: &[&'a str]) -> Vec<Vec<&'a str>> {
 
 /// `facade`, `facade -h`, `facade --help` and `facade help` print the root page, every command's
 /// three forms print its page. Commands without a default action show help on their own.
-/// Help starts no Facade.
+/// Help starts no Facade Code Framework.
 #[test]
 fn every_help_page_is_its_golden_file_whichever_way_it_is_asked_for() {
     let home = TestHome::new("helppages");
@@ -159,7 +159,7 @@ fn every_help_page_is_its_golden_file_whichever_way_it_is_asked_for() {
     pages.assert_none();
     assert!(
         !socket_exists(&home.daemon_socket()) && !home.path.join("framework").exists(),
-        "help reached Facade"
+        "help reached Facade Code Framework"
     );
 }
 

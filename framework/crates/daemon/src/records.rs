@@ -222,7 +222,7 @@ impl OperationTarget {
                 }
                 Stop => Some((
                     Reason::Unsupported,
-                    "is a Guest and cannot be stopped by Facade",
+                    "is a Guest and cannot be stopped by Facade Code Framework",
                 )),
                 Remove => Some((Reason::Unsupported, "is a Guest and cannot be removed")),
                 Resume => Some((Reason::Unsupported, "is a Guest and cannot be resumed")),
@@ -513,7 +513,7 @@ fn ids(agents: &[&ManagedAgent]) -> String {
     ids.join(", #")
 }
 
-/// The ID at the end of a reference written as Facade writes an agent, a name and then its ID, such
+/// The ID at the end of a reference written as Facade Code Framework writes an agent, a name and then its ID, such
 /// as `#a3` in `@Pixel #a3`.
 #[cfg(test)]
 fn id_at_end(reference: &str) -> Option<&str> {

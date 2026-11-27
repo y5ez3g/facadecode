@@ -543,9 +543,9 @@ fn unknown_start_option(words: &[OsString], option: &str) -> ParseError {
     };
     usage(format!(
         "error: Unknown option '{option}' before <CLI>.\n\
-         Put Facade options before the CLI name, and CLI options after it.\n\
+         Put Facade Code Framework options before the CLI name, and CLI options after it.\n\
          Example: {example} {option} ...\n\
-         Run 'facade start --help' for Facade options."
+         Run 'facade start --help' for Facade Code Framework options."
     ))
 }
 

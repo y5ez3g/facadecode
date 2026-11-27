@@ -159,7 +159,7 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         home.submitted_messages().is_empty(),
         "inspect sends no keys"
     );
-    // The test CLI runs the Facade server its rule gives it, which connects.
+    // The test CLI runs the Facade Code Framework server its rule gives it, which connects.
     assert!(
         wait_until(
             secs(10),

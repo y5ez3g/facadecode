@@ -92,7 +92,7 @@ def wrong_build(build):
 
 def refused_package(label, build, stderr):
     if label == 'wrong-build':
-        return stderr.startswith(f'facade install: Expected Facade build {wrong_build(build)}, found {build} in the package.')
+        return stderr.startswith(f'facade install: Expected Facade Code Framework build {wrong_build(build)}, found {build} in the package.')
     return stderr.strip() == f'facade install: SHA-256 verification failed for {ASSET}.'
 
 
@@ -175,8 +175,8 @@ def verify_install_commands(commands, scope, address, build, installer):
     wait_for_screen('read original screen', 'Native install fixture')
     listing = observed('list the installed candidate agent', [shell, 'list'])['stdout']
     relay = observed('use installed MCP relay', [str(bin_dir / 'facade-mcp')])
-    if (installed['stdout'] != f'Installed Facade {build} in {bin_dir}.\n'
-            or unchanged['stdout'] != f'Facade {build} is already up to date in {bin_dir}.\n'
+    if (installed['stdout'] != f'Installed Facade Code Framework {build} in {bin_dir}.\n'
+            or unchanged['stdout'] != f'Facade Code Framework {build} is already up to date in {bin_dir}.\n'
             or version_result['stdout'].strip() != f'facade {build}'
             or started['stdout'] != f'Started installed-agent ({address}) in the background.\n'
             or not any(all(value in line for value in ('installed-agent', address, 'qa-install', project))
@@ -373,10 +373,10 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
         if hash_file(candidate) != expected or hash_file(candidate.with_name('SHA256SUMS')) != receipt['sidecar_sha256']:
             raise AcceptanceError('candidate archive or checksum file changed while staging')
         installed = install_package('install candidate', candidate)
-        assert installed.stdout == f'Installed Facade {build} in {bin_dir}.\n', installed
+        assert installed.stdout == f'Installed Facade Code Framework {build} in {bin_dir}.\n', installed
         before_equal = install_tree(state)
         unchanged = install_package('select the same candidate again', candidate)
-        assert unchanged.stdout == f'Facade {build} is already up to date in {bin_dir}.\n', unchanged
+        assert unchanged.stdout == f'Facade Code Framework {build} is already up to date in {bin_dir}.\n', unchanged
         assert install_tree(state) == before_equal
         assert not any(os.path.lexists(endpoint) for endpoint in sockets.values())
         for program, program_sha in digests.items():

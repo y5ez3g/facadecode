@@ -207,7 +207,10 @@ impl server::Service for Daemon {
         colors: Option<wire::TerminalColors>,
     ) -> Result<(), api_v1::ErrorBody> {
         let Some(_active) = self.lifecycle.begin(Work::Call) else {
-            return Err(api::error("unavailable", "Facade is exiting"));
+            return Err(api::error(
+                "unavailable",
+                "Facade Code Framework is exiting",
+            ));
         };
         let caller = self.local_caller(client).map_err(api::project_error)?;
         self.resize_active_viewer(&caller, viewer, size, colors)
@@ -254,7 +257,10 @@ impl Daemon {
             Work::Call
         };
         let Some(_active) = self.lifecycle.begin(work) else {
-            return Err(api::error("unavailable", "Facade is exiting"));
+            return Err(api::error(
+                "unavailable",
+                "Facade Code Framework is exiting",
+            ));
         };
         if let wire::DaemonCall::DaemonUpgrade(args) = call {
             if incoming.is_some() || !matches!(caller, Caller::Terminal { .. }) {
@@ -1413,7 +1419,7 @@ impl Daemon {
                 .to_string(),
             settings_file: {
                 let file = facade_base::settings::settings_file().map_err(ErrorBody::internal)?;
-                // Whoever opens the file it names finds the settings Facade writes.
+                // Whoever opens the file it names finds the settings Facade Code Framework writes.
                 facade_base::settings::create_missing(&file);
                 file.display().to_string()
             },

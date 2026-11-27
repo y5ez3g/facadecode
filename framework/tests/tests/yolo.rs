@@ -1,5 +1,5 @@
 //! YOLO, folder trust, creation trees and reach (RULES-2.2, 4.2, 4.3; CLIS-1.3, 3.3; MCP-3.1;
-//! CONFIGURATION-1.4, 4.1): each launch reads `yolo` from Facade's settings file, `facade.json`, as
+//! CONFIGURATION-1.4, 4.1): each launch reads `yolo` from Facade Code Framework's settings file, `facade.json`, as
 //! it is accepted, and keeps it for its run; a file that cannot be read as it must refuses it; with
 //! YOLO on its CLI runs without asking. An authenticated Agent start can answer Claude Code's
 //! trust question when the target home permits it. An agent's record says who started it and the
@@ -11,7 +11,7 @@ use std::process::Stdio;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// `path` with symbolic links resolved, as Facade gives folders.
+/// `path` with symbolic links resolved, as Facade Code Framework gives folders.
 fn real(path: &Path) -> String {
     facade_base::files::real_path(path)
         .unwrap()
@@ -19,7 +19,7 @@ fn real(path: &Path) -> String {
         .into_owned()
 }
 
-/// Writes Facade's settings file, `facade.json` in the test's Facade home, as `text`.
+/// Writes Facade Code Framework's settings file, `facade.json` in the test's Facade home, as `text`.
 fn settings(home: &TestHome, text: &str) {
     std::fs::create_dir_all(&home.path).unwrap();
     std::fs::write(home.path.join("facade.json"), text).unwrap();
@@ -33,13 +33,13 @@ fn record(home: &TestHome, name: &str) -> Value {
         .unwrap_or_else(|| panic!("no agent {name}"))
 }
 
-/// The machine part of the addresses Facade gives in this test's home.
+/// The machine part of the addresses Facade Code Framework gives in this test's home.
 fn host(home: &TestHome) -> String {
     let address = home.agents()[0]["address"].as_str().unwrap().to_string();
     address.split_once('@').unwrap().1.to_string()
 }
 
-/// Each launch reads `yolo` from Facade's settings file, `facade.json`, as it is accepted, and
+/// Each launch reads `yolo` from Facade Code Framework's settings file, `facade.json`, as it is accepted, and
 /// keeps it for its run: a start from a terminal or from an editor alike. A missing file, an empty
 /// one, and one without `yolo` mean on. A daemon that starts again reads the file as it is then.
 /// `facade inspect` says a run's YOLO.
@@ -98,7 +98,7 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     assert_eq!(yolo("on").as_deref(), Some("on"));
 }
 
-/// A settings file Facade cannot read as it must refuses every start that uses what is wrong:
+/// A settings file Facade Code Framework cannot read as it must refuses every start that uses what is wrong:
 /// `yolo`, which every start reads, `facade start` and `start_agent` alike, saying each of its
 /// problems with the file's path, line and column, and nothing starts (CONFIGURATION-4.1). Fixed,
 /// the next start goes.
@@ -111,7 +111,7 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     settings(&home, "{\n  \"yolo\": \"false\",\n  \"colour\": 1\n}");
     let said = format!(
         "{file}:2:3: yolo must be true or false; received string; {file}:3:3: \"colour\" is not a \
-         Facade setting; the settings are yolo, names and clis"
+         Facade Code Framework setting; the settings are yolo, names and clis"
     );
     let mut command = home.command(&test_binaries().facade);
     let refused = command

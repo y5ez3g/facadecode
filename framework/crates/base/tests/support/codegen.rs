@@ -940,7 +940,7 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
     definitions.sort_keys();
 
     let schema = schema_file(
-        "Facade daemon API",
+        "Facade Code Framework daemon API",
         daemon::SUPPORTED_API_VERSIONS,
         &[
             "LocalClientRequest",
@@ -961,7 +961,7 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
     );
     let intro = daemon_guide();
     let md = render_reference(
-        "Facade daemon API",
+        "Facade Code Framework daemon API",
         &intro,
         DAEMON_METHODS,
         &topics,
@@ -1052,7 +1052,7 @@ pub fn generate_keeper_files() -> Vec<(&'static str, String)> {
     // using the originating operation, not by matching the response's shape alone.
     definitions.sort_keys();
     let schema = schema_file(
-        "Facade keeper API",
+        "Facade Code Framework keeper API",
         keeper::SUPPORTED_API_VERSIONS,
         &[
             "KeeperRequest",
@@ -1076,7 +1076,7 @@ pub fn generate_keeper_files() -> Vec<(&'static str, String)> {
             &json!(keeper::SUPPORTED_API_VERSIONS).to_string(),
         );
     let md = render_reference(
-        "Facade keeper API",
+        "Facade Code Framework keeper API",
         &intro,
         keeper::METHODS,
         &[],

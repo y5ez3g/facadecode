@@ -40,7 +40,7 @@ pub fn read_input(rule: &InputRule, view: &ScreenView) -> InputInfo {
 /// Reads the input box as [`read_input`] does, with a draft's text as its rows draw it: each row
 /// after the input's margin, without trailing spaces, one line per row; for a CLI that shows a
 /// long paste as a placeholder, that placeholder. Scroll marks are left out.
-/// A draft whose rows the reader cannot tell apart has no text. The text stays inside Facade:
+/// A draft whose rows the reader cannot tell apart has no text. The text stays inside Facade Code Framework:
 /// inspect never shows it and nothing saves it.
 pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<String>) {
     let read = read_box(rule, view);

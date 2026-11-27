@@ -483,7 +483,7 @@ impl Daemon {
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(ErrorBody::new(
                 Reason::Unavailable,
-                "Facade is exiting; start the agent again",
+                "Facade Code Framework is exiting; start the agent again",
             ));
         };
         let folder = destination.cwd;
@@ -833,7 +833,7 @@ impl Daemon {
     }
 
     /// The environment agent `id`'s CLI started with, less what its rule added, for a start its
-    /// Facade server asks for. A guest's is the one its hooks or server gave.
+    /// Facade Code Framework server asks for. A guest's is the one its hooks or server gave.
     pub(crate) async fn environment_of(
         &self,
         id: &str,
@@ -1137,12 +1137,12 @@ impl Daemon {
         }
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(unavailable(
-                "Facade is exiting; resume the agent again".into(),
+                "Facade Code Framework is exiting; resume the agent again".into(),
             ));
         };
         let Some(rule_name) = agent.rule() else {
             return Err(unavailable(format!(
-                "{id} was not started by a CLI rule, so Facade cannot resume it"
+                "{id} was not started by a CLI rule, so Facade Code Framework cannot resume it"
             )));
         };
         let rule = facade_rules::find(rule_name)

@@ -1,4 +1,4 @@
-// Facade Code: report the active session and its turn state from Oh My Pi's extension events.
+// Facade Code Framework: report the active session and its turn state from Oh My Pi's extension events.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -21,7 +21,7 @@ function state(value, kind) {
 }
 
 // OMP announces the servers it connects. The run's own is none of the person's, so its conversation
-// opens as it does without Facade. OMP ignores a status of a type it does not know.
+// opens as it does without Facade Code Framework. OMP ignores a status of a type it does not know.
 function quiet(status) {
 	if (Array.isArray(status?.serverNames)) {
 		status.serverNames = status.serverNames.filter(name => name !== server);

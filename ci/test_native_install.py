@@ -51,8 +51,8 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
     def install(stage, expected=None):
         return installer_args(installer, scope / stage / ASSET, build, expected_build=expected)
 
-    record('install candidate', install('candidate'), f'Installed Facade {build} in {bin_dir}.\n')
-    record('select the same candidate again', install('candidate'), f'Facade {build} is already up to date in {bin_dir}.\n')
+    record('install candidate', install('candidate'), f'Installed Facade Code Framework {build} in {bin_dir}.\n')
+    record('select the same candidate again', install('candidate'), f'Facade Code Framework {build} is already up to date in {bin_dir}.\n')
     record('installed Shell version', [shell, '--version'], f'facade {build}\n')
     record('start fake CLI', [shell, 'start', '-d', '--name', 'installed-agent', '--workdir',
                               cwd, 'qa-install', '--', 'candidate argument'],
@@ -75,7 +75,7 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
         if label == 'wrong-build':
             pin = wrong_build(build)
             record(f'refuse {label}', install(stage, pin),
-                   stderr=f'facade install: Expected Facade build {pin}, found {build} in the package.\n', status=1)
+                   stderr=f'facade install: Expected Facade Code Framework build {pin}, found {build} in the package.\n', status=1)
         else:
             record(f'refuse {label}', install(stage),
                    stderr=f'facade install: SHA-256 verification failed for {ASSET}.\n', status=1)
@@ -164,7 +164,7 @@ class NativeInstallEvidence(unittest.TestCase):
                 capture_output=True, text=True, timeout=15,
             )
             self.assertEqual(result.returncode, 1, result.stderr)
-            self.assertIn(f'Expected Facade build {pin}, found {build} in the package.', result.stderr)
+            self.assertIn(f'Expected Facade Code Framework build {pin}, found {build} in the package.', result.stderr)
             self.assertFalse(target.exists())
             self.assertEqual(list(profile.iterdir()), [])
 
@@ -202,7 +202,7 @@ cp "$0" "$FACADE_HOME/framework/bin/facade"
                     cwd=root, env={**env, 'FACADE_HOME': str(home)}, capture_output=True, text=True, timeout=15,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f'Installed Facade {build} in {home}/framework/bin.', result.stdout)
+                self.assertIn(f'Installed Facade Code Framework {build} in {home}/framework/bin.', result.stdout)
             result = subprocess.run(
                 ['sh', '-c', '. "$1"; printf "%s\\n" "$QA_PROFILE_MARKER" "$PATH"; command -v facade',
                  '--', str(sh_profile)], env=env, capture_output=True, text=True, check=True, timeout=10,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay a refused Framework takeover with digest-pinned Linux x64 QA builds."""
+"""Replay a refused Facade Code Framework takeover with digest-pinned Linux x64 QA builds."""
 
 import argparse
 from contextlib import closing
@@ -232,7 +232,7 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     receipt["before"] = before
 
     def confirm_refusal(result):
-        assert f"could not upgrade Orchestrator {lower_build} to {higher_build}" in result.stderr, result
+        assert f"could not upgrade Facade Code Framework {lower_build} to {higher_build}" in result.stderr, result
         assert (f"{higher_build} supports keeper API versions [2], and the running keeper negotiated version 1"
                 in result.stderr
                 and f"Stop the running agents {address} and try again" in result.stderr), result

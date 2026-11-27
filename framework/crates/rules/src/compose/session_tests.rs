@@ -106,7 +106,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         HOOK,
         "'/opt/facade' hook session-start '/home/.facade/framework/runs/a3/1f/session'"
     );
-    // Without Facade's tools, Muse Code and Antigravity still report their session, through the
+    // Without Facade Code Framework's tools, Muse Code and Antigravity still report their session, through the
     // settings the tools go in.
     let muse = start_managed_launch_command(
         rule("muse"),
@@ -541,7 +541,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
         "{}",
         launch.files[1].1
     );
-    // Facade's plugin comes out of the environment a child would start with; the person's stay.
+    // Facade Code Framework's plugin comes out of the environment a child would start with; the person's stay.
     let mut child: BTreeMap<String, String> = launch.env.iter().cloned().collect();
     rule("opencode").remove_wiring_environment(&mut child);
     assert_eq!(
@@ -661,7 +661,7 @@ fn claude_gets_a_session_start_hook_beside_the_person_s_own_settings() {
         })
     );
     assert!(launch.captures && launch.env.is_empty());
-    // The person's own settings keep their hooks and other keys; Facade's group comes last.
+    // The person's own settings keep their hooks and other keys; Facade Code Framework's group comes last.
     let own = r#"{"model":"opus","hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"mine"}]}],"Stop":[]}}"#;
     for given in [
         words(&["--settings", own, "go"]),
@@ -878,7 +878,7 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
     assert_eq!(
         trust["trusted_hash"].as_str(),
         Some(trusted(&hook("codex")).as_str()),
-        "Facade's group is trusted at its own place"
+        "Facade Code Framework's group is trusted at its own place"
     );
     assert!(
         hooks["state"]
@@ -887,7 +887,7 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
                 r"C:\<session-flags>\config.toml:session_start:0:0",
             ))
             .is_none(),
-        "the person's group is not trusted by Facade"
+        "the person's group is not trusted by Facade Code Framework"
     );
 }
 

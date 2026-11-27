@@ -30,7 +30,7 @@ static FOLDER: LazyLock<Regex> =
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustQuestion {
-    /// Matches some line of the question, so Facade knows it is on screen.
+    /// Matches some line of the question, so Facade Code Framework knows it is on screen.
     pub shown: Pattern,
     /// Matches the trusting answer, with or without the selection on it.
     pub answer: Pattern,
@@ -81,7 +81,7 @@ pub(crate) struct RunOptions {
     /// Arguments with the folder filled in: `${folder}` as a plain path, `${folder_toml}`
     /// quoted for TOML.
     pub args: Vec<String>,
-    /// An object merged over the person's run settings, for the CLIs Facade passes run settings
+    /// An object merged over the person's run settings, for the CLIs Facade Code Framework passes run settings
     /// to, such as Claude Code and Antigravity with `--settings`. Its keys win; its lists add to
     /// the person's. The folder is filled into its strings.
     pub settings: Option<Value>,

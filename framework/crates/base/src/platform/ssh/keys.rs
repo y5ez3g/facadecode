@@ -42,10 +42,10 @@ pub fn dedicated_identity(home: &Path) -> anyhow::Result<DedicatedIdentity> {
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .status()
-                .context("starting ssh-keygen to create the Facade SSH identity")?;
+                .context("starting ssh-keygen to create the Facade Code Framework SSH identity")?;
             ensure!(
                 status.success(),
-                "ssh-keygen could not create the Facade SSH identity"
+                "ssh-keygen could not create the Facade Code Framework SSH identity"
             );
             os::protect_private_key(&generated)?;
             let public_key = read_identity(&generated)?;
@@ -71,7 +71,7 @@ fn read_identity(path: &Path) -> anyhow::Result<String> {
     os::check_private(path, false)?;
     ensure!(
         fs::metadata(path)?.len() <= MAX_KEY_BYTES as u64,
-        "the Facade SSH private key is too large"
+        "the Facade Code Framework SSH private key is too large"
     );
     let mut child = Command::new("ssh-keygen")
         .args(["-y", "-P", "", "-f"])
@@ -79,7 +79,7 @@ fn read_identity(path: &Path) -> anyhow::Result<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .spawn()
-        .context("starting ssh-keygen to validate the Facade SSH identity")?;
+        .context("starting ssh-keygen to validate the Facade Code Framework SSH identity")?;
     let mut output = Vec::new();
     let read = child
         .stdout
@@ -91,13 +91,13 @@ fn read_identity(path: &Path) -> anyhow::Result<String> {
     read?;
     ensure!(
         status.success() && output.len() <= MAX_KEY_BYTES,
-        "ssh-keygen could not validate the Facade SSH identity {}",
+        "ssh-keygen could not validate the Facade Code Framework SSH identity {}",
         path.display()
     );
     let key = PublicKey::parse(std::str::from_utf8(&output)?.trim_end_matches(['\r', '\n']))?;
     ensure!(
         key.kind == "ssh-ed25519",
-        "the Facade SSH identity must be Ed25519"
+        "the Facade Code Framework SSH identity must be Ed25519"
     );
     Ok(key.line())
 }
@@ -113,7 +113,7 @@ impl SshKeyProof {
         let key = PublicKey::parse(&identity.public_key)?;
         ensure!(
             key.kind == "ssh-ed25519",
-            "the Facade SSH identity must be Ed25519"
+            "the Facade Code Framework SSH identity must be Ed25519"
         );
         let fingerprint = format!(
             "SHA256:{}",
@@ -180,7 +180,7 @@ impl SshKeyProof {
             }
         }
         anyhow::bail!(
-            "OpenSSH did not prove that the dedicated Facade SSH key ({}) completed public-key authentication",
+            "OpenSSH did not prove that the dedicated Facade Code Framework SSH key ({}) completed public-key authentication",
             self.fingerprint
         )
     }

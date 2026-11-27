@@ -192,7 +192,7 @@ mod tests {
     use super::*;
 
     /// The run folders of agents without records go, and give back the projects their starts noted
-    /// for Facade's plugin; those of agents with records stay.
+    /// for Facade Code Framework's plugin; those of agents with records stay.
     #[test]
     fn a_run_without_a_record_gives_back_the_project_its_plugin_is_in() {
         let runs = crate::test_folder::TestFolder::new("runs-noted");

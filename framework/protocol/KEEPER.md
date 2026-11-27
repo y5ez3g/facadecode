@@ -1,6 +1,6 @@
 <!-- Generated from framework/crates/base/src by framework/crates/base/tests/protocol_files.rs: do not edit. -->
 
-# Facade keeper API
+# Facade Code Framework keeper API
 
 ## Connect to the keeper
 
@@ -238,7 +238,7 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 | `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
 | `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
-| `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
+| `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade Code Framework noticed it. |
 
 ### ProtocolMismatchDetails
 

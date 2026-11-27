@@ -1,8 +1,8 @@
-//! Facade's way into each CLI: what a run's CLI is given to have Facade's tools and report its
-//! session, and the formats of Facade's hooks. Each CLI takes them its own way, chosen by rule
+//! Facade Code Framework's way into each CLI: what a run's CLI is given to have Facade Code Framework's tools and report its
+//! session, and the formats of Facade Code Framework's hooks. Each CLI takes them its own way, chosen by rule
 //! name. The legacy integration module also describes the entries the old commands wrote.
 //!
-//! A run's CLI gets `facade-mcp`, Facade's MCP server, in its own configuration for the run alone,
+//! A run's CLI gets `facade-mcp`, Facade Code Framework's MCP server, in its own configuration for the run alone,
 //! or for Antigravity in a plugin of the folder it starts in, shared by the runs there; with its
 //! tools approved in advance where the CLI can approve one server's. A managed relay entry carries
 //! the run credential in its server arguments and uses `FACADE_HOME` to find the daemon. A relay
@@ -44,7 +44,7 @@ pub const INSTRUCTIONS_FILE: &str = "instructions.md";
 /// OpenCode's inline configuration, which a start may carry.
 const OPENCODE_CONFIG: &str = "OPENCODE_CONFIG_CONTENT";
 
-/// Facade's MCP server as a run's CLI is given it.
+/// Facade Code Framework's MCP server as a run's CLI is given it.
 #[derive(Clone, Copy, Debug)]
 pub struct Server<'a> {
     /// The `facade-mcp` program.
@@ -53,7 +53,7 @@ pub struct Server<'a> {
     pub env: &'a [(String, String)],
     /// The run's own folder, where its files go.
     pub folder: &'a Path,
-    /// What the model is told of Facade's tools, for a CLI that shows its model no server's
+    /// What the model is told of Facade Code Framework's tools, for a CLI that shows its model no server's
     /// instructions.
     pub instructions: &'a str,
     /// The folder the run's CLI starts in, whose project files it reads.
@@ -71,14 +71,14 @@ impl Server<'_> {
     }
 }
 
-/// How a run's CLI was given Facade's tools.
+/// How a run's CLI was given Facade Code Framework's tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tools {
     /// Not given: the CLI's rule does not give them.
     NotInjected,
     /// Given: the CLI starts the server.
     Injected,
-    /// Its rule gives them, but Facade could not, for this reason.
+    /// Its rule gives them, but Facade Code Framework could not, for this reason.
     NotGiven(String),
 }
 
@@ -101,7 +101,7 @@ pub(crate) struct Wiring {
     /// The files of the plugin the CLI reads in [`PLUGIN_FOLDER`] of the folder it starts in,
     /// shared by the runs there: each name and its text. Antigravity's.
     pub(crate) plugin: Vec<(String, String)>,
-    /// The Facade program and session file for Antigravity's title command.
+    /// The Facade Code Framework program and session file for Antigravity's title command.
     pub(crate) title: Option<(String, PathBuf)>,
     /// The CLI reads a session reporter from a configuration supplied through `args`.
     pub(crate) captures: bool,
@@ -111,7 +111,7 @@ pub(crate) struct Wiring {
     pub(crate) workspace_file: Option<(PathBuf, String)>,
 }
 
-/// The managed run's wiring and how it gets Facade's tools.
+/// The managed run's wiring and how it gets Facade Code Framework's tools.
 pub(crate) struct ManagedWiring {
     pub(crate) wiring: Wiring,
     pub(crate) tools: Tools,
@@ -273,9 +273,9 @@ pub(crate) fn report_session(
 /// The arguments that carry what `wiring` adds to the CLI's own settings, merged with the
 /// person's, and the person's `words` left. Antigravity's `--settings` replaces the person's
 /// settings key by key for the session, so the permission rules they keep go in it beside
-/// Facade's; Muse Code's `-c hooks=` replaces the hooks of its settings, so their own hooks go in
-/// it before Facade's. `cwd` is the folder the CLI starts in, `folder` the run's own, without
-/// which Antigravity's are not merged. Settings Facade cannot read are left
+/// Facade Code Framework's; Muse Code's `-c hooks=` replaces the hooks of its settings, so their own hooks go in
+/// it before Facade Code Framework's. `cwd` is the folder the CLI starts in, `folder` the run's own, without
+/// which Antigravity's are not merged. Settings Facade Code Framework cannot read are left
 /// as they are, for the CLI to say what is wrong with them, and nothing is added to them.
 pub(crate) fn merged_settings(
     rule: &Rule,
@@ -312,7 +312,7 @@ pub(crate) fn merged_settings(
 }
 
 /// Takes out of `env`, the environment a run of `cli` started with, everything the run added to
-/// give it Facade's tools and have it report its session, so that a CLI started with what is left
+/// give it Facade Code Framework's tools and have it report its session, so that a CLI started with what is left
 /// is no part of the run.
 pub(crate) fn remove_wiring_environment(cli: &str, env: &mut BTreeMap<String, String>) {
     session_report::unhook(cli, env);
@@ -327,7 +327,7 @@ pub fn restore_config_environment(env: &mut BTreeMap<String, String>) {
     devin::restore_config_home(env);
 }
 
-/// Whether Facade can have `cli` report its session.
+/// Whether Facade Code Framework can have `cli` report its session.
 pub(crate) fn reports_sessions(cli: &str) -> bool {
     [
         "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
@@ -336,7 +336,7 @@ pub(crate) fn reports_sessions(cli: &str) -> bool {
     .contains(&cli)
 }
 
-/// Whether a Facade run of `cli` starts Facade's guest entry, the server the person's
+/// Whether a Facade Code Framework run of `cli` starts Facade Code Framework's guest entry, the server the person's
 /// configuration names, for its own session: Muse Code's and Antigravity's runs do. Every other
 /// CLI's run has a server of its own in the guest entry's place, or its guest extension steps aside
 /// in the run's own session, so a guest entry of theirs serves only sessions that are no run's,
@@ -345,10 +345,10 @@ pub fn runs_start_guest_entry(cli: &str) -> bool {
     cli == "muse" || cli == "agy"
 }
 
-/// Whether Facade's guest entry of `cli` serves a Facade run's own session, where the run starts
+/// Whether Facade Code Framework's guest entry of `cli` serves a Facade Code Framework run's own session, where the run starts
 /// it: Muse Code refuses a run's own `facade` server beside the one in its settings, so there the
 /// guest entry is the run's server, and the run adds none. Antigravity's guest entry steps aside
-/// beside its plugin's server. Either way one Facade server serves the run's agent.
+/// beside its plugin's server. Either way one Facade Code Framework server serves the run's agent.
 pub fn guest_entry_serves_run(cli: &str) -> bool {
     cli == "muse"
 }

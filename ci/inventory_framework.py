@@ -1,4 +1,4 @@
-"""Discover the Rust Framework interfaces that the CI case catalog must cover."""
+"""Discover the Rust Facade Code Framework interfaces that the CI case catalog must cover."""
 
 import json
 import re
@@ -154,7 +154,7 @@ def rust_entries(text, macro, entry, source):
 def frame_branches(root, boundary):
     source = Path("framework/crates/base/tests/support/codegen.rs")
     text = (root / source).read_text(encoding="utf-8")
-    body = match_one(text, rf'^    let schema = schema_file\(\n        "Facade {boundary} API",\n'
+    body = match_one(text, rf'^    let schema = schema_file\(\n        "Facade Code Framework {boundary} API",\n'
                      rf"        {boundary}::SUPPORTED_API_VERSIONS,\n        &\[\n([\s\S]*?)^        \],",
                      source)
     row = r'^ +"([A-Z][A-Za-z0-9]+)",$'
@@ -357,5 +357,5 @@ def discover(root: Path) -> dict[str, str]:
         try:
             surface(root, add)
         except (AttributeError, KeyError, TypeError, OSError) as error:
-            raise ValueError(f"Framework {surface.__name__} inventory: {error}") from error
+            raise ValueError(f"Facade Code Framework {surface.__name__} inventory: {error}") from error
     return dict(sorted(inventory.items()))

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::time::Duration;
 
-/// The operating systems Facade builds for.
+/// The operating systems Facade Code Framework builds for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum System {
     /// macOS and Linux.
@@ -21,7 +21,7 @@ pub const SYSTEM: System = System::Unix;
 #[cfg(windows)]
 pub const SYSTEM: System = System::Windows;
 
-/// The system hostname, used to derive a new Facade machine's name.
+/// The system hostname, used to derive a new Facade Code Framework machine's name.
 pub fn hostname() -> io::Result<String> {
     #[cfg(unix)]
     {

@@ -815,7 +815,7 @@ fn prompt(post: &Messages, store: &Store, caller: &str, to: &str) -> (u64, u64) 
 }
 
 /// A typed or read prompt uses no result number. A prompt failure settles and writes the
-/// Facade result in the same transaction, under the reserved number, with its call and facts.
+/// Facade Code Framework result in the same transaction, under the reserved number, with its call and facts.
 #[test]
 fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
     let folder = TestFolder::new("messages-prompt-result");

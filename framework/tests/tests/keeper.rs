@@ -552,14 +552,12 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
     );
     let inspected = home.run_facade_ok(&["status", "w2"]);
     assert!(
-        inspected
-            .lines()
-            .any(|line| line.starts_with("State ")
-                && line[5..].trim() == "Ended (stopped by Facade)"),
+        inspected.lines().any(|line| line.starts_with("State ")
+            && line[5..].trim() == "Ended (stopped by Facade Code Framework)"),
         "the record retains the stop: {inspected}"
     );
     println!(
-        "Facade Keeper recovery observation {}",
+        "Facade Code Framework Keeper recovery observation {}",
         json!({
             "daemon": { "pid": daemon.0, "birth": daemon.1 },
             "keeper_before": { "pid": keeper.0, "birth": keeper.1 },
@@ -572,7 +570,7 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
 }
 
 /// A CLI stopped with SIGSTOP has not ended: it stays running, and once continued, a stop ends it
-/// as Facade's stop.
+/// as Facade Code Framework's stop.
 #[cfg(unix)]
 #[test]
 fn a_stopped_cli_is_still_running_and_a_stop_ends_it() {

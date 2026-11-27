@@ -1,4 +1,4 @@
-//! Environment inherited by a new run, with Facade's terminal and identity substituted. The run
+//! Environment inherited by a new run, with Facade Code Framework's terminal and identity substituted. The run
 //! keeps the name of the terminal it was started from (`TERM_PROGRAM`, `TERM_PROGRAM_VERSION`),
 //! as a CLI draws for the terminal it is shown in.
 

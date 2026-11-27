@@ -14,7 +14,7 @@
 //! - `guests`: sessions people start that join, MCP members, and integrations;
 //! - `lifecycle`: work under way, idle exit, takeover and the daemon log;
 //! - `network`: SSH sessions, machine routes and forwarding;
-//! - `server`: client connections; `mcp`: Facade's MCP tools behind each relay.
+//! - `server`: client connections; `mcp`: Facade Code Framework's MCP tools behind each relay.
 //!
 //! This level keeps the list of agents, the store and every write across its tables, and the
 //! order in which the parts are called (`operations.rs`, `delivery.rs`, `presence.rs`,
@@ -188,16 +188,16 @@ impl Sender {
     }
 }
 
-/// How a run's CLI was given Facade's tools.
+/// How a run's CLI was given Facade Code Framework's tools.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ToolsGiven {
     /// Not given: the CLI has no rule, or its rule gives none.
     #[default]
     NotInjected,
-    /// Given: the CLI starts Facade's MCP server.
+    /// Given: the CLI starts Facade Code Framework's MCP server.
     Injected,
-    /// Its rule gives them, but Facade could not; the log says why.
+    /// Its rule gives them, but Facade Code Framework could not; the log says why.
     NotGiven,
 }
 

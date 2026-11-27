@@ -1,4 +1,4 @@
-//! What Facade's hooks print to each CLI and read from its input: the formats of the hook output
+//! What Facade Code Framework's hooks print to each CLI and read from its input: the formats of the hook output
 //! each CLI reads, and the keys its hook input names its session and turn with. The `facade hook`
 //! commands read the input, talk to the daemon and print; these functions only read and write the
 //! formats.
@@ -69,7 +69,7 @@ pub fn run_start_output(cli: &str, start: &RunStart<'_>) -> Option<String> {
 }
 
 /// What `facade hook approve <cli>` prints: Muse Code's approval of a call of one of the tools of
-/// Facade's server `facade`, which it would otherwise ask the person about. None for any other
+/// Facade Code Framework's server `facade`, which it would otherwise ask the person about. None for any other
 /// tool, request or CLI.
 pub fn approval_output(cli: &str, input: &Value) -> Option<String> {
     // Muse Code names a server's tool `mcp__<server>__<tool>`.
@@ -105,7 +105,7 @@ pub fn empty_output(cli: &str) -> Option<&'static str> {
 
 /// What a hook prints to give its model `text` at `event`, in `cli`'s format: Claude Code's, Codex's
 /// and Muse Code's JSON for the event, Antigravity's system message step, or the text alone for
-/// Facade's own plugin and extension.
+/// Facade Code Framework's own plugin and extension.
 pub fn context_output(cli: &str, event: &str, text: &str) -> String {
     match cli {
         "claude" | "codex" | "muse" => {
@@ -140,7 +140,7 @@ pub struct NamedSession {
 }
 
 /// The session a hook's input names, whichever CLI ran it, as every CLI's keys are read:
-/// `session_id`, as Claude Code, Codex, Muse Code and Facade's plugin and extension name it, or
+/// `session_id`, as Claude Code, Codex, Muse Code and Facade Code Framework's plugin and extension name it, or
 /// Antigravity's `conversationId`; and the session it is part of, as a subagent's is,
 /// `parent_session_id` or Antigravity's `rootConversationId`. None where the input names no valid
 /// session ID.

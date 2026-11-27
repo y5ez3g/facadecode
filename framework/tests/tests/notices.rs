@@ -1,4 +1,4 @@
-//! Asynchronous Facade notices observed in a managed agent's terminal and inbox.
+//! Asynchronous Facade Code Framework notices observed in a managed agent's terminal and inbox.
 
 use std::time::Instant;
 
@@ -59,7 +59,7 @@ fn system_inbox(tools: &mut McpTestClient) -> Vec<Value> {
 fn a_startup_permission_wait_and_prompt_failure_share_the_reserved_notice() {
     let home = TestHome::new("notice-startup");
     // The child inherits the delayed tools startup. Manual input can expose the prompt that
-    // blocks it while its initial Facade message is still waiting for the tools.
+    // blocks it while its initial Facade Code Framework message is still waiting for the tools.
     let boss = home.start_named_fake(
         "boss",
         &[("FAKECLI_STATUS", "1"), ("FAKECLI_MCP_DELAY_MS", "60000")],

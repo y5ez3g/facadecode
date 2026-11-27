@@ -20,13 +20,13 @@ const EXTENSION: &str = "facade-omp.mjs";
 pub(super) fn tools(server: &Server<'_>, entry: &Entry<'_>) -> Wiring {
     let manifest = json!({
         "name": PLUGIN_NAME,
-        "description": "Facade Code's managed tools for this run"
+        "description": "Facade Code Framework's managed tools for this run"
     });
     let mut mcp = claude_entry(entry);
     mcp["timeout"] = json!(CALL_SECONDS * 1000);
     let mcp = json!({ "mcpServers": { SERVER_NAME: mcp } });
-    let definitions: Vec<Value> =
-        serde_json::from_str(facade_base::tools::DEFINITIONS).expect("Facade's tools are JSON");
+    let definitions: Vec<Value> = serde_json::from_str(facade_base::tools::DEFINITIONS)
+        .expect("Facade Code Framework's tools are JSON");
     let approval: Map<String, Value> = definitions
         .iter()
         .filter_map(|tool| tool["name"].as_str())
@@ -45,7 +45,7 @@ pub(super) fn tools(server: &Server<'_>, entry: &Entry<'_>) -> Wiring {
             (format!("{PLUGIN}/.mcp.json"), mcp.to_string()),
         ],
         // Without its notice about the server's tools, the conversation opens as it does without
-        // Facade.
+        // Facade Code Framework.
         settings: Some(json!({ "tools": { "approval": approval, "commandNotices": false } })),
         ..Wiring::default()
     }

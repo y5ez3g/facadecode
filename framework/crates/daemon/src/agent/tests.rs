@@ -679,7 +679,7 @@ async fn text_and_keys_reach_the_cli_as_a_terminal_sends_them_in_its_modes() {
 }
 
 /// An Enter typed into the agent asks its CLI to do something, also a CLI without a rule, whose
-/// input Facade cannot read: the person's, though not one in a paste or after Escape, and a
+/// input Facade Code Framework cannot read: the person's, though not one in a paste or after Escape, and a
 /// call's. Other keys and text without Enter ask nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_enter_typed_into_the_agent_asks_its_cli_to_do_something() {
@@ -881,7 +881,7 @@ impl Harness {
             .await
     }
 
-    /// Installs run `run` on `master`, its CLI given Facade's tools as `tools` says.
+    /// Installs run `run` on `master`, its CLI given Facade Code Framework's tools as `tools` says.
     async fn install_given(&self, run: u64, master: PtyMaster, tools: ToolsGiven) -> ManagedAgent {
         let (reply, installed) = oneshot::channel();
         self.send(AgentCommand::InstallRun {
@@ -1097,7 +1097,7 @@ async fn a_recovered_agent_s_input_reads_unknown_until_its_cli_writes() {
         (read.state, read.evidence.as_str()),
         (
             InputState::Unknown,
-            "the CLI has not written since Facade recovered it"
+            "the CLI has not written since Facade Code Framework recovered it"
         ),
         "a timer alone does not count"
     );
@@ -1487,7 +1487,7 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
     harness.stop().await;
 }
 
-/// A Facade server that connects before its agent's actor first runs still counts: the actor
+/// A Facade Code Framework server that connects before its agent's actor first runs still counts: the actor
 /// follows its connections from the moment the agent can be found.
 #[tokio::test]
 async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_available() {
@@ -1666,7 +1666,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A daemon that recovers a run its Facade server connected to long ago waits the start's bound
+/// A daemon that recovers a run its Facade Code Framework server connected to long ago waits the start's bound
 /// from the recovery for the server to connect to it.
 #[tokio::test]
 async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
@@ -1717,7 +1717,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
     removed.await.unwrap();
     std::fs::remove_dir_all(&home).unwrap();
 }
-/// An Antigravity run given Facade's tools, at 80 by 24, whose CLI has drawn nothing yet.
+/// An Antigravity run given Facade Code Framework's tools, at 80 by 24, whose CLI has drawn nothing yet.
 fn antigravity(home: &Path) -> Harness {
     antigravity_started(home, Instant::now())
 }
@@ -1736,7 +1736,7 @@ fn antigravity_started(home: &Path, started: Instant) -> Harness {
     )
 }
 
-/// The agent's state, and why its CLI cannot use Facade's tools, once the actor published them.
+/// The agent's state, and why its CLI cannot use Facade Code Framework's tools, once the actor published them.
 fn tools_now(
     harness: &Harness,
 ) -> (
@@ -1797,7 +1797,7 @@ impl Harness {
             .unwrap();
     }
 
-    /// Draws Antigravity's MCP panel, with Facade's server ready or still starting.
+    /// Draws Antigravity's MCP panel, with Facade Code Framework's server ready or still starting.
     fn agy_panel(&mut self, ready: bool) {
         let server = if ready {
             ">  ✓ facade_facade  Tools: list_agents"
@@ -2103,7 +2103,7 @@ async fn keys_and_calls_wait_while_a_start_readies_the_tools() {
 }
 
 /// A person's keystroke takes over a passive startup probe, even if the CLI has not yet
-/// shown an input that Facade recognizes. No probe is typed after control passes to the person.
+/// shown an input that Facade Code Framework recognizes. No probe is typed after control passes to the person.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_person_can_type_while_tool_startup_waits_for_an_input_box() {
     let home = home("type-before-tools");
@@ -2280,7 +2280,7 @@ async fn a_resumed_run_readies_its_tools_too() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A Claude Code run with Facade's tools and YOLO on, whose CLI has drawn nothing yet.
+/// A Claude Code run with Facade Code Framework's tools and YOLO on, whose CLI has drawn nothing yet.
 fn claude(home: &Path, allow_auto_trust: bool) -> Harness {
     let kept = Kept::new_run(ToolsGiven::Injected);
     Harness::start_kept(
@@ -2418,7 +2418,7 @@ async fn an_allowed_run_answers_claude_code_s_trust_question_once_as_a_person_wo
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A quiet agent, as a newer Facade taking over leaves it, presses no key of its start: the
+/// A quiet agent, as a newer Facade Code Framework taking over leaves it, presses no key of its start: the
 /// start's steps read a screen it reads no more. Its trust question is left to the person, as
 /// after a crash.
 #[tokio::test(flavor = "multi_thread")]

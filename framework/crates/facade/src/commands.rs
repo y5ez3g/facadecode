@@ -501,9 +501,9 @@ pub(crate) fn send(
             if replaying {
                 break Err(Cut.into());
             }
-            return Err(
-                error.context("could not reconnect after Facade refused the send during takeover")
-            );
+            return Err(error.context(
+                "could not reconnect after Facade Code Framework refused the send during takeover",
+            ));
         }
     }
     .map_err(|error| errors::send_failed(wait_for, &to, timeout, error))?;
@@ -756,7 +756,7 @@ pub(crate) fn state_words(agent: &AgentInfo) -> String {
     let detail = agent.state_detail.as_ref();
     if agent.process == ProcessState::Ended {
         if detail.and_then(|detail| detail.how) == Some(HowEnded::Stopped) {
-            return "Ended (stopped by Facade)".into();
+            return "Ended (stopped by Facade Code Framework)".into();
         }
         return match &agent.exit {
             Some(exit) if exit.code.is_some() => format!("Ended ({})", ExitText(exit)),
@@ -968,7 +968,7 @@ pub(crate) fn sleeping_text(
     machine: &str,
 ) -> String {
     let headline = format!(
-        "Facade {version} is not running on {}.",
+        "Facade Code Framework {version} is not running on {}.",
         single_line(machine)
     );
     service_text(
@@ -1021,7 +1021,10 @@ pub(crate) fn status_text(
         fallback = default_local_name();
         &fallback
     };
-    let headline = format!("Facade {version} is running on {}.", single_line(name));
+    let headline = format!(
+        "Facade Code Framework {version} is running on {}.",
+        single_line(name)
+    );
     let names = std::iter::once(name.as_str())
         .chain(connected_machines(status, local_id).map(|machine| machine.name.as_str()));
     let machines: Vec<(String, String)> = names

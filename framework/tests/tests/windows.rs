@@ -36,7 +36,7 @@ fn repository(folder: &Path) {
         folder,
         &[
             "-c",
-            "user.name=Facade",
+            "user.name=Facade Code Framework",
             "-c",
             "user.email=facade@example.invalid",
             "commit",
@@ -48,7 +48,7 @@ fn repository(folder: &Path) {
     );
 }
 
-/// `path` with symbolic links resolved, as Facade lists locations.
+/// `path` with symbolic links resolved, as Facade Code Framework lists locations.
 fn real(path: &Path) -> String {
     facade_base::files::real_path(path)
         .unwrap()
@@ -384,7 +384,7 @@ fn two_editors_attach_to_one_running_agent_at_once() {
     check(
         "agent.stop",
         json!({ "error": stopped["items"][0]["error"] }),
-        "is a Guest and cannot be stopped by Facade",
+        "is a Guest and cannot be stopped by Facade Code Framework",
     );
     let inspected = second.call("agent.inspect", json!({ "target": address }));
     assert_eq!(

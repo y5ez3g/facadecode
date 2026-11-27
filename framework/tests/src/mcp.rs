@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::*;
 
-/// Builds the relay command from the Facade entry an isolated CLI was given.
+/// Builds the relay command from the Facade Code Framework entry an isolated CLI was given.
 pub fn mcp_command(
     config: &Value,
     home: &Path,

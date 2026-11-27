@@ -1,6 +1,6 @@
 <!-- Generated from framework/crates/base/src by framework/crates/base/tests/protocol_files.rs: do not edit. -->
 
-# Facade daemon API
+# Facade Code Framework daemon API
 
 ## Connect to the daemon
 
@@ -16,10 +16,10 @@ See [the keeper reference](KEEPER.md).
 `FACADE_HOME` selects the home. By default it is `.facade` in `HOME`, or `USERPROFILE`
 when `HOME` is unset. On macOS and Linux the socket is
 `/tmp/facade-framework-<uid>/daemon-<key>.sock`. On Windows use
-`\\.\pipe\facade-framework-daemon-<key>`. The endpoints admit the owning user. Framework's Windows
+`\\.\pipe\facade-framework-daemon-<key>`. The endpoints admit the owning user. Facade Code Framework's Windows
 clients also look up the server PID and check its user SID. The editor relies on the pipe DACL.
 
-To calculate `key`, use the home path exactly as passed to Facade. Encode it as UTF-8, replacing
+To calculate `key`, use the home path exactly as passed to Facade Code Framework. Encode it as UTF-8, replacing
 invalid path bytes with U+FFFD. Write the first five bytes of its SHA-256 digest as ten lowercase
 hexadecimal digits.
 
@@ -79,7 +79,7 @@ budget or the holder is older, the field may be absent. `title` still describes 
 `agent.inspect` returns the agent, current input observation, session tracking and viewers.
 For a managed agent and a Terminal caller, it can include `session_name`, the same native
 session name or session preview as in `agent.list`.
-For a managed run it can include the recorded launch command with Facade's run credential
+For a managed run it can include the recorded launch command with Facade Code Framework's run credential
 redacted. `agent.screen` returns the tail of the logical screen and scrollback. Its default
 is 50 lines, and it accepts 1–2,000. Ended records can still be inspected and their final
 screens read.
@@ -158,7 +158,7 @@ complete messages inline.
 Omitting `wait_for` keeps the released delivery wait, 30-second cap and receipt replay.
 Explicit `wait_for:"inbox"` returns once the message is saved in the recipient's inbox.
 Background delivery keeps its ordinary limit. A delivery failure from the original Inbox
-admission is reported as a Facade message to its live authenticated agent sender. A replay
+admission is reported as a Facade Code Framework message to its live authenticated agent sender. A replay
 keeps the original send's notification behavior. A pending send keeps that decision through
 daemon takeover. `"delivery"` waits for the managed
 terminal's submission or the Guest's read. `"result"` waits for delivery and the first
@@ -200,7 +200,7 @@ An agent start returns when launch is recorded. An initial message can reserve a
 number at launch. Failed delivery uses that number and carries the agent's observed state
 and the input facts. Successful delivery leaves the number unused. A managed agent with
 an agent creator can also report 30 seconds of continuous waiting or Error, or an observed
-end, through the creator's Facade inbox. An effective stop by the creator is reported in
+end, through the creator's Facade Code Framework inbox. An effective stop by the creator is reported in
 the stop call. A startup delivery failure and its watchdog incident share one notification.
 
 ### YOLO and creation trees
@@ -341,7 +341,7 @@ agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_i
 the holder's live view. The entry daemon uses that binding and the original caller for
 `internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
 
-Forwarded Facade notifications use `internal.deliver_wait_notice`,
+Forwarded Facade Code Framework notifications use `internal.deliver_wait_notice`,
 `internal.deliver_start_result` and `internal.deliver_notice`. The machine hello response lists
 the receiving daemon's supported operations. The recipient daemon and each forwarding hop decode
 calls through their operation registry. Older builds return their ordinary unknown-operation error
@@ -399,7 +399,7 @@ and the corresponding command as an argument array.
 Outer responses, per-target outcomes and failure notifications share
 `{code,message,data:{reason,details?}}`. The codes `-32700`, `-32600`, `-32601`, `-32602`
 and `-32000` cover parse errors, invalid requests, unknown methods, invalid arguments or
-unknown operations, and Facade failures, respectively. Branch on the reason you recognize
+unknown operations, and Facade Code Framework failures, respectively. Branch on the reason you recognize
 and preserve the message and details for an unknown reason.
 
 An error for an authorized send can include `data.details.message_ref` once the message
@@ -777,7 +777,7 @@ The agent's current state.
 
 ### CliInfo
 
-A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
+A CLI a start can run: an entry of Facade Code Framework's settings file (CONFIGURATION-2.1).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -1336,7 +1336,7 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 | `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
 | `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
-| `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
+| `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade Code Framework noticed it. |
 
 ### ProcessState
 
@@ -1458,7 +1458,7 @@ A start prompt's message ID and what became of it.
 
 ### Said
 
-The latest submission through an agent's terminal, from a person, an `agent.type` call with `enter`, or a message Facade delivered.
+The latest submission through an agent's terminal, from a person, an `agent.type` call with `enter`, or a message Facade Code Framework delivered.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -1621,12 +1621,12 @@ More about an agent's state.
 |---|---|---|---|
 | `kind` | `WaitKind` | no | What the CLI waits for, on `waiting_for_you`. |
 | `text` | `string` | no | The CLI's own words where it gave any, on `waiting_for_you` and on an `error` the CLI reported. Untrusted text on one line. |
-| `how` | `HowEnded` | no | How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade did not stop it; `exit.reason` says what is known. |
-| `reason` | `StateReason` | no | Why nothing shows what the CLI is doing, on `unknown`, or what Facade found wrong, on an `error` it found: a start that showed nothing, or tools the CLI cannot use. |
+| `how` | `HowEnded` | no | How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade Code Framework did not stop it; `exit.reason` says what is known. |
+| `reason` | `StateReason` | no | Why nothing shows what the CLI is doing, on `unknown`, or what Facade Code Framework found wrong, on an `error` it found: a start that showed nothing, or tools the CLI cannot use. |
 
 ### StateReason
 
-Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it.
+Why nothing shows what an agent's CLI is doing, or what Facade Code Framework found wrong with it.
 
 `'not_shown' \| 'asked' \| 'taken_back' \| 'unrecognized' \| 'not_ready' \| 'tools_unavailable'`
 
@@ -1682,13 +1682,13 @@ How much of a message reached the recipient's terminal.
 
 ### ToolsReason
 
-Why an agent's CLI cannot use the Facade tools it was given.
+Why an agent's CLI cannot use the Facade Code Framework tools it was given.
 
 `'not_given' \| 'not_connected' \| 'not_started' \| 'disconnected' \| 'ended'`
 
 ### ToolsState
 
-Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that a CLI started by its rule is given for its run.
+Whether an agent's CLI can use Facade Code Framework's tools: `facade-mcp`, the MCP server that a CLI started by its rule is given for its run.
 
 `'not_injected' \| 'connecting' \| 'available' \| 'unavailable'`
 

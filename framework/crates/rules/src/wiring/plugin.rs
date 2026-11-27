@@ -1,4 +1,4 @@
-//! Antigravity's plugin of Facade's tools, which it reads in a folder it starts in, and the version
+//! Antigravity's plugin of Facade Code Framework's tools, which it reads in a folder it starts in, and the version
 //! of Facade Code Framework that wrote a plugin.
 
 use serde_json::{Value, json};
@@ -10,7 +10,7 @@ use super::servers::{Entry, SERVER, agy_entry};
 use crate::RUN_CREDENTIAL_ARG;
 use crate::formats::{HookArg, encoded_powershell, facade_hook, powershell_word};
 
-/// Where Antigravity reads a folder's plugin of Facade's tools: the only file Facade writes into
+/// Where Antigravity reads a folder's plugin of Facade Code Framework's tools: the only file Facade Code Framework writes into
 /// the person's project.
 pub const PLUGIN_FOLDER: &str = ".agents/plugins/facade";
 
@@ -30,7 +30,7 @@ pub(super) const AGY_RUN_TOKEN: &str = "FACADE_RUN_TOKEN";
 /// for its own.
 const PLUGIN_MARKER: &str = "Facade Code Framework ";
 
-/// Whether a run of `cli` is given Facade's tools by a plugin in the folder it starts in, which the
+/// Whether a run of `cli` is given Facade Code Framework's tools by a plugin in the folder it starts in, which the
 /// runs there share: Antigravity's.
 pub fn uses_folder_plugin(cli: &str) -> bool {
     cli == "agy"
@@ -45,7 +45,7 @@ fn plugin_description(version: &str) -> String {
 }
 
 /// The files of Antigravity's plugin, each its path in [`PLUGIN_FOLDER`] and its text: its
-/// manifest, which names this version; the MCP configuration of Facade's server, `program`; a
+/// manifest, which names this version; the MCP configuration of Facade Code Framework's server, `program`; a
 /// `PreInvocation` hook that has `facade`, this program, give the model the instructions. The same for
 /// every run of this version and Facade home, so that the runs in one folder share it. The server
 /// finds the daemon's socket from its Facade home. The launcher takes the current run's relay
@@ -113,7 +113,7 @@ exit $child.ExitCode
 
 /// The version of Facade Code Framework that wrote the plugin whose manifest is `manifest`, each number of
 /// it: the manifest names `facade`, and its description begins with framework's marker and a version of
-/// numbers and dots. None for any other, such as the person's own plugin or the Facade Code
+/// numbers and dots. None for any other, such as the person's own plugin or the Facade Code Framework
 /// extension's.
 pub fn plugin_version(manifest: &str) -> Option<Vec<u64>> {
     let manifest: Value = serde_json::from_str(manifest).ok()?;

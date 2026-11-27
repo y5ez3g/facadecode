@@ -1,5 +1,5 @@
-//! A `facade-mcp` line the person configured in a CLI themselves: a run Facade starts beside it
-//! keeps Facade's tools. Each test's CLI settings folders and home are the test's own, so
+//! A `facade-mcp` line the person configured in a CLI themselves: a run Facade Code Framework starts beside it
+//! keeps Facade Code Framework's tools. Each test's CLI settings folders and home are the test's own, so
 //! nothing of this computer's own configuration is read or written.
 
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ fn write(test: &TestHome, name: &str, text: &str) {
 
 /// Configures, as the person would, a `facade` server that runs `facade-mcp` in `cli`'s own
 /// settings, where `cli` reads them in the test's home: the line a person adds to connect a CLI of
-/// their own to Facade.
+/// their own to Facade Code Framework.
 fn own_facade_line(test: &TestHome, cli: &str) {
     let server = json!({ "mcpServers": { "facade": { "command": "facade-mcp", "args": [] } } });
     match cli {
@@ -51,7 +51,7 @@ fn own_facade_line(test: &TestHome, cli: &str) {
     }
 }
 
-/// A run Facade starts beside a `facade-mcp` line the person configured themselves gets Facade's
+/// A run Facade Code Framework starts beside a `facade-mcp` line the person configured themselves gets Facade Code Framework's
 /// tools on each built-in CLI. Each run is the test CLI under its CLI's name.
 #[test]
 fn a_run_beside_the_person_s_own_facade_line_gets_facade_s_tools() {
@@ -92,7 +92,7 @@ fn a_run_beside_the_person_s_own_facade_line_gets_facade_s_tools() {
         );
         assert!(
             has_no_facade_skill(&test, cli, &run),
-            "{cli}'s run was given Facade's old skill: {run}"
+            "{cli}'s run was given Facade Code Framework's old skill: {run}"
         );
     }
 }
@@ -134,6 +134,6 @@ fn has_no_facade_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
             .join(".agents/plugins/facade")
             .join(skill)
             .exists(),
-        other => panic!("say where {other}'s run takes Facade's skill"),
+        other => panic!("say where {other}'s run takes Facade Code Framework's skill"),
     }
 }

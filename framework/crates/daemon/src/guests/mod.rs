@@ -1,6 +1,6 @@
-//! Guests: the agents Facade did not start but lists.
+//! Guests: the agents Facade Code Framework did not start but lists.
 //!
-//! - An MCP client that reaches Facade's server joins as a member: Facade knows it by its relay
+//! - An MCP client that reaches Facade Code Framework's server joins as a member: Facade Code Framework knows it by its relay
 //!   process, the `facade-mcp` it started, which lasts as long as the client is there.
 //! - A CLI session that joined through its CLI's hooks is listed again from the store until it ends.
 //!
@@ -73,7 +73,7 @@ pub(crate) struct Guests {
     table: GuestTable,
 }
 
-/// The client name a member takes where its own is missing or not a name Facade lists.
+/// The client name a member takes where its own is missing or not a name Facade Code Framework lists.
 const ANY_CLIENT: &str = "mcp";
 
 impl Guests {
@@ -178,7 +178,7 @@ impl Guests {
         Ok(listed)
     }
 
-    /// The hook sessions Facade has not heard from since `before`.
+    /// The hook sessions Facade Code Framework has not heard from since `before`.
     pub(crate) fn unheard(&self, before: &str) -> Vec<(String, String)> {
         let records = match blocking_in_place(|| self.table.guests_heard_before(before)) {
             Ok(records) => records,
@@ -194,7 +194,7 @@ impl Guests {
                 log(
                     "info",
                     &format!(
-                        "#{} ended: Facade had not heard from its session since {}",
+                        "#{} ended: Facade Code Framework had not heard from its session since {}",
                         record.agent_id, record.heard_at
                     ),
                 );
@@ -325,16 +325,18 @@ fn member_process(session: &str) -> Option<ProcessIdentity> {
     })
 }
 
-/// Why a kept guest Facade last heard from at `heard_at` ends as the daemon starts, if it does: it
+/// Why a kept guest Facade Code Framework last heard from at `heard_at` ends as the daemon starts, if it does: it
 /// was before `started`, the machine's last start, which ended its CLI without its session-end
 /// hook; or before `kept_since`, as long ago as messages are kept. Times are UTC ISO 8601 with
 /// milliseconds; with no `started` known, only the 30 days count.
 fn ended_at_start(heard_at: &str, started: Option<&str>, kept_since: &str) -> Option<&'static str> {
     match started {
-        Some(started) if heard_at < started => {
-            Some("the machine started again after Facade last heard from its session")
+        Some(started) if heard_at < started => Some(
+            "the machine started again after Facade Code Framework last heard from its session",
+        ),
+        _ if heard_at < kept_since => {
+            Some("Facade Code Framework had not heard from its session for 30 days")
         }
-        _ if heard_at < kept_since => Some("Facade had not heard from its session for 30 days"),
         _ => None,
     }
 }
@@ -358,8 +360,10 @@ mod tests {
             Some("2026-11-12T08:00:00.000Z"),
             Some("2026-09-01T00:00:00.000Z"),
         );
-        let rebooted = Some("the machine started again after Facade last heard from its session");
-        let unheard = Some("Facade had not heard from its session for 30 days");
+        let rebooted = Some(
+            "the machine started again after Facade Code Framework last heard from its session",
+        );
+        let unheard = Some("Facade Code Framework had not heard from its session for 30 days");
         assert_eq!(
             ended_at_start("2026-11-12T07:59:59.999Z", started, kept_since),
             rebooted

@@ -1,7 +1,7 @@
 //! What `facade integration add` writes into a CLI's user configuration, so that the sessions the
-//! person starts join Facade as guests, and what `facade integration remove` takes out: Facade's
+//! person starts join Facade Code Framework as guests, and what `facade integration remove` takes out: Facade Code Framework's
 //! MCP server, the approval of its own tools, and the hooks, plugin or extension that report a
-//! session's start, turns and end. Nothing else of the person's configuration changes. Facade
+//! session's start, turns and end. Nothing else of the person's configuration changes. Facade Code Framework
 //! knows its entries by their shape, of any Facade home, program path or version, so adding again
 //! brings them up to date in their place. The server entries are built as a run's are.
 
@@ -18,10 +18,10 @@ use crate::formats::{HookArg, encoded_powershell_words, facade_hook, parse_jsonc
 use facade_base::programs::program_name;
 use facade_base::system::{env_var, home_folder_in};
 
-/// The CLIs Facade integrates.
+/// The CLIs Facade Code Framework integrates.
 pub const CLIS: [&str; 6] = ["claude", "codex", "opencode", "pi", "muse", "agy"];
 
-/// How every file Facade writes whole begins, which tells it from the person's own.
+/// How every file Facade Code Framework writes whole begins, which tells it from the person's own.
 const MARKER: &str = "// Facade Code: written by `facade integration add`; `facade integration \
                       remove` takes it out.";
 
@@ -47,7 +47,7 @@ const CODEX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("idle", "Interrupt"),
     ("session-end", "SessionEnd"),
 ];
-/// Muse Code's hooks: Codex's, and `PermissionRequest`, which approves Facade's own tools, as Muse
+/// Muse Code's hooks: Codex's, and `PermissionRequest`, which approves Facade Code Framework's own tools, as Muse
 /// Code has no rule for one server's tools.
 const MUSE_HOOK_EVENTS: [(&str, &str); 6] = [
     ("session-start", "SessionStart"),
@@ -64,20 +64,20 @@ const AGY_HOOK_EVENTS: [(&str, &str); 3] = [
     ("prompt", "PreInvocation"),
     ("turn-end", "Stop"),
 ];
-/// The header of Facade's server table in Codex's `config.toml`.
+/// The header of Facade Code Framework's server table in Codex's `config.toml`.
 const CODEX_TABLE: &str = "[mcp_servers.facade]";
-/// Claude Code's approval of Facade's tools.
+/// Claude Code's approval of Facade Code Framework's tools.
 const CLAUDE_ALLOW: &str = "mcp__facade";
-/// The rule in Antigravity's `permissions.allow` that approves every tool of Facade's server.
+/// The rule in Antigravity's `permissions.allow` that approves every tool of Facade Code Framework's server.
 const AGY_ALLOW: &str = "mcp(facade/*)";
 
-/// What Facade's entries name: its programs and the Facade home, from which the server finds the
+/// What Facade Code Framework's entries name: its programs and the Facade home, from which the server finds the
 /// daemon's socket.
 #[derive(Clone, Copy, Debug)]
 pub struct Programs<'a> {
     /// The path of `facade`, which every hook runs.
     pub facade: &'a str,
-    /// The path of `facade-mcp`, Facade's MCP server.
+    /// The path of `facade-mcp`, Facade Code Framework's MCP server.
     pub mcp: &'a str,
     /// A Facade home other than `~/.facade`; None for that one.
     pub home: Option<&'a str>,
@@ -100,32 +100,32 @@ impl Programs<'_> {
     }
 }
 
-/// Which of a CLI's files an integration file is, and so what Facade writes in it.
+/// Which of a CLI's files an integration file is, and so what Facade Code Framework writes in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Claude Code's `settings.json`, with Facade's hooks and the rule that approves its tools.
+    /// Claude Code's `settings.json`, with Facade Code Framework's hooks and the rule that approves its tools.
     /// `claude mcp add` adds the server.
     ClaudeSettings,
-    /// Codex's `config.toml`, with Facade's server table, whose tools need no approval.
+    /// Codex's `config.toml`, with Facade Code Framework's server table, whose tools need no approval.
     CodexConfig,
-    /// Codex's `hooks.json`, with Facade's hooks.
+    /// Codex's `hooks.json`, with Facade Code Framework's hooks.
     CodexHooks,
-    /// OpenCode's `opencode.json`, with Facade's server and a permission for its tools.
+    /// OpenCode's `opencode.json`, with Facade Code Framework's server and a permission for its tools.
     OpencodeConfig,
-    /// The plugin Facade writes for OpenCode, alone in its folder: it reports each session as it
+    /// The plugin Facade Code Framework writes for OpenCode, alone in its folder: it reports each session as it
     /// starts, works and ends, and prompts it with its messages.
     OpencodePlugin,
-    /// The extension Facade writes for Pi: it registers the server for each session, reports the
+    /// The extension Facade Code Framework writes for Pi: it registers the server for each session, reports the
     /// session, and hands it its messages.
     PiExtension,
-    /// Muse Code's `settings.json`, with Facade's server and hooks; one of the hooks approves
-    /// Facade's tools.
+    /// Muse Code's `settings.json`, with Facade Code Framework's server and hooks; one of the hooks approves
+    /// Facade Code Framework's tools.
     MuseSettings,
-    /// Antigravity's `mcp_config.json`, with Facade's server.
+    /// Antigravity's `mcp_config.json`, with Facade Code Framework's server.
     AgyServers,
-    /// Antigravity's `hooks.json`, with Facade's hook set.
+    /// Antigravity's `hooks.json`, with Facade Code Framework's hook set.
     AgyHooks,
-    /// Antigravity's `settings.json`, with the rule that approves Facade's tools.
+    /// Antigravity's `settings.json`, with the rule that approves Facade Code Framework's tools.
     AgySettings,
 }
 
@@ -143,19 +143,19 @@ pub struct Target {
     pub kind: Kind,
 }
 
-/// One entry of Facade's in a file: the place the CLI's configuration knows it by, and its value.
+/// One entry of Facade Code Framework's in a file: the place the CLI's configuration knows it by, and its value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub place: String,
     pub content: Value,
 }
 
-/// How a file stands with Facade's entries.
+/// How a file stands with Facade Code Framework's entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Held {
     /// It holds them exactly as `facade integration add` would write them today.
     AsWritten,
-    /// It holds some, but not as they would be written today: edited, written by another Facade,
+    /// It holds some, but not as they would be written today: edited, written by another Facade Code Framework,
     /// or in a file its CLI cannot read.
     Changed,
     /// It holds none.
@@ -182,7 +182,7 @@ pub fn session_status_file(cli: &str, env: &BTreeMap<String, String>, pid: u32) 
     Some(folder.join("sessions").join(format!("{pid}.json")))
 }
 
-/// The program whose own command adds Facade's server for `cli`, where Facade does not write it
+/// The program whose own command adds Facade Code Framework's server for `cli`, where Facade Code Framework does not write it
 /// itself: `claude`, for Claude Code's `claude mcp add`.
 pub fn command_program(cli: &str) -> Option<&'static str> {
     (cli == "claude").then_some("claude")
@@ -190,11 +190,11 @@ pub fn command_program(cli: &str) -> Option<&'static str> {
 
 /// The files `cli`'s integration is written in, for the person whose environment is `env`: where
 /// the CLI keeps its user configuration, as its own variables say, under the home folder
-/// otherwise. An error for a CLI Facade does not integrate, or without a home folder to look in.
+/// otherwise. An error for a CLI Facade Code Framework does not integrate, or without a home folder to look in.
 pub fn targets(cli: &str, env: &BTreeMap<String, String>) -> Result<Vec<Target>, String> {
     let home = || {
         home_folder_in(env).ok_or_else(|| {
-            "HOME (USERPROFILE on Windows) is not set, so Facade cannot find the CLI's configuration".to_string()
+            "HOME (USERPROFILE on Windows) is not set, so Facade Code Framework cannot find the CLI's configuration".to_string()
         })
     };
     let named_or_home = |name: &str, in_home: &str| -> Result<PathBuf, String> {
@@ -264,7 +264,7 @@ pub fn targets(cli: &str, env: &BTreeMap<String, String>) -> Result<Vec<Target>,
         }
         other => {
             return Err(format!(
-                "no CLI {other}; Facade integrates {}",
+                "no CLI {other}; Facade Code Framework integrates {}",
                 CLIS.join(", ")
             ));
         }
@@ -278,22 +278,22 @@ pub fn targets(cli: &str, env: &BTreeMap<String, String>) -> Result<Vec<Target>,
 /// A note for the person after `cli` is integrated, where there is something to do.
 pub fn note(cli: &str) -> Option<&'static str> {
     (cli == "codex").then_some(
-        "Codex asks you to review new hooks once, when it next starts: approve Facade's for its \
+        "Codex asks you to review new hooks once, when it next starts: approve Facade Code Framework's for its \
          sessions to join.",
     )
 }
 
-/// One kind of Facade's entries in a JSON file.
+/// One kind of Facade Code Framework's entries in a JSON file.
 #[derive(Clone, Copy)]
 enum Slot {
-    /// Facade's server, `facade` in the object at `key`, as `cli` writes it.
+    /// Facade Code Framework's server, `facade` in the object at `key`, as `cli` writes it.
     Server {
         key: &'static str,
         cli: &'static str,
     },
-    /// A rule in `permissions.allow` that approves Facade's tools.
+    /// A rule in `permissions.allow` that approves Facade Code Framework's tools.
     Allowed(&'static str),
-    /// Facade's group for each of `cli`'s hook events, under `hooks`.
+    /// Facade Code Framework's group for each of `cli`'s hook events, under `hooks`.
     Hooks(&'static str),
     /// Antigravity's hook set `facade`.
     HookSet,
@@ -301,7 +301,7 @@ enum Slot {
     Permission,
 }
 
-/// The kinds of Facade's entries in a JSON file of `kind`, in the order they are written and read.
+/// The kinds of Facade Code Framework's entries in a JSON file of `kind`, in the order they are written and read.
 /// None for a file that is not JSON.
 fn slots(kind: Kind) -> &'static [Slot] {
     match kind {
@@ -331,7 +331,7 @@ fn slots(kind: Kind) -> &'static [Slot] {
     }
 }
 
-/// Whether `server`, a `facade` server of `cli`'s configuration, is Facade's: it runs `facade-mcp`,
+/// Whether `server`, a `facade` server of `cli`'s configuration, is Facade Code Framework's: it runs `facade-mcp`,
 /// the first word of its command for OpenCode, which gives a command as a list.
 fn is_ours(cli: &str, server: &Value) -> bool {
     let program = match cli {
@@ -342,7 +342,7 @@ fn is_ours(cli: &str, server: &Value) -> bool {
 }
 
 impl Slot {
-    /// Puts Facade's entries of this slot in `map`, in their place. An error where the file holds
+    /// Puts Facade Code Framework's entries of this slot in `map`, in their place. An error where the file holds
     /// something of the person's own there, or something its CLI could not read.
     fn put(self, map: &mut Map<String, Value>, programs: &Programs) -> Result<(), String> {
         match self {
@@ -403,7 +403,7 @@ impl Slot {
         Ok(())
     }
 
-    /// Adds to `found` Facade's entries of this slot in `object`.
+    /// Adds to `found` Facade Code Framework's entries of this slot in `object`.
     fn find(self, object: &Value, found: &mut Vec<Part>) {
         let mut add = |place: String, content: &Value| {
             found.push(Part {
@@ -452,7 +452,7 @@ impl Slot {
         }
     }
 
-    /// Takes out of `map` Facade's entries of this slot that `taken` selects, each by its place and
+    /// Takes out of `map` Facade Code Framework's entries of this slot that `taken` selects, each by its place and
     /// content, and what they alone filled.
     fn take(self, map: &mut Map<String, Value>, taken: &impl Fn(&str, &Value) -> bool) {
         match self {
@@ -483,11 +483,11 @@ impl Slot {
     }
 }
 
-/// The text of a file of `kind` with Facade's entries brought up to date: `current` is its text
-/// now, None where it does not exist. Facade's entries are replaced where they are, missing ones
-/// are added, and a file that needs no change comes back byte for byte. An error says why Facade
+/// The text of a file of `kind` with Facade Code Framework's entries brought up to date: `current` is its text
+/// now, None where it does not exist. Facade Code Framework's entries are replaced where they are, missing ones
+/// are added, and a file that needs no change comes back byte for byte. An error says why Facade Code Framework
 /// does not write it: its CLI could not read it, rewriting it would drop its comments, or the
-/// person has an entry of their own in Facade's place.
+/// person has an entry of their own in Facade Code Framework's place.
 pub fn write(kind: Kind, current: Option<&str>, programs: &Programs) -> Result<String, String> {
     match kind {
         Kind::CodexConfig => return codex_config(current.unwrap_or_default(), programs),
@@ -523,7 +523,7 @@ pub fn write(kind: Kind, current: Option<&str>, programs: &Programs) -> Result<S
     }
 }
 
-/// The entries of Facade's in `text`, a file of `kind`, recognized by their shape, always in the
+/// The entries of Facade Code Framework's in `text`, a file of `kind`, recognized by their shape, always in the
 /// same order. An error where the CLI could not read the file.
 pub fn parts(kind: Kind, text: &str) -> Result<Vec<Part>, String> {
     let mut found = Vec::new();
@@ -562,13 +562,14 @@ pub fn parts(kind: Kind, text: &str) -> Result<Vec<Part>, String> {
     Ok(found)
 }
 
-/// The entries Facade writes today in a file of `kind`.
+/// The entries Facade Code Framework writes today in a file of `kind`.
 pub fn wanted(kind: Kind, programs: &Programs) -> Vec<Part> {
-    let written = write(kind, None, programs).expect("Facade's entries alone can be written");
-    parts(kind, &written).expect("Facade's entries can be read")
+    let written =
+        write(kind, None, programs).expect("Facade Code Framework's entries alone can be written");
+    parts(kind, &written).expect("Facade Code Framework's entries can be read")
 }
 
-/// The text of a file of `kind` once Facade's entries in `taken` are out of `current`, with the
+/// The text of a file of `kind` once Facade Code Framework's entries in `taken` are out of `current`, with the
 /// objects and lists that held nothing else. Unchanged where none of them is there; None where the
 /// file would be left empty. An error where the CLI could not read it.
 pub fn take_out(kind: Kind, current: &str, taken: &[Part]) -> Result<Option<String>, String> {
@@ -587,8 +588,9 @@ pub fn take_out(kind: Kind, current: &str, taken: &[Part]) -> Result<Option<Stri
                 return Ok(Some(current.to_string()));
             }
             let lines: Vec<&str> = current.split_inclusive('\n').collect();
-            let (mut start, end) = table_lines(&lines).expect("Facade's table is there");
-            // The blank line Facade put before its table goes with it.
+            let (mut start, end) =
+                table_lines(&lines).expect("Facade Code Framework's table is there");
+            // The blank line Facade Code Framework put before its table goes with it.
             if start > 0 && lines[start - 1].trim().is_empty() {
                 start -= 1;
             }
@@ -614,7 +616,7 @@ pub fn take_out(kind: Kind, current: &str, taken: &[Part]) -> Result<Option<Stri
     }
 }
 
-/// How `current`, a file of `kind` or None, stands with the entries Facade writes for `programs`.
+/// How `current`, a file of `kind` or None, stands with the entries Facade Code Framework writes for `programs`.
 pub fn held(kind: Kind, current: Option<&str>, programs: &Programs) -> Held {
     match current.map(|text| parts(kind, text)) {
         None => Held::Missing,
@@ -624,12 +626,12 @@ pub fn held(kind: Kind, current: Option<&str>, programs: &Programs) -> Held {
     }
 }
 
-/// The entry `claude mcp add` writes for Facade's server in Claude Code's user configuration.
+/// The entry `claude mcp add` writes for Facade Code Framework's server in Claude Code's user configuration.
 pub fn claude_server(programs: &Programs) -> Value {
     programs.guest_server("claude", claude_entry)
 }
 
-/// The arguments that have `claude` add Facade's server for the user.
+/// The arguments that have `claude` add Facade Code Framework's server for the user.
 pub fn claude_server_add(programs: &Programs) -> Vec<String> {
     let mut args = vec!["mcp", "add", "--scope", "user", SERVER];
     let home = programs.home.map(|home| format!("FACADE_HOME={home}"));
@@ -640,19 +642,19 @@ pub fn claude_server_add(programs: &Programs) -> Vec<String> {
     args.into_iter().map(String::from).collect()
 }
 
-/// The arguments that have `claude` remove Facade's user server.
+/// The arguments that have `claude` remove Facade Code Framework's user server.
 pub fn claude_server_remove() -> Vec<String> {
     ["mcp", "remove", "--scope", "user", SERVER]
         .map(String::from)
         .to_vec()
 }
 
-/// Whether Claude Code's user server `facade` is Facade's own: it runs a `facade-mcp`.
+/// Whether Claude Code's user server `facade` is Facade Code Framework's own: it runs a `facade-mcp`.
 pub fn is_facade_server(server: &Value) -> bool {
     is_ours("claude", server)
 }
 
-/// Whether `text` is a file Facade writes whole: it starts with Facade's marker.
+/// Whether `text` is a file Facade Code Framework writes whole: it starts with Facade Code Framework's marker.
 pub(super) fn written_by_facade(text: &str) -> bool {
     text.starts_with(MARKER)
 }
@@ -787,7 +789,7 @@ fn take_key(map: &mut Map<String, Value>, outer: &str, key: &str, taken: impl Fn
     }
 }
 
-/// Whether `commands`, a list of hooks or handlers, is a list of Facade's hooks for `cli` alone.
+/// Whether `commands`, a list of hooks or handlers, is a list of Facade Code Framework's hooks for `cli` alone.
 fn all_facade_hooks(commands: &Value, cli: &str) -> bool {
     let facade = |hook: &Value| {
         hook["command"]
@@ -799,7 +801,7 @@ fn all_facade_hooks(commands: &Value, cli: &str) -> bool {
         .is_some_and(|list| !list.is_empty() && list.iter().all(facade))
 }
 
-/// Whether Antigravity's hook set `set` is Facade's: some events, each with a list of Facade's
+/// Whether Antigravity's hook set `set` is Facade Code Framework's: some events, each with a list of Facade Code Framework's
 /// hooks alone.
 fn is_facade_agy_set(set: &Value) -> bool {
     let events = set.as_object();
@@ -808,12 +810,12 @@ fn is_facade_agy_set(set: &Value) -> bool {
     })
 }
 
-/// Whether a hook group is Facade's: its hooks are Facade's for `cli` alone.
+/// Whether a hook group is Facade Code Framework's: its hooks are Facade Code Framework's for `cli` alone.
 pub(super) fn is_facade_group(group: &Value, cli: &str) -> bool {
     all_facade_hooks(&group["hooks"], cli)
 }
 
-/// Facade's hooks for `cli`, each named as `facade hook` names it and as the CLI names its event.
+/// Facade Code Framework's hooks for `cli`, each named as `facade hook` names it and as the CLI names its event.
 fn hook_events(cli: &str) -> &'static [(&'static str, &'static str)] {
     match cli {
         "claude" => &CLAUDE_HOOK_EVENTS,
@@ -823,7 +825,7 @@ fn hook_events(cli: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
-/// The command of Facade's hook for `event`, in the form `facade_hook` gives `cli`. The
+/// The command of Facade Code Framework's hook for `event`, in the form `facade_hook` gives `cli`. The
 /// approval hook names its CLI as a run's does, and no Facade home.
 fn hook_command(event: &str, cli: &str, programs: &Programs) -> String {
     let cli_arg = HookArg::Word(cli);
@@ -839,7 +841,7 @@ fn hook_command(event: &str, cli: &str, programs: &Programs) -> String {
     )
 }
 
-/// Whether `command` is one of Facade's hooks for `cli`, in its current or earlier form, whatever its
+/// Whether `command` is one of Facade Code Framework's hooks for `cli`, in its current or earlier form, whatever its
 /// Facade home or the path of its `facade`.
 fn is_facade_hook(command: &str, cli: &str) -> bool {
     let words = (if matches!(cli, "codex" | "muse") {
@@ -867,7 +869,7 @@ fn is_facade_hook(command: &str, cli: &str) -> bool {
     }
 }
 
-/// Facade's hooks for `cli` under `hooks` of `map`: each in the place of Facade's first group for
+/// Facade Code Framework's hooks for `cli` under `hooks` of `map`: each in the place of Facade Code Framework's first group for
 /// its event, its other groups there dropped, or else after the person's own.
 fn put_hooks(map: &mut Map<String, Value>, cli: &str, programs: &Programs) -> Result<(), String> {
     let hooks = object_at(map, "hooks")?;
@@ -909,7 +911,7 @@ fn toml_table(text: &str) -> Result<toml::Table, String> {
     parsed.map_err(|err| format!("it is not TOML Codex can read: {}", err.message()))
 }
 
-/// Codex's `config.toml`, `current`, with Facade's server table where Facade's was, or else at the
+/// Codex's `config.toml`, `current`, with Facade Code Framework's server table where Facade Code Framework's was, or else at the
 /// end after a blank line. Every other byte stays as it is, comments included.
 fn codex_config(current: &str, programs: &Programs) -> Result<String, String> {
     let config = toml_table(current)?;
@@ -929,7 +931,7 @@ fn codex_config(current: &str, programs: &Programs) -> Result<String, String> {
     match table_lines(&lines) {
         Some((start, end)) => Ok([lines[..start].concat(), table, lines[end..].concat()].concat()),
         None if theirs.is_some() => Err(format!(
-            "its facade server is not written as a {CODEX_TABLE} table, which Facade could edit"
+            "its facade server is not written as a {CODEX_TABLE} table, which Facade Code Framework could edit"
         )),
         None => {
             let ending = match current {
@@ -943,7 +945,7 @@ fn codex_config(current: &str, programs: &Programs) -> Result<String, String> {
     }
 }
 
-/// Where Facade's table is in `lines`: its header, and the end of its keys before the next table,
+/// Where Facade Code Framework's table is in `lines`: its header, and the end of its keys before the next table,
 /// with the blank and comment lines that lead to that left out.
 fn table_lines(lines: &[&str]) -> Option<(usize, usize)> {
     let is_header = |line: &&str| line.split('#').next().unwrap_or_default().trim() == CODEX_TABLE;
@@ -960,7 +962,7 @@ fn table_lines(lines: &[&str]) -> Option<(usize, usize)> {
     Some((start, last_key.map_or(start + 1, |at| at + 1)))
 }
 
-/// What Facade's plugin and extension run: `facade hook <event> --cli <cli>` for a session.
+/// What Facade Code Framework's plugin and extension run: `facade hook <event> --cli <cli>` for a session.
 const HOOK_JS: &str = r#"// Runs `facade hook <event> --cli @CLI@` for `session`, working in `cwd` and part of the session `parent` where they are given,
 // and answers what it printed, or nothing.
 function hook(event, session, { cwd, parent } = {}) {
@@ -971,10 +973,10 @@ function hook(event, session, { cwd, parent } = {}) {
 	});
 }"#;
 
-/// OpenCode's plugin of Facade's, in OpenCode 2's form.
+/// OpenCode's plugin of Facade Code Framework's, in OpenCode 2's form.
 const OPENCODE_PLUGIN: &str = r#"@MARKER@
-// Each OpenCode session the person starts joins Facade as a guest: this plugin reports its start, its turns and its end, and
-// gives it the messages Facade has for it at its next turn: those that waited with the prompt that begins it, and those that
+// Each OpenCode session the person starts joins Facade Code Framework as a guest: this plugin reports its start, its turns and its end, and
+// gives it the messages Facade Code Framework has for it at its next turn: those that waited with the prompt that begins it, and those that
 // came during a turn as it ends. OpenCode loads it once for each folder it opens, and each copy sees the events of every
 // session: the copy of the session's own folder looks after it.
 import { execFile } from "node:child_process";
@@ -992,7 +994,7 @@ export default {
 	setup(api) {
 		const here = api.location.directory;
 		const stop = new AbortController();
-		// The sessions this copy looks after, which leave Facade with it, and its subagents' sessions.
+		// The sessions this copy looks after, which leave Facade Code Framework with it, and its subagents' sessions.
 		const sessions = new Set();
 		const subagents = new Set();
 		// `steer` puts the messages into the turn that runs; `queue` begins a turn with them.
@@ -1054,7 +1056,7 @@ export default {
 				}
 			}
 		})().catch(() => {});
-		// OpenCode closes a folder that stayed idle: the sessions this copy looked after leave Facade with it.
+		// OpenCode closes a folder that stayed idle: the sessions this copy looked after leave Facade Code Framework with it.
 		return () => {
 			stop.abort();
 			for (const session of [...sessions]) end(session);
@@ -1063,10 +1065,10 @@ export default {
 };
 "#;
 
-/// Pi's extension of Facade's.
+/// Pi's extension of Facade Code Framework's.
 const PI_EXTENSION: &str = r#"@MARKER@
-// Each Pi session the person starts joins Facade as a guest: it gets Facade's tools, this extension reports its start, its
-// turns and its end, and the messages Facade has for it come to its model at its next turn: those that waited with the prompt
+// Each Pi session the person starts joins Facade Code Framework as a guest: it gets Facade Code Framework's tools, this extension reports its start, its
+// turns and its end, and the messages Facade Code Framework has for it come to its model at its next turn: those that waited with the prompt
 // that begins it, and those that came during a turn as it ends.
 import { execFile } from "node:child_process";
 
@@ -1082,7 +1084,7 @@ export default function (pi) {
 	pi.on("session_start", async (event, ctx) => {
 		session = ctx.sessionManager.getSessionId();
 		instructions = await hook("session-start", session);
-		// A Facade run's own session has the run's extension, and Pi does not start with two that register `facade`: Facade
+		// A Facade Code Framework run's own session has the run's extension, and Pi does not start with two that register `facade`: Facade Code Framework
 		// tells it no instructions, as it knows the run's session. Any other session is a guest's, one nested in a run included.
 		if (!instructions && process.env.FACADE_AGENT) {
 			session = "";
@@ -1115,7 +1117,7 @@ export default function (pi) {
 }
 "#;
 
-/// A file Facade writes whole for `kind`, naming `programs`: OpenCode's plugin or Pi's extension.
+/// A file Facade Code Framework writes whole for `kind`, naming `programs`: OpenCode's plugin or Pi's extension.
 fn whole_file(kind: Kind, programs: &Programs) -> String {
     let (template, cli) = match kind {
         Kind::OpencodePlugin => (OPENCODE_PLUGIN, "opencode"),
@@ -1142,7 +1144,7 @@ fn whole_file(kind: Kind, programs: &Programs) -> String {
         })
 }
 
-/// The place of a file Facade writes whole, as its parts name it.
+/// The place of a file Facade Code Framework writes whole, as its parts name it.
 fn whole_place(kind: Kind) -> &'static str {
     match kind {
         Kind::OpencodePlugin => "plugin",
@@ -1322,9 +1324,9 @@ mod tests {
         );
     }
 
-    /// Claude Code's settings gain the approval of Facade's tools and its six hooks beside the
+    /// Claude Code's settings gain the approval of Facade Code Framework's tools and its six hooks beside the
     /// person's own, which keep their order and indentation: the idle hook takes only Claude Code's
-    /// notification that it waits for input. Adding again changes no byte; another Facade's entries
+    /// notification that it waits for input. Adding again changes no byte; another Facade Code Framework's entries
     /// are brought up to date in their place.
     #[test]
     fn claude_s_settings_gain_facade_s_approval_and_hooks_beside_the_person_s() {
@@ -1388,7 +1390,7 @@ mod tests {
             Held::Changed,
             "another program or home"
         );
-        // The person adds a hook after Facade's; another Facade's update keeps each in its place.
+        // The person adds a hook after Facade Code Framework's; another Facade Code Framework's update keeps each in its place.
         let mut later = json(&written);
         later["hooks"]["Stop"]
             .as_array_mut()
@@ -1440,8 +1442,8 @@ mod tests {
         );
     }
 
-    /// Taking Facade's entries out leaves the person's settings, and what Facade's alone filled
-    /// goes. An entry of Facade's that is not as written stays.
+    /// Taking Facade Code Framework's entries out leaves the person's settings, and what Facade Code Framework's alone filled
+    /// goes. An entry of Facade Code Framework's that is not as written stays.
     #[test]
     fn taking_facade_s_entries_out_leaves_the_person_s_and_changed_ones() {
         let own = r#"{"model":"opus","permissions":{"allow":["Bash(ls)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}}"#;
@@ -1460,14 +1462,14 @@ mod tests {
         assert_eq!(
             take_out(Kind::ClaudeSettings, &alone, &wanted).unwrap(),
             None,
-            "a file only Facade filled goes"
+            "a file only Facade Code Framework filled goes"
         );
         assert_eq!(
             take_out(Kind::ClaudeSettings, own, &wanted)
                 .unwrap()
                 .as_deref(),
             Some(own),
-            "no byte changes without Facade's"
+            "no byte changes without Facade Code Framework's"
         );
         let mut changed = json(&written);
         changed["hooks"]["Stop"][1]["hooks"][0]["timeout"] = json!(5);
@@ -1495,7 +1497,7 @@ mod tests {
         );
     }
 
-    /// A hook is Facade's by its shape: a `facade` program, any home, one of the four events, for
+    /// A hook is Facade Code Framework's by its shape: a `facade` program, any home, one of the four events, for
     /// the CLI.
     #[test]
     fn facade_s_hooks_are_known_by_their_shape() {
@@ -1538,7 +1540,7 @@ mod tests {
         );
     }
 
-    /// Codex's config gains Facade's server table at its end, approved in advance; the person's
+    /// Codex's config gains Facade Code Framework's server table at its end, approved in advance; the person's
     /// text stays byte for byte, an update keeps the table's place, and a facade server of the
     /// person's own is refused.
     #[test]
@@ -1578,7 +1580,7 @@ mod tests {
             .as_deref(),
             Some(own)
         );
-        // The person adds a table after Facade's, with a comment leading to it; an update keeps
+        // The person adds a table after Facade Code Framework's, with a comment leading to it; an update keeps
         // both in place.
         let later = format!("{written}\n# their notes\n[mcp_servers.notes]\ncommand = \"notes\"\n");
         let updated = write(Kind::CodexConfig, Some(&later), &MOVED).unwrap();
@@ -1616,7 +1618,7 @@ mod tests {
         assert_eq!(
             held(Kind::CodexConfig, Some(theirs), &PROGRAMS),
             Held::Missing,
-            "the person's own is not Facade's"
+            "the person's own is not Facade Code Framework's"
         );
         assert!(
             write(
@@ -1643,7 +1645,7 @@ mod tests {
         );
     }
 
-    /// Codex's hooks file gains Facade's five hooks in Codex's form, `Interrupt` among them, and
+    /// Codex's hooks file gains Facade Code Framework's five hooks in Codex's form, `Interrupt` among them, and
     /// loses them again.
     #[test]
     fn codex_s_hooks_gain_facade_s_five() {
@@ -1671,7 +1673,7 @@ mod tests {
         );
     }
 
-    /// OpenCode's config gains Facade's server and the permission of its tools after the person's
+    /// OpenCode's config gains Facade Code Framework's server and the permission of its tools after the person's
     /// rules; a server or a rule of the person's own for facade is refused.
     #[test]
     fn opencode_s_config_gains_facade_s_server_and_permission() {
@@ -1735,8 +1737,8 @@ mod tests {
         );
     }
 
-    /// OpenCode's plugin and Pi's extension are files of Facade's own, written whole, naming
-    /// Facade's programs. Neither steps aside for `FACADE_AGENT` alone: Facade's hooks tell a run's
+    /// OpenCode's plugin and Pi's extension are files of Facade Code Framework's own, written whole, naming
+    /// Facade Code Framework's programs. Neither steps aside for `FACADE_AGENT` alone: Facade Code Framework's hooks tell a run's
     /// own session from one nested in it. The person's own file of that name is refused and stays.
     #[test]
     fn the_plugin_and_the_extension_are_files_of_facade_s_own() {
@@ -1825,8 +1827,8 @@ mod tests {
         assert!(!is_facade_server(&json(r#"{"command":"npx"}"#)));
     }
 
-    /// Muse Code's settings gain Facade's server, which names a Facade run's variables by
-    /// reference, and its hooks, the approval of Facade's tools among them, beside the person's
+    /// Muse Code's settings gain Facade Code Framework's server, which names a Facade Code Framework run's variables by
+    /// reference, and its hooks, the approval of Facade Code Framework's tools among them, beside the person's
     /// own. A new file gets the schema version Muse Code reads settings by; a file without one,
     /// which Muse Code cannot read, is refused, and so is a `facade` server of the person's own.
     #[test]
@@ -1864,7 +1866,7 @@ mod tests {
         let moved = json(&write(Kind::MuseSettings, None, &MOVED).unwrap());
         assert_eq!(
             moved["mcpServers"]["facade"]["env"]["FACADE_HOME"], "${FACADE_HOME:-/h}",
-            "a Facade run's home, else this one"
+            "a Facade Code Framework run's home, else this one"
         );
         assert_eq!(
             moved["hooks"]["Stop"][0]["hooks"][0]["command"],
@@ -1952,8 +1954,8 @@ mod tests {
         );
     }
 
-    /// Antigravity's three files: its MCP configuration gains Facade's server, its `hooks.json`
-    /// Facade's hook set, `facade`, and its settings the approval of Facade's tools, each beside
+    /// Antigravity's three files: its MCP configuration gains Facade Code Framework's server, its `hooks.json`
+    /// Facade Code Framework's hook set, `facade`, and its settings the approval of Facade Code Framework's tools, each beside
     /// the person's own, which `take_out` leaves.
     #[test]
     fn antigravity_s_files_gain_facade_s_server_hooks_and_approval() {
@@ -2036,7 +2038,7 @@ mod tests {
         );
     }
 
-    /// The approve hook is Facade's by its shape too, for Muse Code alone, which is the CLI it is
+    /// The approve hook is Facade Code Framework's by its shape too, for Muse Code alone, which is the CLI it is
     /// written for.
     #[test]
     fn the_approve_hook_is_known_by_its_shape_for_muse_code_alone() {

@@ -28,7 +28,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Time kept for the daemon's delivery receipt to reach the relay.
 const ANSWER_GRACE: Duration = Duration::from_millis(500);
 
-/// Refuses a message's text as Facade would before keeping it.
+/// Refuses a message's text as Facade Code Framework would before keeping it.
 pub(super) fn check_send(arguments: &Map<String, Value>, problems: &mut Problems) {
     let text = arguments.get("text").and_then(Value::as_str);
     if let Some(Err(problem)) = text.map(check_message_text) {
@@ -160,7 +160,7 @@ fn send_before_deadline(budget: Duration) -> Value {
     envelope::failure(
         "timeout",
         format!(
-            "the send's {} seconds ran out before Facade could take it; nothing was sent",
+            "the send's {} seconds ran out before Facade Code Framework could take it; nothing was sent",
             budget.as_secs()
         ),
     )

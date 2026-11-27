@@ -1,4 +1,4 @@
-//! Facade's MCP server as each CLI's configuration writes it. A run's entry and a guest's are built
+//! Facade Code Framework's MCP server as each CLI's configuration writes it. A run's entry and a guest's are built
 //! the same way, from one [`Entry`].
 
 use std::path::Path;
@@ -10,17 +10,17 @@ use crate::formats::{inline_toml, toml_string};
 
 /// The server's name in each CLI's configuration.
 pub(super) const SERVER: &str = "facade";
-/// The program of Facade's server. A `facade` server that runs it is Facade's own, a guest's or
+/// The program of Facade Code Framework's server. A `facade` server that runs it is Facade Code Framework's own, a guest's or
 /// another Facade home's; any other `facade` server is the person's own.
 const SERVER_PROGRAM: &str = "facade-mcp";
-/// How long a CLI gives one of Facade's tool calls, in seconds: more than any call takes, with its
+/// How long a CLI gives one of Facade Code Framework's tool calls, in seconds: more than any call takes, with its
 /// response's way back.
 pub(super) const CALL_SECONDS: u64 = 3660;
 /// What the model reads of the server, for a CLI that lists its servers.
-const DESCRIPTION: &str = "Facade Code: start, stop and list agents, send and read messages, and \
+const DESCRIPTION: &str = "Facade Code Framework: start, stop and list agents, send and read messages, and \
                            read or type into agent terminals.";
 
-/// Facade's MCP server as an entry of a CLI's configuration: a run's, with the run's variables, or
+/// Facade Code Framework's MCP server as an entry of a CLI's configuration: a run's, with the run's variables, or
 /// a guest's, `--guest <cli>` with `FACADE_HOME` where it is not the default. The server finds the
 /// daemon's socket from its Facade home itself.
 pub(super) struct Entry<'a> {
@@ -95,7 +95,7 @@ fn opencode_entry_with_status(entry: &Entry, key: &str, status: bool) -> Value {
     })
 }
 
-/// OpenCode's `permission` with Facade's tools allowed after the person's own rules, as OpenCode
+/// OpenCode's `permission` with Facade Code Framework's tools allowed after the person's own rules, as OpenCode
 /// takes a later rule over an earlier one. A permission given as one string is one rule for every
 /// tool. None for a permission that is neither.
 pub(super) fn opencode_allow(permission: Value) -> Option<Map<String, Value>> {
@@ -112,7 +112,7 @@ pub(super) fn opencode_allow(permission: Value) -> Option<Map<String, Value>> {
 
 /// Muse Code's entry of a guest's server, in its settings. Muse Code passes a user server none of
 /// its variables, so the entry names them by references to its own environment, which it expands:
-/// empty outside Facade, and in a Facade run the run's agent and Facade home, so that the entry
+/// empty outside Facade Code Framework, and in a Facade Code Framework run the run's agent and Facade home, so that the entry
 /// serves the run (see [`super::guest_entry_serves_run`]). `entry`'s Facade home stands where the
 /// environment names none. Optional, as Muse Code fails a whole session over a required server
 /// that does not start.
@@ -133,7 +133,7 @@ pub(super) fn agy_entry(entry: &Entry) -> Value {
     json!({ "command": entry.program, "args": entry.args, "env": env_object(entry) })
 }
 
-/// Pi's Facade entry, with tools available on demand.
+/// Pi's Facade Code Framework entry, with tools available on demand.
 pub(super) fn pi_entry(entry: &Entry) -> Value {
     json!({
         "command": entry.program, "args": entry.args, "env": env_object(entry),

@@ -1,5 +1,5 @@
 //! External relays join as Guests when they first call a tool. The scenarios exercise their
-//! identity, reach, reply waits and delivery through the Orchestrator.
+//! identity, reach, reply waits and delivery through Facade Code Framework.
 
 use std::process::Stdio;
 
@@ -583,7 +583,7 @@ fn inspected(home: &TestHome, agent: &str) -> Value {
     home.inspect_agent(agent)["agent"].clone()
 }
 
-/// A session nested in a Facade run of its own CLI, as `claude -p` that the run's model starts,
+/// A session nested in a Facade Code Framework run of its own CLI, as `claude -p` that the run's model starts,
 /// inherits the run's `FACADE_AGENT` and runs the CLI's own `facade-mcp` entry with a session of its
 /// own: on all six CLIs it is a Guest of its own, and the run stays the run.
 #[test]
@@ -763,7 +763,7 @@ fn guest_rows(home: &TestHome) -> Vec<Value> {
         .collect()
 }
 
-/// A `facade-mcp` outside any Facade run, as an MCP client that is none of the CLIs runs it. It is
+/// A `facade-mcp` outside any Facade Code Framework run, as an MCP client that is none of the CLIs runs it. It is
 /// a Guest from its first tool call, and listed from then on. Returns it and its roster row.
 fn member(home: &TestHome) -> (McpTestClient, Value) {
     let mut member = McpTestClient::spawn(home, home.command(&test_binaries().mcp));
@@ -812,7 +812,7 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     );
 }
 
-/// A recipient leaving before it reads ends the delivery wait with the number Facade assigned.
+/// A recipient leaving before it reads ends the delivery wait with the number Facade Code Framework assigned.
 #[test]
 fn a_guest_leaving_before_read_keeps_the_admitted_message_id() {
     use rusqlite::{Connection, OpenFlags, OptionalExtension};

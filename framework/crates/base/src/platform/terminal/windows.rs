@@ -327,7 +327,7 @@ fn write_packet(signal: BorrowedHandle<'_>, cols: u16, rows: u16) -> io::Result<
 }
 
 /// A test terminal: three pipes whose server ends are the CLI's, synchronous, and whose client
-/// ends are Facade's, overlapped, as a pseudo console's are, and a job.
+/// ends are Facade Code Framework's, overlapped, as a pseudo console's are, and a job.
 pub(super) fn test_terminal(cols: u16, rows: u16) -> io::Result<(Master, TestCli)> {
     let name = format!(
         r"\\.\pipe\facade-test-terminal-{}-{:016x}",

@@ -13,7 +13,7 @@ $framework = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $Log) { $Log = Join-Path $framework 'target\test-all.log' }
 # The run's folder, its TEMP and TMP, lies beside the checkout, in `.test-temp\` of the checkout's parent folder:
 # outside every checkout, so that no Git call of a test finds the real repository above its folders, and beside the
-# build, so that an antivirus exclusion of the folder holding the checkouts covers every copy of a Facade program a test
+# build, so that an antivirus exclusion of the folder holding the checkouts covers every copy of a Facade Code Framework program a test
 # makes.
 $checkout = (git -C $framework rev-parse --show-toplevel)
 if (-not $checkout) { [Console]::Error.WriteLine("$framework is not in a Git checkout"); exit 2 }
@@ -44,7 +44,7 @@ try {
 	# The MSVC linker's telemetry helper would outlive the build, with the run's folder in its environment.
 	$env:VSCMD_SKIP_SENDTELEMETRY = '1'
 	$env:GIT_CONFIG_GLOBAL = Join-Path $tmp 'gitconfig'
-	[IO.File]::WriteAllLines($env:GIT_CONFIG_GLOBAL, @('[user]', '    name = Facade QA', '    email = qa@example.invalid'))
+	[IO.File]::WriteAllLines($env:GIT_CONFIG_GLOBAL, @('[user]', '    name = Facade Code Framework QA', '    email = qa@example.invalid'))
 	foreach ($name in $inherited) {
 		[Environment]::SetEnvironmentVariable($name, $null, 'Process')
 	}

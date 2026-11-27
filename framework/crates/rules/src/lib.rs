@@ -1,8 +1,8 @@
-//! What Facade knows about each CLI it starts by name. Each CLI has a rule file in `framework/rules/`,
+//! What Facade Code Framework knows about each CLI it starts by name. Each CLI has a rule file in `framework/rules/`,
 //! built into the program and checked as it is read: the program to run and how it reads its
 //! arguments, how its session is reported and resumed, how its screen draws its message input and
 //! takes a paste, what its screen shows of its state where its own reports do not say it, and how
-//! Facade's tools and hooks enter it.
+//! Facade Code Framework's tools and hooks enter it.
 //!
 //! A rule's exact name, such as `claude`, selects that rule. Any other word, a path such as
 //! `/opt/bin/claude` included, is a program without a rule.
@@ -69,7 +69,7 @@ pub struct ManagedServer<'a> {
     pub args: &'a [String],
 }
 
-/// The rule files of the CLIs Facade starts, by name, in the order `facade` lists them.
+/// The rule files of the CLIs Facade Code Framework starts, by name, in the order `facade` lists them.
 const FILES: [(&str, &str); 12] = [
     ("claude", include_str!("../../../rules/claude.json")),
     ("codex", include_str!("../../../rules/codex.json")),
@@ -105,29 +105,29 @@ pub struct Rule {
     /// What every command line of the CLI adds.
     #[serde(default)]
     pub launch: CommandLineRule,
-    /// How the CLI reads its arguments, and which of them Facade sets or decides itself: what an
+    /// How the CLI reads its arguments, and which of them Facade Code Framework sets or decides itself: what an
     /// entry's `args` cannot hold (CLIS-3.1).
     pub arguments: args::ArgsGrammar,
     /// The arguments that give the CLI a model and an effort (CLIS-1.4). A CLI that names none
-    /// takes neither from Facade.
+    /// takes neither from Facade Code Framework.
     #[serde(default)]
     pub choices: Choices,
     pub input: InputRule,
     #[serde(default)]
     pub paste: PasteRule,
     pub session: SessionRule,
-    /// How Facade reads the CLI's state from its screen or a report's words.
+    /// How Facade Code Framework reads the CLI's state from its screen or a report's words.
     #[serde(default)]
     pub status: Option<StateRule>,
     /// The status glyph the CLI puts before its terminal title and leaves out when the terminal takes its reports.
     #[serde(default)]
     pub status_glyph: Option<StatusGlyph>,
-    /// What a run's start types so that the CLI starts Facade's tools before its first turn, for a
+    /// What a run's start types so that the CLI starts Facade Code Framework's tools before its first turn, for a
     /// CLI that starts a folder's servers only with its first turn or its panel of MCP servers
     /// (COLLABORATION-2.2).
     #[serde(default)]
     pub ready_tools: Option<ReadyTools>,
-    /// What the CLI's MCP client does that Facade's MCP server answers to.
+    /// What the CLI's MCP client does that Facade Code Framework's MCP server answers to.
     #[serde(default)]
     pub mcp: McpRule,
     /// The CLI's work options for YOLO and its startup options for agent starts with YOLO.
@@ -139,7 +139,7 @@ pub struct Rule {
     pub console: Option<ConsoleRule>,
 }
 
-/// What a CLI's MCP client does that Facade's MCP server answers to. It lives in the rule so that
+/// What a CLI's MCP client does that Facade Code Framework's MCP server answers to. It lives in the rule so that
 /// the MCP server names no CLI.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,7 +171,7 @@ pub struct ReadyTools {
     pub text: String,
     /// A line that shows `text` alone in the input.
     pub typed: Pattern,
-    /// A line that shows Facade's MCP server ready.
+    /// A line that shows Facade Code Framework's MCP server ready.
     pub ready: Pattern,
     /// A line that shows the panel open.
     pub opened: Pattern,
@@ -489,7 +489,7 @@ pub struct BoxInput {
     pub menus: Vec<Menu>,
 }
 
-/// How Facade reads the CLI's state from its screen or a report's words.
+/// How Facade Code Framework reads the CLI's state from its screen or a report's words.
 /// Screen patterns match a whole logical line (the rows a soft wrap joins), without its trailing spaces.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
@@ -764,7 +764,7 @@ impl Rule {
                     command_line::check_resume(resume)
                 } else {
                     Err(format!(
-                        "Facade cannot have {} report its session",
+                        "Facade Code Framework cannot have {} report its session",
                         self.cli
                     ))
                 }
@@ -773,14 +773,14 @@ impl Rule {
     }
 
     /// The arguments that resume `session`, its ID filled in as literal text. None for a CLI whose
-    /// sessions Facade does not resume.
+    /// sessions Facade Code Framework does not resume.
     pub fn resume_args(&self, session: &str) -> Option<Vec<String>> {
         let resume = self.session.resume.as_ref()?;
         Some(command_line::resume_args(resume, session))
     }
 
-    /// Takes out of `env`, the environment a run of this CLI started with, what Facade added to
-    /// wire it: its session-start hook and Facade's tools. What the person set stays, so an agent
+    /// Takes out of `env`, the environment a run of this CLI started with, what Facade Code Framework added to
+    /// wire it: its session-start hook and Facade Code Framework's tools. What the person set stays, so an agent
     /// this run starts gets the person's environment without this run's wiring.
     pub fn remove_wiring_environment(&self, env: &mut BTreeMap<String, String>) {
         wiring::remove_wiring_environment(&self.cli, env);
@@ -794,7 +794,7 @@ fn is_cli_name(cli: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// An argument Facade passes as it is: no NUL, and nothing to fill in.
+/// An argument Facade Code Framework passes as it is: no NUL, and nothing to fill in.
 fn is_literal(arg: &str) -> bool {
     !arg.contains('\0') && !arg.contains("${")
 }
@@ -1584,7 +1584,7 @@ mod tests {
             .replacen("\"cli\": \"agy\"", "\"cli\": \"twin\"", 1);
         assert!(
             refusal("twin", &twin).contains("cannot have twin report its session"),
-            "only CLIs Facade can have report their session capture it"
+            "only CLIs Facade Code Framework can have report their session capture it"
         );
     }
 
@@ -1612,7 +1612,7 @@ mod tests {
         );
     }
 
-    /// What each CLI's MCP client does that Facade's server answers to: where a tool call names its
+    /// What each CLI's MCP client does that Facade Code Framework's server answers to: where a tool call names its
     /// session and which managed runs get their instructions through a hook or extension.
     #[test]
     fn each_cli_s_rule_says_what_its_mcp_client_does() {

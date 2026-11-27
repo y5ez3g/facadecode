@@ -452,7 +452,7 @@ fn npm_native_shim(text: &str) -> Option<&str> {
     ends.then_some(program)
 }
 
-// Facade's installed programs.
+// Facade Code Framework's installed programs.
 
 pub(super) fn check_conpty(source: &Path) -> anyhow::Result<()> {
     for name in ["conpty.dll", "OpenConsole.exe"] {

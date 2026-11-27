@@ -1,9 +1,9 @@
-//! How each CLI reports a run's session to Facade: Claude Code through a session-start hook in
+//! How each CLI reports a run's session to Facade Code Framework: Claude Code through a session-start hook in
 //! `--settings`, Codex through one in a `-c hooks=` override, Muse Code through one in its
 //! `-c hooks=` beside its tools' hooks, Antigravity through the title command of its `--settings`,
 //! OpenCode through a plugin of the run's in its CLI configuration, Pi through an extension of the
 //! run's, given with `-e`, and the test CLI through its environment. Settings the person passed are
-//! merged with Facade's and taken out of the person's words; settings Facade cannot read are left
+//! merged with Facade Code Framework's and taken out of the person's words; settings Facade Code Framework cannot read are left
 //! as they are, and the run then reports no session.
 
 use std::collections::BTreeMap;
@@ -80,7 +80,7 @@ const PI_EXTENSION: &str = "facade-session.mjs";
 /// Has `rule`'s CLI report its session as `session` says, with what `wiring` gives the tools: its
 /// settings added to Claude Code's run settings.
 /// `words` are the person's, `environment` the CLI's own. None for a CLI that reports none this way,
-/// and where the person's own settings that Facade adds to cannot be read.
+/// and where the person's own settings that Facade Code Framework adds to cannot be read.
 pub(crate) fn install_hook(
     rule: &Rule,
     words: &[String],
@@ -153,7 +153,7 @@ pub(super) fn unhook(cli: &str, env: &mut BTreeMap<String, String>) {
 }
 
 /// Claude Code takes one `--settings` JSON value, whose hooks run beside those of the person's
-/// settings files. A `--settings` of the person's own, given as a JSON object, gets Facade's hook
+/// settings files. A `--settings` of the person's own, given as a JSON object, gets Facade Code Framework's hook
 /// added to its `SessionStart` groups, and `extra`, what the tools and YOLO add, merged in.
 fn claude_settings(
     grammar: &ArgsGrammar,
@@ -194,7 +194,7 @@ fn claude_settings(
 
 /// Codex reads `-c hooks=...` and `-c hooks.<key>=...` overrides into one layer, and trusts a hook
 /// in it only where the layer's `state` holds the SHA-256 of the hook's definition at its group's
-/// place. The person's hook overrides are merged into one `hooks` table with Facade's group added
+/// place. The person's hook overrides are merged into one `hooks` table with Facade Code Framework's group added
 /// last to `SessionStart`, and its trust recorded, so every other hook keeps its own.
 fn codex_hooks(
     grammar: &ArgsGrammar,
@@ -268,7 +268,7 @@ fn codex_hooks(
 }
 
 /// Sets `value` at a dotted `path` in `table`, replacing anything on the way that is not a table.
-/// None for a path with quotes or an empty key, which Facade does not read.
+/// None for a path with quotes or an empty key, which Facade Code Framework does not read.
 fn set_path(table: &mut toml::Table, path: &str, value: toml::Value) -> Option<()> {
     let keys: Vec<&str> = path.split('.').map(str::trim).collect();
     if keys
@@ -295,7 +295,7 @@ fn set_path(table: &mut toml::Table, path: &str, value: toml::Value) -> Option<(
 /// person's own configuration names come along, and the run's goes last: from their
 /// `OPENCODE_CLI_CONFIG_CONTENT`, else from their `cli.json`, else from the `tui.json` that came
 /// before it. The same overlay turns off tabs that would show other runs' sessions. A configuration
-/// Facade cannot read stays as it is, and the run reports no session.
+/// Facade Code Framework cannot read stays as it is, and the run reports no session.
 fn opencode_plugin(
     words: &[String],
     session: &SessionReport,
@@ -397,7 +397,7 @@ fn legacy_plugins(legacy: &Value) -> Option<Vec<Value>> {
 /// has a message. A session it cannot name is no session.
 fn pi_extension(file: &Path) -> String {
     format!(
-        r#"// Facade Code: reports this run's Pi session to Facade
+        r#"// Facade Code Framework: reports this run's Pi session to Facade Code Framework
 import fs from 'node:fs';
 import path from 'node:path';
 const file = {file};
@@ -428,7 +428,7 @@ export default function (pi) {{
 /// makes it.
 fn opencode_plugin_text(file: &Path) -> String {
     format!(
-        r#"// Facade Code: reports this run's OpenCode session to Facade
+        r#"// Facade Code Framework: reports this run's OpenCode session to Facade Code Framework
 import fs from 'node:fs';
 import path from 'node:path';
 const file = {file};

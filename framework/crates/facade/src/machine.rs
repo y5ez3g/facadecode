@@ -440,7 +440,7 @@ fn bootstrap_ssh(
                 .into()
             } else {
                 anyhow::Error::new(error).context(format!(
-                    "invalid Facade bootstrap report from {}",
+                    "invalid Facade Code Framework bootstrap report from {}",
                     display_name(destination)
                 ))
             }
@@ -496,7 +496,7 @@ fn bootstrap_ssh(
             return match bootstrap {
                 Bootstrap::Admin(_) => Err(HelperUnavailable(destination).into()),
                 _ => Err(anyhow::anyhow!(
-                    "The installed Facade on {destination} cannot open this verified connection. Update Facade there and try again."
+                    "The installed Facade Code Framework on {destination} cannot open this verified connection. Update Facade Code Framework there and try again."
                 )),
             };
         }
@@ -504,7 +504,7 @@ fn bootstrap_ssh(
             session.finish(true)?;
             let destination = display_name(destination);
             anyhow::bail!(
-                "Facade on {destination} is newer than local build {build}. Upgrade local Facade and retry."
+                "Facade Code Framework on {destination} is newer than local build {build}. Upgrade local Facade Code Framework and retry."
             );
         }
     };
@@ -527,7 +527,7 @@ fn bootstrap_ssh(
         }
         Ok(Some(_)) => {
             session.finish(true)?;
-            "Expected the remote Facade bootstrap to report ready.".into()
+            "Expected the remote Facade Code Framework bootstrap to report ready.".into()
         }
         Ok(None) => {
             let (status, stderr) = session.finish(false)?;
@@ -548,13 +548,13 @@ fn bootstrap_ssh(
     if action == BootstrapAction::Install {
         let command = ssh::remote_install_command(shell.system(), build, &home)?;
         Err(anyhow::anyhow!(
-            "Could not install Facade {build} on {destination}.\n{reason}\n\
-             To install Facade {build} manually on {destination}, run:\n{command}\n\
+            "Could not install Facade Code Framework {build} on {destination}.\n{reason}\n\
+             To install Facade Code Framework {build} manually on {destination}, run:\n{command}\n\
              For offline installation, use the matching release archive and SHA256SUMS with the installer's package option."
         ))
     } else {
         Err(anyhow::anyhow!(
-            "Could not start Facade on {destination}: {reason}"
+            "Could not start Facade Code Framework on {destination}: {reason}"
         ))
     }
 }
@@ -589,7 +589,7 @@ fn read_bootstrap_line(source: &mut impl BufRead) -> anyhow::Result<Option<Vec<u
     }
     anyhow::ensure!(
         bytes <= MAX_LINE_BYTES && line.ends_with(b"\n"),
-        "expected a complete remote Facade bootstrap line"
+        "expected a complete remote Facade Code Framework bootstrap line"
     );
     line.pop();
     if line.ends_with(b"\r") {
@@ -859,7 +859,7 @@ fn relay_machine(
         if let Some(expected) = &expected_machine_id {
             anyhow::ensure!(
                 authorized.expected_machine_id.as_ref() == Some(expected),
-                "the Orchestrator did not confirm the expected machine ID"
+                "Facade Code Framework did not confirm the expected machine ID"
             );
         }
         let MachineTransport::Ssh(transport) = authorized.transport else {
@@ -986,7 +986,7 @@ impl SshDiagnostics {
         if !self.last.is_empty() {
             self.last
         } else if status.success() {
-            "SSH closed before Facade connected.".into()
+            "SSH closed before Facade Code Framework connected.".into()
         } else {
             errors::ssh_exit(status.code())
         }
@@ -1037,7 +1037,7 @@ impl std::fmt::Display for HelperUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} does not support SSH administration. Update Facade on {} and try again.",
+            "{} does not support SSH administration. Update Facade Code Framework on {} and try again.",
             self.0, self.0
         )
     }

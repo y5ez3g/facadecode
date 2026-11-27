@@ -291,7 +291,8 @@ fn commands_start_list_read_and_stop_agents() {
         "{table:?}"
     );
     assert!(
-        home.screen("w1").contains("fakecli (Facade test CLI)"),
+        home.screen("w1")
+            .contains("fakecli (Facade Code Framework test CLI)"),
         "{}",
         home.screen("w1")
     );
@@ -314,10 +315,8 @@ fn commands_start_list_read_and_stop_agents() {
     );
     let inspected = home.run_facade_ok(&["status", "w1"]);
     assert!(
-        inspected
-            .lines()
-            .any(|line| line.starts_with("State ")
-                && line[5..].trim() == "Ended (stopped by Facade)"),
+        inspected.lines().any(|line| line.starts_with("State ")
+            && line[5..].trim() == "Ended (stopped by Facade Code Framework)"),
         "{inspected}"
     );
     assert!(home.agent_from_watch("w2").expect("w2 is recorded")["process"] == "running");
@@ -427,7 +426,8 @@ fn commands_resolve_agent_ids_numbers_and_names() {
     // An ID, a copyable address or a name. Anything not `a` and a number is a name.
     for reference in ["a1", address.as_str(), "w1"] {
         assert!(
-            home.screen(reference).contains("fakecli (Facade test CLI)"),
+            home.screen(reference)
+                .contains("fakecli (Facade Code Framework test CLI)"),
             "{reference}: {}",
             home.screen(reference)
         );
@@ -501,7 +501,7 @@ fn no_real_cli_can_start_in_a_test() {
     );
     // What each agent finds and is given, written in the project: through sh on Unix; through
     // cmd.exe on Windows, where Git's sh would show its own forms of the paths.
-    // Each is a custom program of the test's settings: Facade starts only the CLIs they list.
+    // Each is a custom program of the test's settings: Facade Code Framework starts only the CLIs they list.
     #[cfg(unix)]
     let cli = home.shell_cli();
     #[cfg(windows)]
@@ -612,7 +612,7 @@ fn command_of(pid: i32) -> String {
     String::from_utf8_lossy(&ps.stdout).trim().to_string()
 }
 
-/// A command starts Facade from its build's folder, `framework/bin/<build>/`, where it installs its
+/// A command starts Facade Code Framework from its build's folder, `framework/bin/<build>/`, where it installs its
 /// programs first, and the launchers `framework/bin/facade` and `framework/bin/facade-mcp` point at them. A
 /// run's CLI is given the launchers for its MCP server and its hooks, so the current build's
 /// programs serve it, whichever that is.
@@ -693,7 +693,7 @@ fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
     );
 }
 
-/// Facade's programs and launchers that the person deletes while the daemon runs are put back
+/// Facade Code Framework's programs and launchers that the person deletes while the daemon runs are put back
 /// before a start names them, so the start's CLI gets its tools.
 // Windows refuses to delete a program while it runs, so the person cannot delete them there.
 #[cfg(unix)]
@@ -816,7 +816,7 @@ fn an_equal_build_leaves_the_live_programs_keeper_and_cli_in_place() {
     );
 }
 
-/// Facade started from a copy of its programs, as a release build is, runs from copies in its
+/// Facade Code Framework started from a copy of its programs, as a release build is, runs from copies in its
 /// build's folder that only this user can use: a daemon `--detach` starts, and the keeper that a
 /// daemon started as the copy starts. Once that copy is gone, a run's hook still writes its
 /// session, a new run's server starts through its launcher, and the keeper starts a killed daemon

@@ -38,7 +38,7 @@ pub(crate) struct Kept {
     just_done: bool,
     #[serde(default)]
     counts_turns: bool,
-    /// Whether Facade stopped the run.
+    /// Whether Facade Code Framework stopped the run.
     #[serde(default)]
     pub(crate) stopped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,7 +74,7 @@ pub(crate) struct StateReading {
     pub(crate) state: ManagedAgentState,
     /// Evidence or reason accompanying that state.
     pub(crate) detail: Option<StateDetail>,
-    /// Whether the CLI can use Facade's tools.
+    /// Whether the CLI can use Facade Code Framework's tools.
     pub(crate) tools: ToolsState,
     /// Why tools are unavailable.
     pub(crate) tools_reason: Option<ToolsReason>,
@@ -207,7 +207,7 @@ impl StateTracker {
         *self = Self::new(self.rule, started, facts, None, None);
     }
 
-    /// Records an exit and whether Facade requested the stop.
+    /// Records an exit and whether Facade Code Framework requested the stop.
     pub(crate) fn ended(&mut self, exit: &ProcessExit, stopped: bool) {
         self.saved.stopped = stopped;
         let how = if stopped {
@@ -339,7 +339,7 @@ impl StateTracker {
         self.started
     }
 
-    /// How this run received Facade's tools.
+    /// How this run received Facade Code Framework's tools.
     pub(crate) fn tools_given(&self) -> ToolsGiven {
         self.saved.tools
     }
@@ -1068,8 +1068,8 @@ mod tests {
         assert_eq!(reason(&mut muse), Some(StateReason::Unrecognized));
     }
 
-    /// A run given Facade's tools starts until its CLI shows what it does and its server connects.
-    /// Tools that do not connect within the start's bound, that its rule gives but Facade could
+    /// A run given Facade Code Framework's tools starts until its CLI shows what it does and its server connects.
+    /// Tools that do not connect within the start's bound, that its rule gives but Facade Code Framework could
     /// not, or whose server's connection closes make it an error, though a CLI waiting for the
     /// person shows that first. A run not given them is as before.
     #[test]

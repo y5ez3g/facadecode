@@ -1,4 +1,4 @@
-//! The runs: each CLI run Facade starts, from its start or resume until it ends and its exit is
+//! The runs: each CLI run Facade Code Framework starts, from its start or resume until it ends and its exit is
 //! saved.
 //!
 //! Two parts do the work, and this file joins them:
@@ -6,7 +6,7 @@
 //! - the keeper link talks to the keeper, which parents the CLIs; it keeps every run's terminal
 //!   and its first exit until the daemon has saved that exit;
 //! - the preparation composes a run's command line and environment, writes its run folder and
-//!   Facade's plugin, and follows the session the CLI reports.
+//!   Facade Code Framework's plugin, and follows the session the CLI reports.
 //!
 //! The daemon hears of exits and sessions through [`RunEvent`]; an agent's actor hears of its
 //! run's exit through the [`ExitSink`] given at launch.
@@ -55,7 +55,7 @@ pub(crate) struct RunExit {
     /// The agent's number for the run that ended.
     pub(crate) run: u64,
     pub(crate) exit: ProcessExit,
-    /// Facade stopped the run.
+    /// Facade Code Framework stopped the run.
     pub(crate) stopped: bool,
     pub(crate) stopped_by: Option<AgentRef>,
 }
@@ -96,7 +96,7 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) program: Option<&'a str>,
     /// The program a start without a rule runs where the entry names none.
     pub(crate) plain_program: &'a str,
-    /// The environment the settings give the CLI; Facade's variables go on top.
+    /// The environment the settings give the CLI; Facade Code Framework's variables go on top.
     pub(crate) inherited: BTreeMap<String, String>,
     pub(crate) cwd: &'a str,
     pub(crate) policy: LaunchPolicy<'a>,
@@ -117,7 +117,7 @@ pub(crate) struct PreparedRun {
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,
     pub(crate) tools: ToolsGiven,
-    /// Facade's plugin in the folder the CLI starts in, held until the agent is listed.
+    /// Facade Code Framework's plugin in the folder the CLI starts in, held until the agent is listed.
     pub(crate) plugin: Option<PluginHold>,
     /// The run's folder and what goes in it.
     pub(crate) files: RunFiles,
@@ -376,7 +376,7 @@ impl Runs {
         released
     }
 
-    /// Lets go of agent `id`'s run once its exit is saved and its output drained, and of Facade's
+    /// Lets go of agent `id`'s run once its exit is saved and its output drained, and of Facade Code Framework's
     /// plugin where it was the last run to use it.
     pub(crate) fn release(&self, id: &str) {
         // Retire the exited run's workspace profile before the keeper path releases a resume.
@@ -522,7 +522,7 @@ impl Runs {
         self.preparation.delete_folders_without_records(kept);
     }
 
-    /// After recovery: lets go of Facade's plugin in each folder no run uses any more. `agents` is
+    /// After recovery: lets go of Facade Code Framework's plugin in each folder no run uses any more. `agents` is
     /// each agent's rule and folder.
     pub(crate) fn let_go_of_unused_plugins(&self, agents: Vec<(String, PathBuf)>) {
         self.preparation.let_go_of_unused_plugins(agents);

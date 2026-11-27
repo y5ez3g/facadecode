@@ -208,7 +208,7 @@ impl TestHome {
             .unwrap_or_default();
         let n = HOMES.fetch_add(1, Ordering::Relaxed);
         // Its components again, so that a `TMPDIR` ending in `/` gives no `//` that the paths
-        // Facade reports would not contain.
+        // Facade Code Framework reports would not contain.
         let base = std::env::temp_dir()
             .components()
             .collect::<std::path::PathBuf>()
@@ -381,8 +381,8 @@ impl TestHome {
         loop {
             let output = run();
             let starting = [
-                "Orchestrator is still starting",
-                "the Orchestrator daemon did not start within",
+                "Facade Code Framework is still starting",
+                "the Facade Code Framework daemon did not start within",
             ]
             .iter()
             .any(|said| stderr(&output).contains(said));
@@ -397,15 +397,15 @@ impl TestHome {
         self.start_fake_with(name, &[])
     }
 
-    /// Starts a fake CLI agent with extra environment variables, such as `FAKECLI_NAME`. Facade
+    /// Starts a fake CLI agent with extra environment variables, such as `FAKECLI_NAME`. Facade Code Framework
     /// starts only the CLIs a machine's settings list, so it starts the test CLI by its rule.
     pub fn start_fake_with(&self, name: &str, env: &[(&str, &str)]) -> TestAgent {
         self.start_named_fake(name, env)
     }
 
     /// Lists `program` in this home's settings as the custom program `name`, keeping what the
-    /// settings file has. Facade starts only the CLIs a machine's settings list; a custom program
-    /// runs as it is, without a rule, Facade's tools or a session.
+    /// settings file has. Facade Code Framework starts only the CLIs a machine's settings list; a custom program
+    /// runs as it is, without a rule, Facade Code Framework's tools or a session.
     pub fn add_custom_cli(&self, name: &str, program: &Path) {
         self.add_custom_cli_with(name, program, &[]);
     }
@@ -414,7 +414,7 @@ impl TestHome {
     pub fn add_custom_cli_with(&self, name: &str, program: &Path, args: &[&str]) {
         let file = self.path.join("facade.json");
         let mut settings: Value = match std::fs::read_to_string(&file) {
-            // The commented template Facade writes where the file was missing sets nothing.
+            // The commented template Facade Code Framework writes where the file was missing sets nothing.
             Ok(text) if text == facade_base::settings::TEMPLATE => json!({}),
             Ok(text) => serde_json::from_str(&text).expect("the test's facade.json is JSON"),
             Err(_) => json!({}),

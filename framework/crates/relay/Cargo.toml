@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "facade-mcp, the relay that passes each MCP line between a CLI and the Facade daemon."
+description = "facade-mcp, the relay that passes each MCP line between a CLI and the Facade Code Framework daemon."
 
 [[bin]]
 name = "facade-mcp"

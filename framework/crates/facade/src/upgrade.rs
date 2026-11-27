@@ -51,7 +51,7 @@ fn up_to_date(current: &str, launcher: &Path) -> anyhow::Result<()> {
         present(
             launcher,
             &format!(
-                "Facade {} is already installed{}",
+                "Facade Code Framework {} is already installed{}",
                 facade_base::build_version(current),
                 build_note(current)
             ),
@@ -60,11 +60,11 @@ fn up_to_date(current: &str, launcher: &Path) -> anyhow::Result<()> {
     }
     if let Some(bin) = launcher.parent().filter(|_| launcher.is_file()) {
         println_or_end!(
-            "Facade {current} is already up to date in {}.",
+            "Facade Code Framework {current} is already up to date in {}.",
             bin.display()
         );
     } else {
-        println_or_end!("Facade {current} is already up to date.");
+        println_or_end!("Facade Code Framework {current} is already up to date.");
     }
     Ok(())
 }
@@ -89,7 +89,7 @@ fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::
         .env("FACADE_UPGRADE_ASSET_REPORT", "1")
         .stdin(Stdio::inherit())
         .output()
-        .context("Could not upgrade Facade. Could not start installer")?;
+        .context("Could not upgrade Facade Code Framework. Could not start installer")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut installed = None;
@@ -121,7 +121,7 @@ fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::
     if !output.status.success() {
         if refused {
             bail!(
-                "Could not upgrade Facade to {build}. The installer cannot verify the exact BUILD. {}",
+                "Could not upgrade Facade Code Framework to {build}. The installer cannot verify the exact BUILD. {}",
                 matching_package()
             );
         }
@@ -144,8 +144,8 @@ fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::
         eprintln!("{line}");
     }
     if output.status.success() {
-        let receipt =
-            installed.context("Could not upgrade Facade. Installer reported no result.")?;
+        let receipt = installed
+            .context("Could not upgrade Facade Code Framework. Installer reported no result.")?;
         match receipt_parts(receipt) {
             Some((installed, selected, bin)) if io::stdout().is_terminal() => {
                 let launcher = Path::new(bin).join(if cfg!(windows) {
@@ -157,7 +157,7 @@ fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::
                     updated(previous, selected)
                 } else {
                     format!(
-                        "Facade {} is already installed{}",
+                        "Facade Code Framework {} is already installed{}",
                         facade_base::build_version(selected),
                         build_note(selected)
                     )
@@ -169,13 +169,15 @@ fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::
         return Ok(());
     }
     if let Some((asset, None)) = asset_error {
-        bail!("Could not upgrade Facade to {version}: Could not download {asset}.");
+        bail!("Could not upgrade Facade Code Framework to {version}: Could not download {asset}.");
     }
     if let Some(status) = download_error {
         if http_status(status).is_some() {
-            bail!("Could not upgrade Facade. Could not download installer (HTTP {status}).");
+            bail!(
+                "Could not upgrade Facade Code Framework. Could not download installer (HTTP {status})."
+            );
         }
-        bail!("Could not upgrade Facade. Could not download installer.");
+        bail!("Could not upgrade Facade Code Framework. Could not download installer.");
     }
     if !blockers.is_empty() {
         let agents = blockers
@@ -189,10 +191,12 @@ fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::
             })
             .collect::<Vec<_>>()
             .join(", ");
-        bail!("Could not upgrade Facade. Stop incompatible running agents first: {agents}.");
+        bail!(
+            "Could not upgrade Facade Code Framework. Stop incompatible running agents first: {agents}."
+        );
     }
     bail!(
-        "Could not upgrade Facade. Installer failed ({}).",
+        "Could not upgrade Facade Code Framework. Installer failed ({}).",
         output.status
     );
 }
@@ -206,7 +210,7 @@ fn http_status(status: &str) -> Option<u16> {
 }
 
 fn asset_http_error(version: &str, asset: &str, status: u16) -> anyhow::Error {
-    anyhow!("Could not upgrade Facade to {version}: {asset} returned HTTP {status}.")
+    anyhow!("Could not upgrade Facade Code Framework to {version}: {asset} returned HTTP {status}.")
 }
 
 fn is_install_receipt(line: &str) -> bool {
@@ -216,14 +220,14 @@ fn is_install_receipt(line: &str) -> bool {
 /// The installer's receipt: whether it installed, the BUILD the home selects and its program folder.
 fn receipt_parts(line: &str) -> Option<(bool, &str, &str)> {
     let line = line.strip_suffix('.')?;
-    let (installed, (build, bin)) = match line.strip_prefix("Installed Facade ") {
-        Some(rest) => (true, rest.split_once(" in ")?),
-        None => (
-            false,
-            line.strip_prefix("Facade ")?
-                .split_once(" is already up to date in ")?,
-        ),
+    let (installed, receipt, separator) = match line.strip_prefix("Installed ") {
+        Some(rest) => (true, rest, " in "),
+        None => (false, line, " is already up to date in "),
     };
+    let (build, bin) = receipt
+        .strip_prefix("Facade Code Framework ")
+        .or_else(|| receipt.strip_prefix("Facade "))?
+        .split_once(separator)?;
     (facade_base::compare_builds(build, build).is_some() && !bin.is_empty())
         .then_some((installed, build, bin))
 }
@@ -245,20 +249,23 @@ fn present(launcher: &Path, headline: &str) {
     }
 }
 
-/// `Facade updated 0.1.5 → 0.1.6 (build e13e14f)`, or for the same version, its two builds.
+/// `Facade Code Framework updated 0.1.5 → 0.1.6 (build e13e14f)`, or for the same version, its two builds.
 fn updated(previous: Option<&str>, selected: &str) -> String {
     let version = facade_base::build_version(selected);
     let arrow = marks().1;
     match previous.map(|previous| (previous, facade_base::build_version(previous))) {
-        None => format!("Facade {version} installed{}", build_note(selected)),
+        None => format!(
+            "Facade Code Framework {version} installed{}",
+            build_note(selected)
+        ),
         Some((_, before)) if before != version => {
             format!(
-                "Facade updated {before} {arrow} {version}{}",
+                "Facade Code Framework updated {before} {arrow} {version}{}",
                 build_note(selected)
             )
         }
         Some((previous, _)) => format!(
-            "Facade {version} updated (build {} {arrow} {})",
+            "Facade Code Framework {version} updated (build {} {arrow} {})",
             short_build(previous),
             short_build(selected)
         ),
@@ -291,23 +298,32 @@ mod tests {
     #[test]
     fn a_person_reads_which_version_and_build_the_upgrade_selected() {
         let arrow = marks().1;
-        assert_eq!(updated(None, NEW), "Facade 0.1.6 installed (build e13e14f)");
+        assert_eq!(
+            updated(None, NEW),
+            "Facade Code Framework 0.1.6 installed (build e13e14f)"
+        );
         assert_eq!(
             updated(Some("0.1.5+1795000000.aaaaaaa1111"), NEW),
-            format!("Facade updated 0.1.5 {arrow} 0.1.6 (build e13e14f)")
+            format!("Facade Code Framework updated 0.1.5 {arrow} 0.1.6 (build e13e14f)")
         );
         assert_eq!(
             updated(
                 Some("0.1.6+1795524945.af9bb4b8c35ab61974e71bd9a2b515a4dc5c25bd"),
                 NEW
             ),
-            format!("Facade 0.1.6 updated (build af9bb4b {arrow} e13e14f)")
+            format!("Facade Code Framework 0.1.6 updated (build af9bb4b {arrow} e13e14f)")
         );
         assert_eq!(build_note("0.1.6"), "");
-        let receipt = format!("Installed Facade {NEW} in /home/a/.facade/framework/bin.");
-        assert_eq!(
-            receipt_parts(&receipt),
-            Some((true, NEW, "/home/a/.facade/framework/bin"))
-        );
+        let bin = "/home/a/.facade/framework/bin";
+        for product in ["Facade Code Framework", "Facade"] {
+            assert_eq!(
+                receipt_parts(&format!("Installed {product} {NEW} in {bin}.")),
+                Some((true, NEW, bin))
+            );
+            assert_eq!(
+                receipt_parts(&format!("{product} {NEW} is already up to date in {bin}.")),
+                Some((false, NEW, bin))
+            );
+        }
     }
 }

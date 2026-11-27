@@ -51,7 +51,7 @@ esac
 case "$(uname -m)" in
     x86_64|amd64) arch=x64 ;;
     aarch64|arm64) arch=arm64 ;;
-    *) fail 'Facade is available for x64 and arm64.' ;;
+    *) fail 'Facade Code Framework is available for x64 and arm64.' ;;
 esac
 
 releases=https://github.com/y5ez3g/facadecode/releases
@@ -96,7 +96,7 @@ fail_download() {
     fail "$@"
 }
 [ -z "$version" ] || valid_version "$version" || fail 'Use a release version such as 0.1.6.'
-[ -z "$expected_build" ] || valid_build "$expected_build" || fail 'Use a valid Facade BUILD for --expected-build.'
+[ -z "$expected_build" ] || valid_build "$expected_build" || fail 'Use a valid Facade Code Framework BUILD for --expected-build.'
 
 bin="${root%/}/framework/bin"
 temp=$(cd -P -- "${TMPDIR:-/tmp}" && pwd -P) || fail 'Could not open the temporary directory.'
@@ -110,7 +110,7 @@ trap 'rm -rf -- "${temp:?}/${work_name:?}"' 0
 trap 'exit 1' HUP INT TERM
 
 if [ -n "$package" ]; then
-    "$for_person" && printf 'Installing Facade from %s...\n' "$package"
+    "$for_person" && printf 'Installing Facade Code Framework from %s...\n' "$package"
     cp -- "$package" "$work/$asset"
     cp -- "$(dirname -- "$package")/SHA256SUMS" "$work/SHA256SUMS"
 else
@@ -118,15 +118,15 @@ else
         version_file="$work/latest-version"
         download "$releases/latest/download/facade-framework-version.txt" "$version_file" ||
             download "$mirror/facade-framework-version.txt" "$version_file" ||
-            fail_download 'Could not download the stable Facade version from GitHub or facadecode.com.'
+            fail_download 'Could not download the stable Facade Code Framework version from GitHub or facadecode.com.'
         latest_build=$(read_build "$version_file") && valid_build "$latest_build" ||
             fail 'The stable release did not provide a valid BUILD.'
         version=${latest_build%%+*}
     fi
-    "$for_person" && printf 'Installing Facade %s for %s (%s)...\n' "$version" "$system" "$arch"
+    "$for_person" && printf 'Installing Facade Code Framework %s for %s (%s)...\n' "$version" "$system" "$arch"
     if ! download_package "$releases/download/extension%2F$version" &&
         ! download_package "$mirror/releases/$version"; then
-        message="Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
+        message="Could not download $asset and its checksums for Facade Code Framework $version from GitHub or facadecode.com."
         if [ -n "${expected_build:-$latest_build}" ]; then
             message="$message Supply the matching release archive with --package."
         fi
@@ -152,15 +152,15 @@ tar -xzf "$work/$asset" -C "$stage"
 build=$(read_build "$stage/VERSION") && valid_build "$build" || fail 'The package did not provide a valid BUILD.'
 pin=${expected_build:-$latest_build}
 [ -z "$pin" ] || [ "$build" = "$pin" ] ||
-    fail "Expected Facade build $pin, found $build in the package. Supply the matching release archive with --package."
-[ -z "$version" ] || [ "${build%%+*}" = "$version" ] || fail "Expected Facade $version, found $build in the package."
+    fail "Expected Facade Code Framework build $pin, found $build in the package. Supply the matching release archive with --package."
+[ -z "$version" ] || [ "${build%%+*}" = "$version" ] || fail "Expected Facade Code Framework $version, found $build in the package."
 for program in facade facade-mcp; do
     [ -f "$stage/$program" ] || fail "The package has no $program."
     chmod 755 "$stage/$program"
 done
 
 reported=$("$stage/facade" --version) && [ "$reported" = "facade $build" ] ||
-    fail "The packaged executable does not report Facade build $build. Supply the matching release archive with --package."
+    fail "The packaged executable does not report Facade Code Framework build $build. Supply the matching release archive with --package."
 
 before=
 if [ -x "$bin/facade" ]; then
@@ -170,7 +170,7 @@ FACADE_HOME="$root" "$stage/facade" daemon "$mode"
 reported=$(FACADE_HOME="$root" "$bin/facade" --version)
 selected=${reported#facade }
 [ "$reported" = "facade $selected" ] && valid_build "$selected" ||
-    fail 'The home launcher did not report a valid Facade BUILD.'
+    fail 'The home launcher did not report a valid Facade Code Framework BUILD.'
 
 # `~/…` for a path in the home folder.
 shown() {
@@ -190,7 +190,7 @@ if [ "$reported" = "$before" ] || [ "$selected" != "$build" ]; then
         printf '\n%s✔%s %sFacade %s is already installed%s%s\n' "$green" "$plain" "$bold" "${selected%%+*}" "$plain" "$(build_note "$selected")"
         printf '  Location: %s\n' "$(shown "$bin/facade")"
     else
-        printf 'Facade %s is already up to date in %s.\n' "$selected" "$bin"
+        printf 'Facade Code Framework %s is already up to date in %s.\n' "$selected" "$bin"
     fi
     exit 0
 fi
@@ -310,19 +310,19 @@ PATH_SETUP
     esac
 fi
 if ! "$for_person"; then
-    printf 'Installed Facade %s in %s.\n' "$selected" "$bin"
+    printf 'Installed Facade Code Framework %s in %s.\n' "$selected" "$bin"
     exit 0
 fi
 
 before=${before#facade }
 if [ -z "$before" ]; then
-    headline="Facade ${selected%%+*} installed" note=$(build_note "$selected")
+    headline="Facade Code Framework ${selected%%+*} installed" note=$(build_note "$selected")
 elif [ "${before%%+*}" != "${selected%%+*}" ]; then
-    headline="Facade updated ${before%%+*} → ${selected%%+*}" note=$(build_note "$selected")
+    headline="Facade Code Framework updated ${before%%+*} → ${selected%%+*}" note=$(build_note "$selected")
 else
     old=${before#*+}
     new=${selected#*+}
-    headline="Facade ${selected%%+*} updated" note=$(printf ' (build %.7s → %.7s)' "${old##*.}" "${new##*.}")
+    headline="Facade Code Framework ${selected%%+*} updated" note=$(printf ' (build %.7s → %.7s)' "${old##*.}" "${new##*.}")
 fi
 printf '\n%s✔%s %s%s%s%s\n\n' "$green" "$plain" "$bold" "$headline" "$plain" "$note"
 printf '  Location: %s\n' "$(shown "$bin/facade")"

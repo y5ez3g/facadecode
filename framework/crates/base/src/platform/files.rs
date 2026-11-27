@@ -1,6 +1,6 @@
 //! Files and folders only this user may read, and how paths are compared.
 //!
-//! On Unix, private means mode 0600 for a file and 0700 for a folder. On Windows Facade sets no
+//! On Unix, private means mode 0600 for a file and 0700 for a folder. On Windows Facade Code Framework sets no
 //! access list: each file and folder inherits its folder's, and the default home is private through
 //! the user's profile.
 

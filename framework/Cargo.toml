@@ -9,7 +9,7 @@ members = [
 	"crates/daemon",
 	"crates/facade",
 	"tests",
-	# A member so that its own tests run with Facade's (vendor/README.md).
+	# A member so that its own tests run with Facade Code Framework's (vendor/README.md).
 	"vendor/alacritty_terminal",
 	"crates/screen",
 	"crates/rules",

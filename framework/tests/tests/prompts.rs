@@ -1,4 +1,4 @@
-//! Start prompts and Facade's results: a prompt kept with its agent and answered pending, delivered
+//! Start prompts and Facade Code Framework's results: a prompt kept with its agent and answered pending, delivered
 //! before other messages once the CLI's tools settle, and the result owed on failure, including
 //! across daemon restarts.
 
@@ -7,7 +7,7 @@ use std::process::{Child, Stdio};
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// Starts `boss`, a test CLI, and a Facade server acting for it, as boss's CLI runs one. Returns
+/// Starts `boss`, a test CLI, and a Facade Code Framework server acting for it, as boss's CLI runs one. Returns
 /// the server and boss's folder.
 fn boss(home: &TestHome) -> (McpTestClient, String) {
     home.start_named_fake("boss", &[]);
@@ -18,7 +18,7 @@ fn boss(home: &TestHome) -> (McpTestClient, String) {
     (McpTestClient::open(home, "a1"), cwd)
 }
 
-/// The machine part of the addresses Facade gives in this test's home.
+/// The machine part of the addresses Facade Code Framework gives in this test's home.
 fn host(home: &TestHome) -> String {
     let listed = home.agent_list();
     listed["agents"][0]["address"]
@@ -107,7 +107,7 @@ fn prompt(host: &str) -> String {
 /// The delivery facts in the result of a prompt the child ended before receiving.
 fn ended_result_prefix(host: &str) -> String {
     format!(
-        "🔔 child (a2@{host}) has started.\nIts Facade tools are unavailable: its CLI \
+        "🔔 child (a2@{host}) has started.\nIts Facade Code Framework tools are unavailable: its CLI \
          ended.\nYour prompt m1@{host} could not be delivered. Nothing was entered in the \
          terminal.\na2@{host} ended before the message was delivered."
     )
@@ -234,7 +234,7 @@ fn a_prompt_whose_agent_ends_first_gets_a_result_saying_so() {
 #[test]
 fn a_prompt_whose_agent_ends_before_its_tools_settle_fails_as_ended() {
     let home = TestHome::new("promptendedearly");
-    // The child takes boss's environment, so its CLI starts its Facade server a minute after its
+    // The child takes boss's environment, so its CLI starts its Facade Code Framework server a minute after its
     // own start.
     home.start_named_fake("boss", &[("FAKECLI_MCP_DELAY_MS", "60000")]);
     let host = host(&home);
@@ -326,7 +326,7 @@ fn a_guest_s_successful_start_prompt_leaves_its_waiting_read_empty() {
 #[test]
 fn a_guest_that_ends_before_its_start_s_prompt_is_settled_gets_no_result() {
     let home = TestHome::new("promptguestgone");
-    // The child takes the guest's environment, so its Facade server starts a minute after it, and
+    // The child takes the guest's environment, so its Facade Code Framework server starts a minute after it, and
     // its prompt is still waiting when the guest ends.
     let (mut guest, _) = guest(&home, &[("FAKECLI_MCP_DELAY_MS", "60000")]);
     start_from_the_guest(&home, &mut guest, "hello child");

@@ -1,8 +1,8 @@
 //! How each CLI reads its arguments, as its rule file's `arguments` describes it: options with
 //! their values, configuration overrides, arguments that are no option's, and the end of the
-//! options. Facade reads a settings entry's `args` this way (CONFIGURATION-3.1, CLIS-3.1): they may
-//! hold no option or configuration key Facade sets or decides itself, and no task, file or folder,
-//! which Facade gives the CLI itself. An entry of type `custom` has its arguments passed as they
+//! options. Facade Code Framework reads a settings entry's `args` this way (CONFIGURATION-3.1, CLIS-3.1): they may
+//! hold no option or configuration key Facade Code Framework sets or decides itself, and no task, file or folder,
+//! which Facade Code Framework gives the CLI itself. An entry of type `custom` has its arguments passed as they
 //! are.
 
 use serde::Deserialize;
@@ -12,9 +12,9 @@ use serde::Deserialize;
 ///
 /// | field | what it lists |
 /// |---|---|
-/// | `reserved` | the options Facade sets or decides itself, in all their spellings |
+/// | `reserved` | the options Facade Code Framework sets or decides itself, in all their spellings |
 /// | `attached` | reserved short options that take a value glued on, `-mgpt-5` |
-/// | `config` | override options such as Codex's `-c`, and the keys Facade owns |
+/// | `config` | override options such as Codex's `-c`, and the keys Facade Code Framework owns |
 /// | `variadic` | options that take values up to the next option, `--add-dir a b` |
 /// | `single_dash` | Go-style flags: `-mode` = `--mode`, `-p=true`; no short-option runs |
 /// | `clusters` | for CLIs that read `-cp` as `-c -p`: the letters that take a value |
@@ -44,7 +44,7 @@ fn equals_gives_a_value() -> bool {
     true
 }
 
-/// Override `options` (`-c`, `--config`) and the keys among them that are Facade's, `reserved`.
+/// Override `options` (`-c`, `--config`) and the keys among them that are Facade Code Framework's, `reserved`.
 /// A reserved key covers the keys above and below it: `mcp_servers={...}` sets
 /// `mcp_servers.facade`.
 #[derive(Debug, Deserialize)]
@@ -120,11 +120,11 @@ enum Written {
     Run,
 }
 
-/// An argument Facade refuses in an entry's `args`.
+/// An argument Facade Code Framework refuses in an entry's `args`.
 enum Refused {
-    /// An option Facade sets or decides itself, as the grammar names it, or `--`.
+    /// An option Facade Code Framework sets or decides itself, as the grammar names it, or `--`.
     Option { index: usize, option: String },
-    /// A configuration key Facade sets itself.
+    /// A configuration key Facade Code Framework sets itself.
     Key { index: usize, key: String },
     /// An argument that is no option's value.
     Positional { index: usize },
@@ -180,17 +180,19 @@ impl ArgsGrammar {
             Refused::Option { index, option } => (
                 index,
                 format!(
-                    "{setting}[{index}] is {option}, which Facade sets or decides itself; remove it"
+                    "{setting}[{index}] is {option}, which Facade Code Framework sets or decides itself; remove it"
                 ),
             ),
             Refused::Key { index, key } => (
                 index,
-                format!("{setting}[{index}] sets {key}, which Facade sets itself; remove it"),
+                format!(
+                    "{setting}[{index}] sets {key}, which Facade Code Framework sets itself; remove it"
+                ),
             ),
             Refused::Positional { index } => (
                 index,
                 format!(
-                    "{setting}[{index}] is not an option: Facade gives the CLI its task and folder \
+                    "{setting}[{index}] is not an option: Facade Code Framework gives the CLI its task and folder \
                      itself, so args holds only options and their values"
                 ),
             ),
@@ -198,8 +200,8 @@ impl ArgsGrammar {
         self.refused(args).into_iter().map(say).collect()
     }
 
-    /// The arguments Facade refuses, read as the CLI reads them. After `--` every argument is
-    /// refused, since Facade places the end of the options itself, before the task it gives.
+    /// The arguments Facade Code Framework refuses, read as the CLI reads them. After `--` every argument is
+    /// refused, since Facade Code Framework places the end of the options itself, before the task it gives.
     fn refused(&self, args: &[String]) -> Vec<Refused> {
         let reserved_key = |key: &str| {
             !key.is_empty()
@@ -429,7 +431,7 @@ impl ArgsGrammar {
             kind => (span, kind),
         };
         let Some((place, letter)) = valued else {
-            // No letter takes a value: the last may be one Facade does not know that takes one.
+            // No letter takes a value: the last may be one Facade Code Framework does not know that takes one.
             return as_run(self.read_apart(args, at, arg));
         };
         let short = format!("-{letter}");
@@ -610,7 +612,7 @@ mod tests {
             .collect()
     }
 
-    /// An option Facade sets or decides is refused in every spelling its CLI takes: alone with its
+    /// An option Facade Code Framework sets or decides is refused in every spelling its CLI takes: alone with its
     /// value, after `=`, a short one with its value attached, an alias (main's configuration tests,
     /// as all below).
     #[test]
@@ -687,7 +689,7 @@ mod tests {
         }
     }
 
-    /// An option that would leave a run without Facade's tools or session hooks, or decide its
+    /// An option that would leave a run without Facade Code Framework's tools or session hooks, or decide its
     /// approvals, is refused too.
     #[test]
     fn an_option_that_would_leave_a_run_without_facade_s_tools_or_decide_its_approvals_is_refused()
@@ -772,7 +774,7 @@ mod tests {
         ));
     }
 
-    /// A configuration override is refused where its key is one Facade sets, the parent of one or
+    /// A configuration override is refused where its key is one Facade Code Framework sets, the parent of one or
     /// below one - in either option and either spelling, its key quoted or not; another key is the
     /// person's.
     #[test]
@@ -827,7 +829,7 @@ mod tests {
     }
 
     /// An argument that is no option's value is a task, a file or a folder to the CLI, refused -
-    /// the end of the options, Facade's to place, and every one after it too; an option Facade does
+    /// the end of the options, Facade Code Framework's to place, and every one after it too; an option Facade Code Framework does
     /// not know takes the next argument as its value, and a list option every one up to the next
     /// option.
     #[test]
@@ -925,8 +927,8 @@ mod tests {
         assert_eq!(
             grammar.problems(&args, "clis.codex.args"),
             [
-                "clis.codex.args[0] sets model, which Facade sets itself; remove it",
-                "clis.codex.args[2] is not an option: Facade gives the CLI its task and folder \
+                "clis.codex.args[0] sets model, which Facade Code Framework sets itself; remove it",
+                "clis.codex.args[2] is not an option: Facade Code Framework gives the CLI its task and folder \
                  itself, so args holds only options and their values"
             ]
         );

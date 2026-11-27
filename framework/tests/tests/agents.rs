@@ -395,7 +395,7 @@ fn an_ended_cli_s_hangup_ignoring_descendant_runs_on_through_its_release_and_rem
             "{log}"
         );
     }
-    // This fixture owns the descendant and its FACADE_HOME; Facade deliberately left it alone.
+    // This fixture owns the descendant and its FACADE_HOME; Facade Code Framework deliberately left it alone.
     kill_process(pid);
     assert!(wait_until(secs(5), || !alive(&descendant)));
 }

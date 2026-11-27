@@ -31,7 +31,7 @@ fn inspected_agent(home: &TestHome, agent: &str) -> Value {
 }
 
 /// Codex runs its SessionStart command through its session's PowerShell shell on Windows.
-/// The command supplied by Facade must report the session at both start and resume.
+/// The command supplied by Facade Code Framework must report the session at both start and resume.
 #[cfg(windows)]
 #[test]
 fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
@@ -82,7 +82,7 @@ fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
     );
 }
 
-/// Starts a copy of the test CLI named `cli`, which runs the command Facade gives it to report its
+/// Starts a copy of the test CLI named `cli`, which runs the command Facade Code Framework gives it to report its
 /// session as that CLI does on Windows, and checks that the run's session is recorded.
 #[cfg(windows)]
 fn reports_session_through_cmd_quoted(cli: &str) {
@@ -115,7 +115,7 @@ fn reports_session_through_cmd_quoted(cli: &str) {
 }
 
 /// Muse Code runs its hooks on Windows as one argument of `cmd.exe /C`, quoted the standard way:
-/// Facade's session-start hook must still report the run's session.
+/// Facade Code Framework's session-start hook must still report the run's session.
 #[cfg(windows)]
 #[test]
 fn muse_code_s_session_start_hook_reports_the_session_through_cmd_s_standard_quoting() {
@@ -173,7 +173,7 @@ fn a_muse_code_run_outside_the_default_facade_home_records_its_session_and_resum
 }
 
 /// Antigravity runs its title command on Windows as one argument of `cmd.exe /C`, quoted the
-/// standard way: Facade's title command must still report the run's conversation.
+/// standard way: Facade Code Framework's title command must still report the run's conversation.
 #[cfg(windows)]
 #[test]
 fn antigravity_s_title_command_reports_the_session_through_cmd_s_standard_quoting() {
@@ -524,7 +524,7 @@ fn antigravity_s_title_command_writes_the_conversation_and_runs_the_person_s_own
     let input =
         format!(r#"{{"product":"antigravity","conversation_id":"{FIRST}","agent_state":"idle"}}"#);
     // The person's own command, for the shell Antigravity runs it with: sh, or on Windows cmd.exe.
-    // Facade adds no title hook on Windows for a command with a `"` in it, which cmd.exe could not
+    // Facade Code Framework adds no title hook on Windows for a command with a `"` in it, which cmd.exe could not
     // be given whole, so this one has none, and only Unix's keeps what it was given.
     #[cfg(unix)]
     let theirs = format!("cat > '{}'; printf 'my title'", forwarded.display());
@@ -1548,7 +1548,12 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
 #[test]
 fn claude_and_pi_show_current_native_names_through_resume() {
     for (cli, resume_flag, ended_state, status_state) in [
-        ("claude", "--resume", "Ended", "Ended (stopped by Facade)"),
+        (
+            "claude",
+            "--resume",
+            "Ended",
+            "Ended (stopped by Facade Code Framework)",
+        ),
         ("pi", "--session", "Ended", "Ended (code 0)"),
     ] {
         let home = TestHome::new("native-session-name");

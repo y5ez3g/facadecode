@@ -110,7 +110,7 @@ fn empty(size: Option<(u16, u16)>) -> Screen {
 }
 fn unreadable(id: &str, size: Option<(u16, u16)>, failure: io::Error) -> RecoveredScreen {
     warn(&format!(
-        "could not read the screen files of {id}: {failure}; its screen starts empty, and its output is not saved until Facade restarts"
+        "could not read the screen files of {id}: {failure}; its screen starts empty, and its output is not saved until Facade Code Framework restarts"
     ));
     RecoveredScreen {
         screen: empty(size),

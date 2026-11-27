@@ -1,4 +1,4 @@
-//! The text formats of the CLIs' own files and command lines, as Facade writes and reads them:
+//! The text formats of the CLIs' own files and command lines, as Facade Code Framework writes and reads them:
 //! JSON with comments, shell commands, TOML values, and settings merged with the person's.
 
 use facade_base::system::{SYSTEM, System};
@@ -76,7 +76,7 @@ pub(crate) fn encoded_powershell(script: &str) -> String {
     )
 }
 
-/// An argument of a Facade hook. Encoded PowerShell writes both kinds as literals.
+/// An argument of a Facade Code Framework hook. Encoded PowerShell writes both kinds as literals.
 pub(crate) enum HookArg<'a> {
     /// A fixed word written as-is in the POSIX and cmd.exe forms.
     Word(&'a str),
@@ -140,7 +140,7 @@ pub(crate) fn facade_hook<'a>(
     }
 }
 
-/// Reads the literal words of a Facade hook in POSIX or cmd.exe form. Each variable is one
+/// Reads the literal words of a Facade Code Framework hook in POSIX or cmd.exe form. Each variable is one
 /// `NAME=value` word, followed by the program and its arguments. Returns None for other shell
 /// syntax.
 pub(crate) fn shell_words(command: &str) -> Option<Vec<String>> {
@@ -151,7 +151,7 @@ pub(crate) fn shell_words(command: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The literal words of Facade's encoded PowerShell hooks, including their optional home.
+/// The literal words of Facade Code Framework's encoded PowerShell hooks, including their optional home.
 pub(crate) fn encoded_powershell_words(command: &str) -> Option<Vec<String>> {
     let encoded =
         command.strip_prefix("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")?;
@@ -238,7 +238,7 @@ fn posix_words(command: &str) -> Option<Vec<String>> {
     (!quoted && !escaped).then_some(words)
 }
 
-/// The words of a Facade cmd.exe hook: `set "NAME=value" && ` prefixes, then `@` and the
+/// The words of a Facade Code Framework cmd.exe hook: `set "NAME=value" && ` prefixes, then `@` and the
 /// program in quotes, then plain or quoted words.
 fn cmd_words(command: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
@@ -299,7 +299,7 @@ pub(crate) fn toml_string(text: &str) -> String {
     quoted
 }
 
-/// `value` as one inline TOML value. None for a date or time, which Facade does not carry over.
+/// `value` as one inline TOML value. None for a date or time, which Facade Code Framework does not carry over.
 pub(crate) fn inline_toml(value: &toml::Value) -> Option<String> {
     let text = match value {
         toml::Value::String(text) => toml_string(text),
@@ -323,7 +323,7 @@ pub(crate) fn inline_toml(value: &toml::Value) -> Option<String> {
     Some(text)
 }
 
-/// Merges `ours`, the settings Facade adds to a run, into `theirs`, the person's: an object key by
+/// Merges `ours`, the settings Facade Code Framework adds to a run, into `theirs`, the person's: an object key by
 /// key, a list with the items it lacks, and any other value of ours in place of theirs. A setting
 /// of theirs that is not an object or list where ours is stays as it is.
 pub(crate) fn merge_settings(theirs: &mut Value, ours: &Value) {

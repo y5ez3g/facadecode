@@ -1,4 +1,4 @@
-//! Stable Framework metadata and HTTP evidence for older installers.
+//! Stable Facade Code Framework metadata and HTTP evidence for older installers.
 
 use std::{cmp::Ordering, path::PathBuf};
 

@@ -2,7 +2,7 @@ Connect to a remote machine temporarily over SSH.
 
 Keeps the connection open while this command runs (press Ctrl+C to
 disconnect) without saving it. Runs SSH in this terminal and installs or
-upgrades Facade on the remote machine if needed. Put '--home' before SSH
+upgrades Facade Code Framework on the remote machine if needed. Put '--home' before SSH
 options and destination; everything after is passed to ssh.
 
 Usage: facade machine connect [--home <PATH>] <SSH_ARGS>...

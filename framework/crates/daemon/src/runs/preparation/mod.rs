@@ -232,7 +232,10 @@ impl Preparation {
                 facade_base::log::write(
                     "daemon",
                     "warn",
-                    &format!("#{}'s CLI was not given Facade's tools: {why}", request.id),
+                    &format!(
+                        "#{}'s CLI was not given Facade Code Framework's tools: {why}",
+                        request.id
+                    ),
                 );
                 ToolsGiven::NotGiven
             }

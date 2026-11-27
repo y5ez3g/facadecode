@@ -48,16 +48,16 @@ pub(super) fn tools(
     for file in files {
         if read_config(&file).is_some_and(|settings| configured(&settings)) {
             return Err(format!(
-                "{} names a {SERVER} server that is not Facade's",
+                "{} names a {SERVER} server that is not Facade Code Framework's",
                 file.display()
             ));
         }
     }
-    let mut settings =
-        flag_settings(rule, words, server.cwd).ok_or("Facade could not read Qoder's --settings")?;
+    let mut settings = flag_settings(rule, words, server.cwd)
+        .ok_or("Facade Code Framework could not read Qoder's --settings")?;
     if configured(&settings) {
         return Err(format!(
-            "its --settings names a {SERVER} server that is not Facade's"
+            "its --settings names a {SERVER} server that is not Facade Code Framework's"
         ));
     }
     event_hooks(&mut settings, "SessionStart")

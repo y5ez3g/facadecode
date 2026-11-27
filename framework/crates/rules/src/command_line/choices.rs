@@ -18,9 +18,9 @@ static VALUE: LazyLock<Regex> =
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Choices {
-    /// Passes the model, if the CLI accepts one from Facade.
+    /// Passes the model, if the CLI accepts one from Facade Code Framework.
     pub model: Option<Vec<String>>,
-    /// Passes the effort, if the CLI accepts one from Facade.
+    /// Passes the effort, if the CLI accepts one from Facade Code Framework.
     pub effort: Option<Vec<String>>,
     /// How to tell that the person's own words for the CLI already pick a model or an effort.
     pub spelling: Spelling,
@@ -72,7 +72,7 @@ impl Choices {
         ]
     }
 
-    /// Whether the CLI accepts `choice` (`model` or `effort`) from Facade.
+    /// Whether the CLI accepts `choice` (`model` or `effort`) from Facade Code Framework.
     pub fn takes(&self, choice: &str) -> bool {
         self.both()
             .iter()
@@ -180,7 +180,7 @@ mod tests {
 
     /// Each CLI takes a model and an effort in its own spelling (CLIS-1.4): Codex's effort as a
     /// TOML string, and Muse Code's as a JSON one with its list of efforts cleared for the run.
-    /// OpenCode takes neither from Facade.
+    /// OpenCode takes neither from Facade Code Framework.
     #[test]
     fn each_cli_takes_a_model_and_an_effort_in_its_own_spelling() {
         let args = |cli: &str, model: Option<&str>, effort: Option<&str>| {

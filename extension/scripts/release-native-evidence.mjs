@@ -37,9 +37,10 @@ function readTestLog(directory, check, expected, record) {
 }
 
 function verifyFrameworkInstall(lines, build, target) {
-	const installs = lines.filter(line => line.startsWith(`Installed Facade ${build} in `));
-	assert.equal(installs.length, 1, `${target}: missing or repeated successful Framework install`);
-	assert.equal(lines.at(-1), `facade ${build}`, `${target}: Framework install did not report the installed Shell BUILD`);
+	const installs = lines.filter(line => line.startsWith(`Installed Facade Code Framework ${build} in `)
+		|| line.startsWith(`Installed Facade ${build} in `));
+	assert.equal(installs.length, 1, `${target}: missing or repeated successful Facade Code Framework install`);
+	assert.equal(lines.at(-1), `facade ${build}`, `${target}: Facade Code Framework install did not report the installed Shell BUILD`);
 }
 
 function verifyEditorTest(lines, check, target, implementation) {

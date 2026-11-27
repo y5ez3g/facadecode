@@ -1,7 +1,7 @@
 //! A CLI in a pseudo console of its own, made through the ConPTY package's `conpty.dll`, which
-//! Facade ships beside its programs.
+//! Facade Code Framework ships beside its programs.
 //!
-//! The console reads its input from one named pipe and writes its output to another; Facade holds
+//! The console reads its input from one named pipe and writes its output to another; Facade Code Framework holds
 //! the other end of each, and the write end of the console's signal pipe, which keeps the console
 //! open while any copy of it is. The CLI starts suspended, joins a job of its own, then runs.
 
@@ -81,10 +81,14 @@ impl ConPty {
     pub(super) fn load() -> Result<ConPty, ErrorBody> {
         let folder = programs::bin_dir()
             .map(|bin| bin.join(facade_base::build_id()).join(CONPTY_FOLDER))
-            .map_err(|err| unavailable(format!("could not find Facade's programs: {err:#}")))?;
+            .map_err(|err| {
+                unavailable(format!(
+                    "could not find Facade Code Framework's programs: {err:#}"
+                ))
+            })?;
         let missing = |detail: String| {
             unavailable(format!(
-                "the console package in {} could not be loaded ({detail}); install Facade again \
+                "the console package in {} could not be loaded ({detail}); install Facade Code Framework again \
                  to put conpty.dll and OpenConsole.exe there",
                 folder.display()
             ))
@@ -375,7 +379,7 @@ enum Direction {
 }
 
 /// A new named pipe: the console's end, the server, synchronous as ConPTY takes it; and
-/// Facade's, the client, overlapped.
+/// Facade Code Framework's, the client, overlapped.
 fn pipe(access: &OwnerOnly, direction: Direction) -> io::Result<(OwnedHandle, OwnedHandle)> {
     let name = format!(
         r"\\.\pipe\facade-console-{}-{:016x}",

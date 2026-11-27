@@ -26,8 +26,8 @@ test('the published BUILD marker is committed by the release tag', t => {
 	const date = `${time} +0000`;
 	const env = {
 		...process.env, GIT_DIR: git,
-		GIT_AUTHOR_NAME: 'Facade QA', GIT_AUTHOR_EMAIL: 'qa@example.invalid', GIT_AUTHOR_DATE: date,
-		GIT_COMMITTER_NAME: 'Facade QA', GIT_COMMITTER_EMAIL: 'qa@example.invalid', GIT_COMMITTER_DATE: date,
+		GIT_AUTHOR_NAME: 'Facade Code Extension QA', GIT_AUTHOR_EMAIL: 'qa@example.invalid', GIT_AUTHOR_DATE: date,
+		GIT_COMMITTER_NAME: 'Facade Code Extension QA', GIT_COMMITTER_EMAIL: 'qa@example.invalid', GIT_COMMITTER_DATE: date,
 	};
 	const read = (...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', input: '' }).trim();
 	const tree = read('mktree');
@@ -415,7 +415,7 @@ function nativeReplay(fixture, implementation = 'framework') {
 			return { source, target, inputs, exitCode: 0, sha256: sha256(bytes) };
 		};
 		const install = log('framework-install', inputs(frameworkArchive(target), win ? 'install.ps1' : 'install.sh'), [
-			`Installed Facade ${build} in disposable-bin.`, `facade ${build}`,
+			`Installed Facade Code Framework ${build} in disposable-bin.`, `facade ${build}`,
 		]);
 		const pair = inputs(fileFor(version, target), fileFor(version, 'universal'));
 		const editorLog = check => log(check, pair, [

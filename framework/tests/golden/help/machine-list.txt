@@ -1,6 +1,6 @@
 List the local machine and known remote machines.
 
-Shows each machine's name, ID, connection state, Facade version, route,
+Shows each machine's name, ID, connection state, Facade Code Framework version, route,
 and whether its SSH connection is saved.
 
 Usage: facade machine list

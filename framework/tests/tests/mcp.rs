@@ -1,5 +1,5 @@
 //! `facade-mcp`, run as an agent's CLI runs it: its tools against a real daemon, the result
-//! envelope, and its own start and end. And how each CLI Facade starts is given the tools, and
+//! envelope, and its own start and end. And how each CLI Facade Code Framework starts is given the tools, and
 //! whether it can use them.
 
 use std::io::Write;
@@ -788,7 +788,7 @@ fn a_starting_daemon_deletes_result_files_no_one_can_use() {
     );
 }
 
-/// A CLI started by its rule is given Facade's tools: the test CLI runs facade-mcp, whose
+/// A CLI started by its rule is given Facade Code Framework's tools: the test CLI runs facade-mcp, whose
 /// connection makes them available, and the run has a folder of its own. Once that server ends
 /// while the CLI goes on, the tools are unavailable and the agent is an error, saying why.
 #[test]
@@ -927,7 +927,7 @@ fn a_start_prompt_is_delivered_at_the_30_second_startup_cutoff() {
     );
 }
 
-/// A CLI's tools connect once its Facade server answered the CLI's `tools/list`, not its
+/// A CLI's tools connect once its Facade Code Framework server answered the CLI's `tools/list`, not its
 /// `initialize`: while that answer is held, the tools read `connecting` and a start's prompt waits,
 /// though the server answered `initialize`, which reads where the agent works.
 #[test]
@@ -1002,7 +1002,7 @@ fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
 }
 
 /// A prompt that could not be sent is refused before anything starts: one a message could not
-/// carry, as one of more than 540 lines, and one for a custom program whose input Facade cannot
+/// carry, as one of more than 540 lines, and one for a custom program whose input Facade Code Framework cannot
 /// read.
 #[test]
 fn a_start_prompt_that_could_not_be_sent_starts_nothing() {
@@ -1068,7 +1068,7 @@ fn a_server_started_before_its_agent_is_listed_serves_the_installed_run() {
 }
 
 /// A `facade` command acting for an agent sends its own environment: only a start from an agent's
-/// Facade server takes that agent's. A command in a shell agent's terminal, whose environment macOS
+/// Facade Code Framework server takes that agent's. A command in a shell agent's terminal, whose environment macOS
 /// would hide, starts an agent with a variable of its own.
 #[test]
 fn a_facade_command_in_an_agent_s_terminal_starts_with_its_own_environment() {
@@ -1089,13 +1089,13 @@ fn a_facade_command_in_an_agent_s_terminal_starts_with_its_own_environment() {
     assert!(
         wait_until(secs(30), || home
             .screen("child")
-            .contains("named by the command (Facade test CLI)")),
+            .contains("named by the command (Facade Code Framework test CLI)")),
         "{}",
         home.screen("child")
     );
 }
 
-/// A Muse Code run gets Facade's server by `-c` for the run alone, with a hook that gives the model
+/// A Muse Code run gets Facade Code Framework's server by `-c` for the run alone, with a hook that gives the model
 /// its instructions, unless a project MCP file it reads names a `facade` server, beside which Muse
 /// Code would refuse to run: then it starts without the tools, and the file stays as it is. A
 /// stand-in `muse` keeps its arguments.
@@ -1271,10 +1271,10 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_its_predecessor_kept() {
     );
 }
 
-/// An Antigravity run gets Facade's plugin in the folder it starts in, the only file Facade writes
+/// An Antigravity run gets Facade Code Framework's plugin in the folder it starts in, the only file Facade Code Framework writes
 /// into the person's project, and its start readies the tools through the CLI's MCP panel before
 /// its first turn. The plugin's hook gives the model its instructions. Runs in a folder share the
-/// plugin. Facade keeps a same-version plugin with the old skill while a run uses it and replaces
+/// plugin. Facade Code Framework keeps a same-version plugin with the old skill while a run uses it and replaces
 /// it on the next start once the folder is free. The test CLI draws Antigravity's screen.
 #[test]
 fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_turn() {
@@ -1420,7 +1420,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     // The old build wrote these same plugin files and also shipped a skill, at the same version.
     let legacy_skill = plugin.join("skills/facade/SKILL.md");
     std::fs::create_dir_all(legacy_skill.parent().unwrap()).unwrap();
-    std::fs::write(&legacy_skill, "The old Facade skill.\n").unwrap();
+    std::fs::write(&legacy_skill, "The old Facade Code Framework skill.\n").unwrap();
     let old_plugin = [
         "plugin.json",
         "mcp_config.json",
@@ -1464,7 +1464,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     assert!(
         wait_until(secs(10), || home
             .daemon_log()
-            .contains("was changed since Facade wrote it")),
+            .contains("was changed since Facade Code Framework wrote it")),
         "{}",
         home.daemon_log()
     );
@@ -1510,7 +1510,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     );
 }
 
-/// An Antigravity run's first turn has Facade's tools. Keys the person types in an attached
+/// An Antigravity run's first turn has Facade Code Framework's tools. Keys the person types in an attached
 /// terminal while the start's panel is open, which shows them ready five seconds late, wait until
 /// that is done, then go in.
 #[test]
@@ -1565,7 +1565,7 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
     assert!(
         !messages
             .iter()
-            .any(|message| message == "turn without Facade's server"),
+            .any(|message| message == "turn without Facade Code Framework's server"),
         "the first turn had the tools: {messages:?}"
     );
     assert!(
@@ -1637,7 +1637,7 @@ fn late_host_colors_do_not_take_over_antigravity_startup() {
     assert!(
         !turns
             .iter()
-            .any(|line| line == "turn without Facade's server"),
+            .any(|line| line == "turn without Facade Code Framework's server"),
         "{turns:?}"
     );
 }
@@ -1733,7 +1733,7 @@ fn a_start_prompt_to_antigravity_goes_once_its_tools_are_ready() {
     assert!(
         !messages
             .iter()
-            .any(|message| message == "turn without Facade's server"),
+            .any(|message| message == "turn without Facade Code Framework's server"),
         "the prompt's turn had the tools: {messages:?}"
     );
 }
@@ -1783,11 +1783,11 @@ fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() 
     // The run's folder, as its start wrote it.
     let folder = home.path.join("framework/runs/a3/5a1f00d1c0ffee00");
     std::fs::create_dir_all(folder.join("skills/facade")).unwrap();
-    let instructions = "You are Facade agent a3, as your run began.";
+    let instructions = "You are Facade Code Framework agent a3, as your run began.";
     std::fs::write(folder.join("instructions.md"), instructions).unwrap();
     std::fs::write(
         folder.join("skills/facade/SKILL.md"),
-        "The old Facade skill.",
+        "The old Facade Code Framework skill.",
     )
     .unwrap();
     let given: Value = serde_json::from_str(&run_hook(
@@ -1893,8 +1893,8 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
     }
 }
 
-/// The hook that approves Facade's own tools where Muse Code would ask the person: a call of a tool
-/// of Facade's server, with or without the run's variables, which Muse Code passes to no hook. Any
+/// The hook that approves Facade Code Framework's own tools where Muse Code would ask the person: a call of a tool
+/// of Facade Code Framework's server, with or without the run's variables, which Muse Code passes to no hook. Any
 /// other tool is left to Muse Code.
 #[test]
 fn the_approve_hook_approves_facade_s_own_tools_alone() {
@@ -2147,7 +2147,7 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     assert!(
         wait_until(secs(30), || home
             .screen(address)
-            .contains("named by the boss (Facade test CLI)")),
+            .contains("named by the boss (Facade Code Framework test CLI)")),
         "{}",
         home.screen(address)
     );
@@ -2268,7 +2268,7 @@ struct Golden {
     cases: serde_json::Map<String, Value>,
     /// Texts that differ from run to run, longest first, each with what stands for it.
     placeholders: Vec<(String, &'static str)>,
-    /// Whole values that differ from run to run, such as the name the Orchestrator picks for a
+    /// Whole values that differ from run to run, such as the name Facade Code Framework picks for a
     /// guest from its pool, each with what stands for it.
     values: Vec<(String, &'static str)>,
 }
@@ -2347,7 +2347,7 @@ impl Golden {
         envelope
     }
 
-    /// `value` with each placeholder in place of what it stands for, and each time in Facade's form
+    /// `value` with each placeholder in place of what it stands for, and each time in Facade Code Framework's form
     /// as `<time>`, also inside a text such as the model's copy of a result. A time in any other
     /// form stays as it is, so that a change to the form shows.
     fn with_placeholders(&self, value: &Value) -> Value {
@@ -2628,7 +2628,7 @@ fn slashed_after_placeholders(text: &str) -> String {
     out
 }
 
-/// `text` with each time in Facade's form inside it written as `<time>`.
+/// `text` with each time in Facade Code Framework's form inside it written as `<time>`.
 fn with_facade_times(text: &str) -> String {
     const LENGTH: usize = "dddd-dd-ddTdd:dd:dd.dddZ".len();
     let mut out = String::with_capacity(text.len());
@@ -2648,8 +2648,8 @@ fn with_facade_times(text: &str) -> String {
     out
 }
 
-/// Whether `text` is a time as Facade writes one: UTC, with milliseconds, such as
-/// `2026-11-14T21:41:37.642Z`. The form is written out here rather than read from Facade's own
+/// Whether `text` is a time as Facade Code Framework writes one: UTC, with milliseconds, such as
+/// `2026-11-14T21:41:37.642Z`. The form is written out here rather than read from Facade Code Framework's own
 /// code, so that a change to the form shows.
 fn is_facade_time(text: &str) -> bool {
     const FORM: &str = "dddd-dd-ddTdd:dd:dd.dddZ";
@@ -3067,7 +3067,7 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
             1,
             "each user entry joins once when it calls a tool"
         );
-        // The Orchestrator names a guest from its pool of names.
+        // Facade Code Framework names a guest from its pool of names.
         let name = guests[0]["name"].as_str().expect("the guest's name");
         golden.value_varies(name, "<guest name>");
         let mut call = json!({ "tool": "list_agents", "arguments": {} });

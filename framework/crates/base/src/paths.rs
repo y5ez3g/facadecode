@@ -32,7 +32,7 @@ pub fn facade_home() -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(user).join(".facade"))
 }
 
-/// `framework/` in the Facade home, where the Framework keeps its records, screens, logs and the services'
+/// `framework/` in the Facade home, where the Facade Code Framework keeps its records, screens, logs and the services'
 /// locks.
 pub fn framework_dir() -> anyhow::Result<PathBuf> {
     facade_home().map(|home| home.join("framework"))

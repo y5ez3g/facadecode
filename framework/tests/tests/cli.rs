@@ -22,12 +22,12 @@ fn said(output: &Output) -> (String, String, Option<i32>) {
     (stdout(output), stderr(output), output.status.code())
 }
 
-/// Whether anything of Facade runs or ran for this home: a socket, or its framework folder.
+/// Whether anything of Facade Code Framework runs or ran for this home: a socket, or its framework folder.
 fn reached(home: &TestHome) -> bool {
     socket_exists(&home.daemon_socket()) || home.path.join("framework").exists()
 }
 
-/// The copyable address Facade gives the agent with this ID, such as `a1@host`.
+/// The copyable address Facade Code Framework gives the agent with this ID, such as `a1@host`.
 fn address(home: &TestHome, id: &str) -> String {
     home.agent_record(id).expect("the agent is recorded")["address"]
         .as_str()
@@ -93,7 +93,7 @@ fn stop_keeps_successful_receipts_when_other_targets_fail_and_scopes_skip_guests
             format!("Stopped Pixel ({}).\n", first.address),
             format!(
                 "error: No active agent or guest matches \"nobody\".\n\
-                 error: Cursor ({guest_ref}) is a guest and cannot be stopped by Facade.\n\
+                 error: Cursor ({guest_ref}) is a guest and cannot be stopped by Facade Code Framework.\n\
                  Run 'facade list' to check active agents.\n"
             ),
             Some(1)
@@ -417,7 +417,7 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
     assert_eq!(process_identity(worker.pid), worker.process);
 }
 
-/// CLI arguments and a name can begin with a dash, even when a word spells an option of Facade.
+/// CLI arguments and a name can begin with a dash, even when a word spells an option of Facade Code Framework.
 #[test]
 fn a_cli_argument_that_starts_with_a_dash_is_one_value() {
     let home = TestHome::new("dashargs");
@@ -455,7 +455,7 @@ fn a_cli_argument_that_starts_with_a_dash_is_one_value() {
     }
 }
 
-/// Options after PROGRAM belong to that program, including current and former Facade options.
+/// Options after PROGRAM belong to that program, including current and former Facade Code Framework options.
 #[test]
 fn every_word_after_the_program_is_the_program_s() {
     let home = TestHome::new("programwords");
@@ -505,7 +505,7 @@ fn every_word_after_the_program_is_the_program_s() {
     );
 }
 
-/// A CLI option before its name is refused before Facade is reached.
+/// A CLI option before its name is refused before Facade Code Framework is reached.
 #[test]
 fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
     let home = TestHome::new("startoption");
@@ -515,15 +515,18 @@ fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
             String::new(),
             concat!(
                 "error: Unknown option '--model' before <CLI>.\n",
-                "Put Facade options before the CLI name, and CLI options after it.\n",
+                "Put Facade Code Framework options before the CLI name, and CLI options after it.\n",
                 "Example: facade start codex --model ...\n",
-                "Run 'facade start --help' for Facade options.\n"
+                "Run 'facade start --help' for Facade Code Framework options.\n"
             )
             .into(),
             Some(2)
         )
     );
-    assert!(!reached(&home), "the usage error reached Facade");
+    assert!(
+        !reached(&home),
+        "the usage error reached Facade Code Framework"
+    );
 }
 
 /// Use the invoking shell's directory for default and relative folders, even with a local selector.
@@ -631,7 +634,7 @@ fn start_refuses_old_options_and_an_empty_workdir() {
         assert!(err.contains(option.split('=').next().unwrap()), "{err}");
         assert!(
             !reached(&home),
-            "a usage error reached Facade: {arguments:?}"
+            "a usage error reached Facade Code Framework: {arguments:?}"
         );
     }
 }
@@ -687,7 +690,9 @@ fn assert_status_starts_nothing(home: &TestHome) {
     let (out, err, code) = said(&home.run_facade(&["status"]));
     assert_eq!((err.as_str(), code), ("", Some(0)));
     assert!(
-        out.starts_with(&format!("Facade {version} is not running on ")),
+        out.starts_with(&format!(
+            "Facade Code Framework {version} is not running on "
+        )),
         "{out}"
     );
     for label in ["Active agents", "Daemon PID", "Keeper PID"] {
@@ -707,7 +712,7 @@ fn assert_status_starts_nothing(home: &TestHome) {
     );
     assert!(
         !socket_exists(&home.daemon_socket()) && home.processes().is_empty(),
-        "status started Facade"
+        "status started Facade Code Framework"
     );
 }
 
@@ -729,7 +734,7 @@ fn assert_status_shows_running(home: &TestHome) {
     assert_eq!((err.as_str(), code), ("", Some(0)));
     assert_eq!(
         out.lines().next().unwrap(),
-        format!("Facade {version} is running on {name}.")
+        format!("Facade Code Framework {version} is running on {name}.")
     );
     assert!(
         out.contains(&format!("\n\nAvailable CLIs\n{name}  ")),
@@ -827,5 +832,8 @@ fn version_flags_and_retired_commands_reach_no_facade() {
             );
         }
     }
-    assert!(!reached(&home), "a command that needs no Facade reached it");
+    assert!(
+        !reached(&home),
+        "a command that needs no Facade Code Framework reached it"
+    );
 }

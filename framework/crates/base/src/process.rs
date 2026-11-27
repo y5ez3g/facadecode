@@ -81,7 +81,7 @@ pub struct ProcessExit {
     #[serde(default, skip_serializing_if = "says_nothing")]
     pub reason: Option<EndReason>,
     /// The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or
-    /// signal, the time Facade noticed it.
+    /// signal, the time Facade Code Framework noticed it.
     pub at: String,
 }
 
