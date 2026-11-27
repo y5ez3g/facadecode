@@ -18,6 +18,7 @@ impl Screen {
         if old == new {
             return;
         }
+        self.discard_cursor_restore();
         if self.scrollback.store.is_some() {
             self.resize_across_store(old, new);
         } else {

@@ -86,6 +86,9 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   synchronized update when several finish in one read. `CursorRowWrites` says whether the frame
   wrote or erased cells on the cursor row and whether it began before the marked boundary. Those
   facts stay with the frame when the PTY splits its output, including a split cursor movement.
+  When a synchronized update leaves the cursor hidden, an immediately following cursor position
+  and reveal can report the same frame's writes at the restored position. An intervening output
+  unit, input boundary or resize expires that evidence.
   `frame_printed_cell` reports a glyph printed in the current frame after that boundary, including
   when its output spanned several reads. OSC status observations carry the offset of the opening
   escape, which can precede the read that completed it.

@@ -4229,6 +4229,47 @@ mod tests {
         format!("\x1b[?2026h{frame}\x1b[?2026l")
     }
 
+    #[tokio::test]
+    async fn copilot_restores_the_composer_cursor_after_closing_its_first_frame() {
+        let home = crate::test_folder::TestFolder::new("actor-copilot-restored-cursor");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = test_actor_for(&home, &messages, "copilot").await;
+        actor.untouched_input = true;
+        actor.before_input_box = true;
+        let _settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(15),
+        );
+        let trust = synchronized(
+            "\x1b[?25l\x1b[20;1H│ Do you trust the files in this folder? │\r\n│ ❯ 1. Yes │",
+        );
+        read_output(&mut actor, &mut cli, trust.as_bytes()).await;
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert!(actor.input_gate.blocks_delivery());
+
+        let border = "─".repeat(80);
+        let composer = synchronized(&format!(
+            "\x1b[2J\x1b[21;1H{border}\x1b[22;1H❯ \x1b[23;1H{border}\x1b[24;1H Interactive · Allow All"
+        ));
+        read_output(&mut actor, &mut cli, composer.as_bytes()).await;
+        assert!(
+            actor.input_gate.blocks_delivery(),
+            "the cursor is still hidden"
+        );
+        read_output(&mut actor, &mut cli, b"\x1b[22;3H\x1b[?25").await;
+        assert!(
+            actor.input_gate.blocks_delivery(),
+            "the reveal is incomplete"
+        );
+        read_output(&mut actor, &mut cli, b"h").await;
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        assert!(!actor.input_gate.blocks_delivery());
+    }
+
     /// Queues the CLI's frames while the actor only writes, then passes it the person's Enter.
     async fn enter_while_reads_are_paused(
         home: &Path,
