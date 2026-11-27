@@ -2624,7 +2624,8 @@ pub(super) fn claude_trust_frame(trusting: bool) -> String {
 
 /// A complete frame of Claude Code's plain input with the cursor between before and after.
 pub(super) fn plain_claude_frame(before: &str, after: &str) -> String {
-    let border = "─".repeat(80);
+    // Repeat the border glyph with CSI REP so two frames fit in a Darwin PTY without a read.
+    let border = "─\x1b[79b";
     let column = 3 + before.chars().count();
     format!(
         "\x1b[?2004h\x1b[2J\x1b[H{border}\r\n❯\u{a0}{before}{after}\r\n{border}\x1b[2;{column}H"

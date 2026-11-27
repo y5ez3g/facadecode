@@ -116,18 +116,26 @@ impl Io {
 
     pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
         let mut fds = [PollFd::new(self.0.get_ref().as_fd(), PollFlags::POLLIN)];
-        poll(&mut fds, PollTimeout::ZERO)?;
+        let ready = poll(&mut fds, PollTimeout::ZERO)?;
         if fds[0]
             .revents()
             .is_some_and(|flags| flags.contains(PollFlags::POLLHUP))
         {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
+        // Darwin's output queue can also contain flow-stopped bytes.
+        if cfg!(target_os = "macos") && ready == 0 {
+            return Ok(0);
+        }
         self.output_byte_count()
     }
 
     fn output_byte_count(&self) -> io::Result<usize> {
         let mut bytes: libc::c_int = 0;
+        // The Darwin PTY master reads the tty output queue. FIONREAD measures the CLI's input.
+        #[cfg(target_os = "macos")]
+        nix::ioctl_read_bad!(queued, libc::TIOCOUTQ, libc::c_int);
+        #[cfg(not(target_os = "macos"))]
         nix::ioctl_read_bad!(queued, libc::FIONREAD, libc::c_int);
         // SAFETY: the descriptor stays open and bytes is writable count storage.
         unsafe { queued(self.0.get_ref().as_raw_fd(), &mut bytes) }.map_err(|error| {
@@ -229,5 +237,40 @@ impl TestCli {
 
     pub(super) fn size(&self) -> (u16, u16) {
         size_of_terminal(self.0.as_fd()).unwrap_or((0, 0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn the_master_counts_cli_output_with_other_input_pending() {
+        let (master, mut cli) = test_terminal(80, 24).unwrap();
+        let io = Io::new(&master).unwrap();
+        assert_eq!(io.write(b"x", None).await.unwrap(), Some(1));
+        let mut fds = [PollFd::new(cli.0.as_fd(), PollFlags::POLLIN)];
+        assert_eq!(poll(&mut fds, PollTimeout::from(5_000_u16)).unwrap(), 1);
+        assert!(fds[0].revents().unwrap().contains(PollFlags::POLLIN));
+        assert_eq!(io.queued_output_bytes().unwrap(), 0);
+
+        let output = b"the CLI frame";
+        cli.write_output(output).unwrap();
+        let _readable = tokio::time::timeout(Duration::from_secs(5), io.0.readable())
+            .await
+            .expect("the frame is readable at the PTY master")
+            .unwrap();
+        assert_eq!(io.queued_output_bytes().unwrap(), output.len());
+
+        let prefix = OnceLock::new();
+        assert_eq!(
+            io.write(b"\r", Some(WriteObservation::Prefix(&prefix)))
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(prefix.into_inner(), Some(Some(output.len())));
     }
 }
