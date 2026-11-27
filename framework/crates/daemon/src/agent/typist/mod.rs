@@ -1551,9 +1551,14 @@ impl Typist {
         allowed
     }
 
-    pub(super) fn observe_probe_frame(&mut self, reading: BoxReading, startup_redraw: bool) {
+    pub(super) fn observe_probe_frame(
+        &mut self,
+        reading: BoxReading,
+        input_written: bool,
+        startup_redraw: bool,
+    ) {
         if let Some(probe) = &mut self.probing {
-            probe.saw_frame(reading, startup_redraw);
+            probe.saw_frame(reading, input_written, startup_redraw);
         }
     }
 
@@ -3129,7 +3134,7 @@ mod tests {
                 .as_ref()
                 .is_none_or(|receipt| receipt.complete(self.written as u64))
             {
-                typist.observe_probe_frame(reading.clone(), false);
+                typist.observe_probe_frame(reading.clone(), true, false);
             }
             let observed_at = self.observed_at.unwrap_or(now);
             let empty_after_write = (self.after_write

@@ -1747,15 +1747,17 @@ impl Actor {
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
                 let menu_composer_redrawn = waiting_for_menu_composer && complete && redrawn;
-                *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
-                if after_probe && writes == CursorRowWrites::Current {
-                    let probe_reading = if untouched {
+                let input_written = writes == CursorRowWrites::Current;
+                *drew_input.get_or_insert(false) |= input_written;
+                if after_probe && (input_written || complete) {
+                    let probe_reading = if untouched && input_written {
                         read_box(rule, ended, None, screen, true, false)
                     } else {
                         reading.clone()
                     };
                     typist.observe_probe_frame(
                         probe_reading,
+                        input_written,
                         first_hint && menu_composer_redrawn && gate.has_post_wait_composer(),
                     );
                 }
@@ -7669,15 +7671,27 @@ mod tests {
 
     #[tokio::test]
     async fn kiro_probe_follows_unchanged_startup_redraws_before_its_echo() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Interruption {
+            None,
+            Menu,
+            OpenFrame,
+            Erased,
+        }
         let hint = "ask a question or describe a task ↵";
-        for (redraws, menu_returns, unfinished, erase) in [
-            (&[(11, hint)][..], false, false, true),
-            (&[(8, hint), (11, hint)][..], false, false, true),
-            (&[(4, hint), (11, hint)][..], false, false, true),
-            (&[][..], false, false, false),
-            (&[(8, "Other text"), (11, hint)][..], false, false, false),
-            (&[(8, hint), (11, hint)][..], true, false, false),
-            (&[(8, hint), (11, hint)][..], false, true, false),
+        for (redraws, interruption, erase) in [
+            (&[(11, hint)][..], Interruption::None, true),
+            (&[(8, hint), (11, hint)][..], Interruption::None, true),
+            (&[(4, hint), (11, hint)][..], Interruption::None, true),
+            (&[][..], Interruption::None, false),
+            (
+                &[(8, "Other text"), (11, hint)][..],
+                Interruption::None,
+                false,
+            ),
+            (&[(8, hint), (11, hint)][..], Interruption::Menu, false),
+            (&[(8, hint), (11, hint)][..], Interruption::OpenFrame, false),
+            (&[(8, hint), (11, hint)][..], Interruption::Erased, false),
         ] {
             let home = crate::test_folder::TestFolder::new("actor-kiro-moved-probe");
             let (messages, _) = messages();
@@ -7701,7 +7715,7 @@ mod tests {
             read_output(&mut actor, &mut cli, show_hint(4, hint).as_bytes()).await;
             actor.type_next();
             assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b" ");
-            if menu_returns {
+            if interruption == Interruption::Menu {
                 read_output(&mut actor, &mut cli, menu.as_bytes()).await;
                 assert_eq!(
                     actor.read_screen_input().info.state,
@@ -7711,15 +7725,20 @@ mod tests {
             }
             for &(row, text) in redraws {
                 let frame = show_hint(row, text);
-                let frame = if unfinished {
+                let frame = if interruption == Interruption::OpenFrame {
                     frame.strip_suffix("\x1b[?2026l").unwrap()
                 } else {
                     &frame
                 };
                 read_output(&mut actor, &mut cli, frame.as_bytes()).await;
                 assert_eq!(actor.terminal.queued(), 0);
+                if interruption == Interruption::Erased && row == 8 {
+                    let blank = synchronized("\x1b[8;1H\x1b[2K\x1b[1;1H");
+                    read_output(&mut actor, &mut cli, blank.as_bytes()).await;
+                    assert!(actor.read_screen_input().line.is_none());
+                }
             }
-            if unfinished {
+            if interruption == Interruption::OpenFrame {
                 actor
                     .take_input(Input::Raw(b"x".to_vec()), actor.run)
                     .unwrap();
@@ -7739,10 +7758,10 @@ mod tests {
             assert_eq!(
                 input,
                 if erase { b"\x7f".as_slice() } else { b"" },
-                "{redraws:?}, menu returns={menu_returns}, frame left open={unfinished}"
+                "{redraws:?}, interruption={interruption:?}"
             );
             assert_eq!(pending_delivery_bytes(&actor), 0);
-            if unfinished {
+            if interruption == Interruption::OpenFrame {
                 tokio::time::pause();
                 tokio::time::advance(Duration::from_secs(2)).await;
                 actor.type_next();

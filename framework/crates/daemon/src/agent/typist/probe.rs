@@ -84,7 +84,19 @@ impl Probe {
         self.since = now;
     }
 
-    pub(super) fn saw_frame(&mut self, reading: BoxReading, startup_redraw: bool) {
+    pub(super) fn saw_frame(
+        &mut self,
+        reading: BoxReading,
+        input_written: bool,
+        startup_redraw: bool,
+    ) {
+        if !input_written {
+            // A complete frame can erase the composer without printing any input cells.
+            if reading.line.as_ref() != Some(&self.before) {
+                self.interrupt_startup_redraws();
+            }
+            return;
+        }
         // A complete redraw can move the same startup composer again before Space echoes.
         // Every redraw must still show the original line, and the echo must prove a Space there.
         if self.follows_startup_redraws && self.pressed == Pressed::Space && !self.space_seen {
