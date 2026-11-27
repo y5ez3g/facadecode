@@ -1,4 +1,4 @@
-//! Reads the host's terminal colors and restores the colors changed during Attach.
+//! Reads the host's terminal colors and grapheme cluster mode for Attach.
 
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -14,6 +14,7 @@ const QUERIES: [&str; 19] = [
     "10;", "11;", "12;", "4;0;", "4;1;", "4;2;", "4;3;", "4;4;", "4;5;", "4;6;", "4;7;", "4;8;",
     "4;9;", "4;10;", "4;11;", "4;12;", "4;13;", "4;14;", "4;15;",
 ];
+const GRAPHEME_MODE_QUERY: &[u8] = b"\x1b[?2027$p";
 /// Asks for the terminal's device attributes. Every terminal answers, and after the color replies,
 /// so the answer ends the wait.
 const LAST_QUERY: &[u8] = b"\x1b[c";
@@ -33,15 +34,15 @@ pub(crate) struct Probe {
 
 impl Probe {
     pub(crate) fn read() -> io::Result<Self> {
-        Self::read_queries(QUERIES.len())
+        Self::read_queries(QUERIES.len(), crate::asks_colors())
     }
 
     /// Reads the host colors used for handback of an already running agent's attachment.
     pub(super) fn read_named() -> io::Result<Self> {
-        Self::read_queries(NAMED_COLORS)
+        Self::read_queries(NAMED_COLORS, true)
     }
 
-    fn read_queries(count: usize) -> io::Result<Self> {
+    fn read_queries(count: usize, grapheme_mode: bool) -> io::Result<Self> {
         let Ok(mut reader) = ConsoleReader::new() else {
             return Ok(Self::default());
         };
@@ -53,12 +54,15 @@ impl Probe {
             QUERIES[..count]
                 .iter()
                 .try_for_each(|query| write!(out, "\x1b]{query}?\x1b\\"))?;
+            if grapheme_mode {
+                out.write_all(GRAPHEME_MODE_QUERY)?;
+            }
             out.write_all(LAST_QUERY)?;
             out.flush()?;
         }
         let mut probe = Self {
             lease: Some(lease),
-            replies: Replies::awaiting_queries(count),
+            replies: Replies::awaiting_queries(count, grapheme_mode),
             ..Self::default()
         };
         let deadline = Instant::now() + RESPONSE_TIME;
@@ -84,7 +88,7 @@ impl Probe {
     /// Reads the colors for a launch that leaves the console to the shell. What the person typed
     /// meanwhile goes back to the shell.
     pub(crate) fn read_colors() -> io::Result<LaunchColors> {
-        let mut probe = Self::read()?;
+        let mut probe = Self::read_queries(QUERIES.len(), false)?;
         let lease = probe.lease.take();
         let colors = probe.colors;
         let (_, keys, _) = probe.into_input();
@@ -104,6 +108,10 @@ impl Probe {
         }
     }
 
+    pub(super) fn host_grapheme_mode(&self) -> Option<bool> {
+        self.replies.grapheme_mode
+    }
+
     /// Gives Attach its first keys and keeps any confirmed reply prefix for the next read.
     pub(super) fn into_input(mut self) -> (Option<ConsoleReader>, Vec<u8>, Replies) {
         self.replies.release_short_prefix(&mut self.keys);
@@ -117,14 +125,17 @@ pub(super) struct Replies {
     awaiting: bool,
     unanswered: [bool; QUERIES.len()],
     pending: Vec<u8>,
+    grapheme_mode_pending: bool,
+    grapheme_mode: Option<bool>,
     /// The host can report more than eight bits per channel.
     named: [Option<Vec<u8>>; NAMED_COLORS],
 }
 
 impl Replies {
-    fn awaiting_queries(count: usize) -> Self {
+    fn awaiting_queries(count: usize, grapheme_mode_pending: bool) -> Self {
         let mut replies = Self {
             awaiting: true,
+            grapheme_mode_pending,
             ..Self::default()
         };
         replies.unanswered[..count].fill(true);
@@ -162,7 +173,7 @@ impl Replies {
             };
             keys.extend_from_slice(&bytes[..start]);
             bytes = &bytes[start..];
-            match reply(bytes, &self.unanswered) {
+            match reply(bytes, &self.unanswered, self.grapheme_mode_pending) {
                 Reply::Partial => {
                     let consumed = self.pending.len() - bytes.len();
                     self.pending.drain(..consumed);
@@ -174,6 +185,11 @@ impl Replies {
                 }
                 Reply::Last { len } => {
                     self.awaiting = false;
+                    bytes = &bytes[len..];
+                }
+                Reply::GraphemeMode { enabled, len } => {
+                    self.grapheme_mode_pending = false;
+                    self.grapheme_mode = enabled;
                     bytes = &bytes[len..];
                 }
                 Reply::Color { slot, value, len } => {
@@ -248,13 +264,43 @@ enum Reply<'a> {
         value: &'a [u8],
         len: usize,
     },
+    GraphemeMode {
+        enabled: Option<bool>,
+        len: usize,
+    },
     /// The device attributes.
     Last {
         len: usize,
     },
 }
 
-fn reply<'a>(bytes: &'a [u8], unanswered: &[bool; QUERIES.len()]) -> Reply<'a> {
+fn reply<'a>(
+    bytes: &'a [u8],
+    unanswered: &[bool; QUERIES.len()],
+    grapheme_mode_pending: bool,
+) -> Reply<'a> {
+    const MODE_REPORT: &[u8] = b"\x1b[?2027;";
+    if grapheme_mode_pending {
+        if MODE_REPORT.starts_with(bytes) {
+            return Reply::Partial;
+        }
+        if let Some(status) = bytes.strip_prefix(MODE_REPORT) {
+            match status {
+                [b'0'..=b'4'] | [b'0'..=b'4', b'$'] => return Reply::Partial,
+                [value @ b'0'..=b'4', b'$', b'y', ..] => {
+                    return Reply::GraphemeMode {
+                        enabled: match value {
+                            b'1' => Some(true),
+                            b'2' => Some(false),
+                            _ => None,
+                        },
+                        len: MODE_REPORT.len() + 3,
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
     if let Some(attributes) = bytes.strip_prefix(b"\x1b[?") {
         return match attributes
             .iter()
@@ -338,9 +384,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_split_grapheme_mode_report_preserves_other_keys() {
+        for (status, expected) in [
+            (b'0', None),
+            (b'1', Some(true)),
+            (b'2', Some(false)),
+            (b'3', None),
+            (b'4', None),
+        ] {
+            let mut replies = Replies::awaiting_queries(NAMED_COLORS, true);
+            let mut keys = Vec::new();
+            replies.take_replies(b"a\x1b[?2027;", &mut keys, None);
+            replies.take_replies(&[status, b'$'], &mut keys, None);
+            replies.take_replies(b"y\x1b[?1;2cb", &mut keys, None);
+            assert_eq!(replies.grapheme_mode, expected);
+            assert!(!replies.grapheme_mode_pending);
+            assert!(!replies.awaiting);
+            assert_eq!(keys, b"ab");
+        }
+    }
+
+    #[test]
     fn color_replies_can_arrive_in_pieces_between_keys() {
         let mut colors = LaunchColors::default();
-        let mut replies = Replies::awaiting_queries(QUERIES.len());
+        let mut replies = Replies::awaiting_queries(QUERIES.len(), false);
         let mut keys = Vec::new();
         replies.take_replies(
             b"first\x1b]11;rgb:ffff/f54f/eeee\x1b",
@@ -366,7 +433,7 @@ mod tests {
     #[test]
     fn the_device_attributes_end_the_wait() {
         let mut colors = LaunchColors::default();
-        let mut replies = Replies::awaiting_queries(QUERIES.len());
+        let mut replies = Replies::awaiting_queries(QUERIES.len(), false);
         let mut keys = Vec::new();
         replies.take_replies(
             b"ls\x1b]11;rgb:ffff/ffff/ffff\x07\x1b[?1",

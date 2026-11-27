@@ -168,7 +168,7 @@ pub(crate) fn attach(
         None => ConsoleLease::acquire()?,
     };
     write_console_warning(format_args!("{}", opening_line(&opening, &shown)));
-    let end = if lease.promote(&input, probe.take_host_colors()) {
+    let end = if lease.promote(&input, probe.take_host_colors(), probe.host_grapheme_mode()) {
         follow_agent(screen, &input, &viewer, probe, reconnect)
     } else {
         Ok(AttachEnd::Detached)
@@ -208,15 +208,23 @@ impl ConsoleLease {
             input: None,
             colors: HostColors::default(),
             color_scheme_reporting: false,
+            original_grapheme_mode: None,
+            grapheme_mode_changed: false,
         });
         Ok(Self)
     }
 
     /// Owns the display before writing the title save, so a partial write still gets handback.
-    fn promote(&self, input: &Arc<AgentInput>, colors: HostColors) -> bool {
+    fn promote(
+        &self,
+        input: &Arc<AgentInput>,
+        colors: HostColors,
+        grapheme_mode: Option<bool>,
+    ) -> bool {
         let mut terminal = lock_terminal();
         let console = terminal.console.as_mut().expect("active console lease");
         console.colors = colors;
+        console.original_grapheme_mode = grapheme_mode;
         console.input = Some(input.clone());
         terminal.present(input, |_| write_terminal(SAVE_HOST_TITLE))
     }
@@ -237,6 +245,8 @@ struct ConsoleModes {
     colors: HostColors,
     /// The CLI left color scheme notifications enabled in the host terminal.
     color_scheme_reporting: bool,
+    original_grapheme_mode: Option<bool>,
+    grapheme_mode_changed: bool,
 }
 
 impl ConsoleModes {
@@ -244,11 +254,23 @@ impl ConsoleModes {
         self.colors.observe_output(bytes);
         let mut reporting = self.color_scheme_reporting;
         for (params, end) in escapes(bytes).filter_map(csi) {
-            if private_modes(params, end).is_some_and(|mut modes| modes.any(|mode| mode == b"2031"))
-            {
-                reporting = end == b'h';
-                // A partially written frame can enable reporting before its reset reaches the host.
-                self.color_scheme_reporting |= reporting;
+            let Some(modes) = private_modes(params, end) else {
+                continue;
+            };
+            for mode in modes {
+                match mode {
+                    b"2031" => {
+                        reporting = end == b'h';
+                        // A partial write can enable reporting before its reset reaches the host.
+                        self.color_scheme_reporting |= reporting;
+                    }
+                    b"2027" => {
+                        self.grapheme_mode_changed |= self
+                            .original_grapheme_mode
+                            .is_some_and(|initial| initial != (end == b'h'));
+                    }
+                    _ => {}
+                }
             }
         }
         write_frame(bytes)?;
@@ -2314,6 +2336,16 @@ fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> 
     let mut restoration = restoration(alternate, cli_title_shown);
     if console.color_scheme_reporting {
         restoration.extend_from_slice(b"\x1b[?2031l");
+    }
+    if let Some(initial) = console
+        .original_grapheme_mode
+        .filter(|_| console.grapheme_mode_changed)
+    {
+        restoration.extend_from_slice(if initial {
+            b"\x1b[?2027h"
+        } else {
+            b"\x1b[?2027l"
+        });
     }
     console.colors.restore(&mut restoration);
     let _ = write_terminal(&restoration);
