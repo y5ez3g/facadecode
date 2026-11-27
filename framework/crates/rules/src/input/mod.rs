@@ -2168,7 +2168,11 @@ impl<'a> Screen<'a> {
             }
             probe_unstyled_hint = untouched_input;
         }
-        self.after_prompt(y, end, "the prompt", None, probe_unstyled_hint, start)
+        let reading = self.after_prompt(y, end, "the prompt", None, probe_unstyled_hint, start);
+        Reading {
+            redraw_rows: reading.unsure.then_some(y..y + 1),
+            ..reading
+        }
     }
 
     /// `prompt_row`: the last row that starts with the prompt holds the input.

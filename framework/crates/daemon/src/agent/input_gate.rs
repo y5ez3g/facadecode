@@ -98,7 +98,8 @@ impl InputGate {
     /// A complete redraw replaced the startup menu. The probe can establish whether it is empty.
     pub(super) fn startup_composer(&mut self, reading: &BoxReading) {
         if self.waits_for_startup_composer()
-            && matches!(reading.info.state, InputState::Usable | InputState::Draft)
+            && (matches!(reading.info.state, InputState::Usable | InputState::Draft)
+                || reading.unsure && reading.line.is_some())
         {
             self.probe_after_wait = ProbeFrame::Composer;
         }

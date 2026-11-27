@@ -285,6 +285,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     or several such cells, the rule checks for a menu. A visible terminal cursor supplies its own
     position. Kiro's drawn cursor appears inside the synchronized composer update. The hidden
     terminal cursor moves after the update closes.
+    For a prompt row that may hold a hint or draft, the redraw check covers every drawn cell
+    on the prompt row, including the prompt itself.
   - Cursor's live trust question reads `interaction` when the boxed selected option (`[a]`, `[w]`,
     or `[q]`) has the key help within four rows below it. Once answered, the box loses the
     selection marker and key help. The input box below it can then read `usable` or `draft`.

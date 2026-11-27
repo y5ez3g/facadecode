@@ -7584,6 +7584,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kiro_can_probe_the_first_redrawn_composer_after_startup_consent() {
+        let home = crate::test_folder::TestFolder::new("actor-kiro-startup-probe");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = test_actor_for(&home, &messages, "kiro-cli").await;
+        actor.untouched_input = true;
+        actor.before_input_box = true;
+        let _settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(15),
+        );
+        let menu = synchronized(
+            "\x1b[?25l\x1b[H ❯ No, exit\r\n   Yes, I accept\r\n  esc to cancel · ↑↓ to navigate · ↵ to select",
+        );
+        read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert_eq!(actor.terminal.queued(), 0);
+
+        let composer = "\x1b[2J\x1b[4;1H› \x1b[7m \x1b[27;38;5;245m";
+        let working = format!("{composer}Kiro is working · Type to steer · Ctrl+S to queue\x1b[0m");
+        read_output(&mut actor, &mut cli, synchronized(&working).as_bytes()).await;
+        actor.type_next();
+        assert_eq!(actor.terminal.queued(), 0);
+
+        let first_hint = format!("\x1b[?2026h{composer}ask a question or describe a task ↵\x1b[0m");
+        read_output(&mut actor, &mut cli, first_hint.as_bytes()).await;
+        actor.type_next();
+        assert_eq!(actor.terminal.queued(), 0);
+        read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+        assert!(actor.read_screen_input().unsure);
+        actor.type_next();
+        assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b" ");
+        assert_eq!(pending_delivery_bytes(&actor), 0);
+    }
+
+    #[tokio::test]
     async fn a_fresh_hint_after_a_native_wait_can_be_probed() {
         for waiting_message in [false, true] {
             let home = crate::test_folder::TestFolder::new("actor-probe-after-native-wait");

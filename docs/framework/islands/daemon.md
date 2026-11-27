@@ -539,6 +539,8 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     complete ordinary box with the probe's input, and checks for native waits. A complete ordinary
     input drawn after withdrawal of a native wait can authorize a probe while delivery still needs
     a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
+    The first complete composer redraw after startup consent can also authorize a probe,
+    including a prompt row that still may hold a hint or draft.
     A confirmed hint provides the empty reading.
   - From the write receipt for Space or Backspace, the probe checks the row every 100 ms and waits
     up to two seconds for that key's redraw. Two matching complete readings can establish whether
