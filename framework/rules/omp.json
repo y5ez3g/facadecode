@@ -21,6 +21,10 @@
 		"scrolled": { "position": "unmarked", "min_rows": 4, "reserved_rows": 14, "min_reserved_rows": 6 },
 		"menus": [
 			{ "selected": "^ ?[❯→] \\S", "next": "^ {2,4}\\S", "hint": { "pattern": "[Ee]sc(?:ape)?\\b", "within": 20 } },
+			{
+				"selected": "^╭─ Models ─+┬─+╮$",
+				"hint": { "pattern": "^│ ⏎/→ models · ↑/↓ providers · type to search · ⌥←/⌥→ kind · ⎋ close +│$", "within": 28 }
+			},
 			{ "selected": "^ *(?:↑/↓ select · ⏎ confirm · ⎋ skip · (?:⌃C|Ctrl\\+C)|Up/Down select · Enter confirm · Esc skip · Ctrl\\+C|↑/↓ select · \\x{F0311} confirm · \\x{F12B7} skip · (?:\\x{F0634} C|Ctrl\\+C)) exit setup *$" }
 		]
 	},

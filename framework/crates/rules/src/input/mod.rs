@@ -1010,8 +1010,16 @@ impl<'a> Screen<'a> {
     }
 
     /// All screen rows of a menu or question's anchor, including continuations.
-    fn menu_rows(&self, menu: &Menu, lines: &[LogicalLine<'_>]) -> Option<Range<usize>> {
+    fn menu_rows(
+        &self,
+        menu: &Menu,
+        lines: &[LogicalLine<'_>],
+        prompt_row: Option<usize>,
+    ) -> Option<Range<usize>> {
         lines.iter().enumerate().find_map(|(start, line)| {
+            if prompt_row.is_some_and(|row| line.row <= row) {
+                return None;
+            }
             let end = self.menu_line_end(&menu.selected, lines, start)?;
             if let Some(not) = &menu.not_selected
                 && not.is_match(line.text.trim_end_matches(' '))
@@ -1037,12 +1045,19 @@ impl<'a> Screen<'a> {
     /// of the CLI's own shows, otherwise `unknown`.
     fn elsewhere(&self, why: impl Into<String>) -> Reading {
         let why = why.into();
-        if self.menus.is_empty() {
-            return unknown(why);
-        }
+        self.read_menu(&why, None).unwrap_or_else(|| unknown(why))
+    }
+
+    fn read_menu(&self, why: &str, prompt_row: Option<usize>) -> Option<Reading> {
+        let mut menus = self
+            .menus
+            .iter()
+            .filter(|menu| prompt_row.is_none() || menu.below_prompt)
+            .peekable();
+        menus.peek()?;
         let lines = self.logical_lines();
-        for menu in self.menus {
-            let Some(anchor) = self.menu_rows(menu, &lines) else {
+        for menu in menus {
+            let Some(anchor) = self.menu_rows(menu, &lines, prompt_row) else {
                 continue;
             };
             let what = match (&menu.selected, &menu.next) {
@@ -1050,12 +1065,12 @@ impl<'a> Screen<'a> {
                 (_, Some(_)) => "a menu's selected item",
                 (_, None) => "a question",
             };
-            return interaction(
+            return Some(interaction(
                 format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
                 anchor,
-            );
+            ));
         }
-        unknown(why)
+        None
     }
 
     /// Reads the box after the prompt and its gap up to row `end`, with the first row for a probe.
@@ -2128,6 +2143,9 @@ impl<'a> Screen<'a> {
         let Some((y, start)) = self.prompt_row_at(self.cursor, prompt, alternate) else {
             return self.elsewhere("no native prompt around the cursor");
         };
+        if let Some(menu) = self.read_menu("the prompt sits above a selection pane", Some(y)) {
+            return menu;
+        }
         let row = self.cursor.1;
         let end = (row + 1..self.height())
             .find(|&next| {

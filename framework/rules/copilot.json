@@ -33,6 +33,9 @@
 		"menus": [{
 			"selected": "^│ Do you trust the files in this folder\\? +│ *$",
 			"hint": { "pattern": "^│ ❯ (?:1\\. Yes|2\\. Yes, and remember this folder for future sessions|3\\. No \\(Esc\\)) +│ *$", "within": 4 }
+		}, {
+			"selected": "^ Session only\\. Copilot Fusion chooses a model;",
+			"hint": { "pattern": " ctrl\\+x → m manage · enter to select · esc to cancel$", "within": 15 }
 		}]
 	},
 	"paste": {

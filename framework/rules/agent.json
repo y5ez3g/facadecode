@@ -34,6 +34,11 @@
 			{
 				"selected": "^ +Cursor Agent$",
 				"hint": { "pattern": "^ +Press any key to log in\\.\\.\\.$", "within": 2 }
+			},
+			{
+				"selected": "^ Available models +Max mode:",
+				"below_prompt": true,
+				"hint": { "pattern": "^ Type to filter • Enter to select • Tab to edit$", "within": 9 }
 			}
 		]
 	},

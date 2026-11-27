@@ -719,6 +719,9 @@ pub struct ModePlaceholder {
 #[serde(deny_unknown_fields)]
 pub struct Menu {
     pub selected: MenuLinePattern,
+    /// A pane below the prompt can still take input while that prompt shows its cursor.
+    #[serde(default)]
+    pub below_prompt: bool,
     /// The anchor's first logical line never matches this.
     #[serde(default)]
     pub not_selected: Option<Pattern>,

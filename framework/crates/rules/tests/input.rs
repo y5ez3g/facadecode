@@ -112,6 +112,61 @@ fn codex_screens_read_as_recorded() {
 }
 
 #[test]
+fn copilot_model_selection_uses_the_session_heading_and_footer() {
+    let input = &find("copilot").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(b"\x1b[?25l\x1b[15;1H Session only. Copilot Fusion chooses a model;");
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("\x1b[30;1H ctrl+x → m manage · enter to select · esc to cancel".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
+fn cursor_model_selection_takes_input_below_its_visible_prompt() {
+    let input = &find("agent").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    let prompt = "  → \x1b[7m \x1b[27;2mPlan, search, build anything\x1b[0m";
+    let panel = concat!(
+        " Available models                     Max mode: OFF\r\n\r\n Filter:\r\n\r\n",
+        "    Grok 4.7\r\n    Grok 4.6\r\n →  Composer 2.5             (Tab to modify)\r\n",
+        "    Grok 4.5\r\n\r\n",
+        " Type to filter • Enter to select • Tab to edit",
+    );
+    screen.feed(format!("\x1b[?25l{prompt}").as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+    screen.feed(format!("\x1b[4;1H{panel}").as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+
+    screen.feed(format!("\x1b[2J\x1b[H{panel}\x1b[15;1H{prompt}").as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+}
+
+#[test]
+fn oh_my_pi_model_selection_uses_the_box_heading_and_keys() {
+    let input = &find("omp").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(
+        "\x1b[?25l╭─ Models ─────────┬───────────────────────────────────────────────────────╮"
+            .as_bytes(),
+    );
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed(
+        "\x1b[29;1H│ ⏎/→ models · ↑/↓ providers · type to search · ⌥←/⌥→ kind · ⎋ close  │"
+            .as_bytes(),
+    );
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
 fn agy_screens_read_as_recorded() {
     reads_as_recorded("agy");
 }

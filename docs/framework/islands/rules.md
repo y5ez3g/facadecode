@@ -238,6 +238,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     reads as an interaction when its question and confirmation footer are visible.
     Antigravity's Switch Model panel is an interaction when its heading and keyboard footer appear.
     Muse Code's Choose model panel is an interaction while its heading and confirmation footer show.
+    Copilot's session model chooser and Oh My Pi's Models chooser match their headings and
+    keyboard footers. Cursor keeps its composer visible above the Available models pane.
+    Its menu sets `below_prompt` so a matching pane below a readable prompt takes input.
     Kiro's option menus read as interactions by the footer below their selected `❯` row, so its
     trust-all-tools warning does at any window height.
     When the workspace trust heading scrolls away, the selected workspace choice and the nearby
