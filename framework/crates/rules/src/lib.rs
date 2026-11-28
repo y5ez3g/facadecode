@@ -151,6 +151,9 @@ pub struct McpRule {
     /// The CLI initializes its managed relay at startup and lists tools on its first turn.
     #[serde(default)]
     pub deferred_tool_list: bool,
+    /// The CLI can replace its first MCP catalog connection while opening the native session.
+    #[serde(default)]
+    pub reconnects_on_startup: bool,
     /// The `_meta` key in which a tool call names its session, for a CLI whose one MCP server
     /// serves many sessions. A CLI that starts an MCP server for each session names it in the
     /// server's environment instead.

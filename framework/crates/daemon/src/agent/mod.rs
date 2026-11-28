@@ -598,6 +598,17 @@ impl AgentHandle {
             .expect("the test's run accepts tool connections")
     }
 
+    /// Records a verified tool request on the live run.
+    pub(crate) fn note_tool_use(&self, run: u64) {
+        self.tools.send_if_modified(|connections| {
+            if connections.run != run || !connections.accepting || connections.used {
+                return false;
+            }
+            connections.used = true;
+            true
+        });
+    }
+
     /// Sends `command` to the actor, waiting for room. False where no actor takes it.
     pub(crate) async fn send(&self, command: AgentCommand) -> bool {
         self.commands.send(command).await.is_ok()
@@ -637,6 +648,8 @@ struct ToolsConnections {
     listed: usize,
     /// Keeps proof of a connection even if it closed before the actor read the watch.
     verified: bool,
+    /// A verified tool request has used this run's MCP connection.
+    used: bool,
 }
 
 impl ToolsConnections {
@@ -647,6 +660,7 @@ impl ToolsConnections {
             initialized: 0,
             listed: 0,
             verified: false,
+            used: false,
         }
     }
 

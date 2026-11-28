@@ -406,7 +406,9 @@ impl StateTracker {
         } else if connections.initialized > 0 {
             Connection::Initialized
         } else if connections.verified {
-            Connection::Lost
+            Connection::Lost {
+                used: connections.used,
+            }
         } else {
             Connection::Pending
         };
@@ -433,7 +435,13 @@ impl StateTracker {
             match self.connection {
                 Connection::Listed => return (ToolsState::Available, None),
                 Connection::Initialized => return (ToolsState::Connecting, None),
-                Connection::Lost => Some(ToolsReason::Disconnected),
+                Connection::Lost { used: false }
+                    if now < self.question.deadline(self.started)
+                        && self.rule.is_some_and(|rule| rule.mcp.reconnects_on_startup) =>
+                {
+                    None
+                }
+                Connection::Lost { .. } => Some(ToolsReason::Disconnected),
                 Connection::Pending if self.question.kind.is_some() => None,
                 Connection::Pending if self.saved.tools_not_started => {
                     Some(ToolsReason::NotStarted)
@@ -501,7 +509,7 @@ enum Connection {
     Pending,
     Initialized,
     Listed,
-    Lost,
+    Lost { used: bool },
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -1126,6 +1134,82 @@ mod tests {
         muse.evidence.observe(Some(ScreenState::Idle));
         muse.evidence.observe(None);
         assert_eq!(reason(&mut muse), Some(StateReason::Unrecognized));
+    }
+
+    #[test]
+    fn a_native_catalog_reconnect_uses_the_existing_startup_deadline() {
+        let started = Instant::now();
+        let mut agent = StateTracker::new(
+            facade_rules::find("agent").unwrap(),
+            started,
+            Kept::new_run(ToolsGiven::Injected),
+            None,
+            None,
+        );
+        agent.evidence.observe(Some(ScreenState::Idle));
+        agent.tools_connection(true);
+        let read = |agent: &mut StateTracker, at| agent.read(at, Viewing::Unwatched);
+        assert_eq!(read(&mut agent, started).tools, ToolsState::Available);
+
+        let during_start = started + Duration::from_secs(4);
+        agent.tools_connection(false);
+        let reading = read(&mut agent, during_start);
+        assert_eq!(
+            (
+                reading.state,
+                reading.tools,
+                reading.tools_reason,
+                reading.wake
+            ),
+            (
+                ManagedAgentState::Starting,
+                ToolsState::Connecting,
+                None,
+                Some(started + START_TIMEOUT),
+            )
+        );
+
+        agent.tools_connection(true);
+        let reading = read(&mut agent, during_start);
+        assert_eq!(
+            (reading.state, reading.tools),
+            (ManagedAgentState::Idle, ToolsState::Available)
+        );
+
+        agent.tools_connection(false);
+        let reading = read(&mut agent, started + START_TIMEOUT);
+        assert_eq!(
+            (reading.state, reading.tools_reason),
+            (ManagedAgentState::Error, Some(ToolsReason::Disconnected))
+        );
+    }
+
+    #[test]
+    fn a_tool_connection_lost_after_use_reports_an_error_during_startup() {
+        let started = Instant::now();
+        let mut agent = StateTracker::new(
+            facade_rules::find("agent").unwrap(),
+            started,
+            Kept::new_run(ToolsGiven::Injected),
+            None,
+            None,
+        );
+        agent.evidence.observe(Some(ScreenState::Idle));
+        agent.tools_connection(true);
+        agent.tools_connections(ToolsConnections {
+            verified: true,
+            used: true,
+            ..ToolsConnections::new(crate::agent::FIRST_RUN, true)
+        });
+        let reading = agent.read(started + Duration::from_secs(4), Viewing::Unwatched);
+        assert_eq!(
+            (reading.state, reading.tools, reading.tools_reason),
+            (
+                ManagedAgentState::Error,
+                ToolsState::Unavailable,
+                Some(ToolsReason::Disconnected),
+            )
+        );
     }
 
     /// A run given Facade's tools starts until its CLI shows what it does and its server connects.

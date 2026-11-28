@@ -623,6 +623,7 @@ session. It also defines the formats of Facade's hooks.
     `session_ends_with_process`.
 
 Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
+Cursor can replace the initial MCP connection after listing tools. Its rule enables startup reconnect tracking.
 Qoder takes a session MCP file and a settings overlay with `SessionStart` and `UserPromptSubmit` hooks.
 Qoder can fire `SessionStart` before a person trusts a new folder. The first prompt after trust reports the
 session in that case. A single `facade-mcp` entry named `facade` in the project's `.mcp.json`

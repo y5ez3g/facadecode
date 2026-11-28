@@ -51,6 +51,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"], "resume_requires_saved_session": true },
+	"mcp": { "reconnects_on_startup": true },
 	"status": {
 		"mechanism": "composer",
 		"working_hint": "ctrl+c to stop",

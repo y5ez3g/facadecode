@@ -435,6 +435,10 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     composer evidence after recovery requests one redraw. Permission reports keep their own wait.
   - A start and the tools' connection get 30 seconds each. Time spent in an input interaction or
     a recognized sign-in screen does not count.
+  - A CLI configured to reconnect at startup can replace its first MCP catalog connection.
+    After that connection closes, the tools read `Connecting` during the original startup
+    window before the run's first verified tool call. A verified tool call or an expired
+    deadline makes a lost connection `Unavailable`.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
     prompt can proceed when native startup is shown and no question is open, or after the existing

@@ -202,6 +202,9 @@ impl Daemon {
                         };
                         let current = actor.current(&daemon, &evidence.process)?;
                         let identity = actor.identity(&current.handle);
+                        if let Some((run, _)) = actor.run {
+                            current.handle.note_tool_use(run);
+                        }
                         let acquire = actor
                             .run
                             .filter(|_| !deferred_tool_list(&current.handle))
