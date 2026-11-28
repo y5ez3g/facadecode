@@ -838,6 +838,7 @@ fn read_keys(
     let mut mouse = LocalMouseInput::default();
     let mut copy_key = None;
     let mut initial = (!keys.is_empty()).then_some(keys);
+    let cursor_input = host_tells_the_wheel().then(desktop::CursorInput::new);
     if let Some(mut console) = reader.or_else(|| ConsoleReader::new().ok()) {
         loop {
             let first = initial.take();
@@ -880,21 +881,17 @@ fn read_keys(
                     Ok(Some(ConsoleRead::Keys(0))) | Err(_) => break,
                 },
             };
-            // Before anything can wait: a key can be up again soon.
-            let arrows = if host_tells_the_wheel() {
-                desktop::arrows()
-            } else {
-                desktop::Arrows::default()
-            };
             if keys.is_empty() {
                 continue;
             }
+            // Sample the input before taking the display lock.
+            let cursor_sample = cursor_input.as_ref().map(desktop::CursorInput::sample);
             let detach_at = detach_position(&keys);
             // Queue keys before Ctrl-] while the attachment still owns the terminal.
             if let Some(mut terminal) = attached_terminal() {
                 let keys = &keys[..detach_at.unwrap_or(keys.len())];
                 terminal.present(input, |terminal| {
-                    terminal.route(input, keys, arrows, &mut mouse, &mut copy_key)
+                    terminal.route(input, keys, cursor_sample, &mut mouse, &mut copy_key)
                 });
             }
             if let Some(at) = detach_at {
@@ -1671,7 +1668,7 @@ impl Display {
         &mut self,
         input: &AgentInput,
         keys: &[u8],
-        arrows: desktop::Arrows,
+        cursor_sample: Option<desktop::CursorSample>,
         mouse: &mut LocalMouseInput,
         copy_key: &mut Option<CopyKey>,
     ) -> std::io::Result<()> {
@@ -1681,7 +1678,10 @@ impl Display {
         let take = match self.mouse {
             MouseOwner::Local => Take::Reports,
             MouseOwner::Host if self.wheel_is_cursor_keys() => Take::CursorKeys {
-                down: arrows,
+                sample: cursor_sample.unwrap_or(desktop::CursorSample::Observed {
+                    events: Vec::new(),
+                    held: desktop::Arrows::default(),
+                }),
                 application: self.cli_asks_for_application_cursor_keys(),
             },
             MouseOwner::Cli | MouseOwner::Host => Take::Nothing,

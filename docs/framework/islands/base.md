@@ -268,11 +268,13 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `clipboard::copy`: puts text on the clipboard of the computer the person sits at, through pbcopy or
   the Wayland and X11 clipboard programs, for terminals that ignore OSC 52. It does nothing over SSH,
   where that is another computer's, and on Windows.
-- `desktop::{sees_keys, arrows}`: whether Up and Down are down on the keyboard the person types on,
-  for a terminal that sends the same bytes for them and for the wheel. It uses the session's key state
-  on macOS and the desktop's on Windows, without a permission, and loads their libraries only when
-  asked. It sees no keys on Linux, over SSH, outside a desktop session, or in a terminal that
-  another computer can show: tmux, Screen, Zellij and VS Code's remote terminals.
+- `desktop::{sees_keys, CursorInput}` distinguishes wheel input from arrow keys where the terminal
+  encodes both the same way. On macOS it passively observes wheel events and Up/Down key codes for
+  the hosting process under the current permissions. A run loop records events in order while
+  Attach waits for terminal bytes. When macOS permits only wheel observation, Base also samples
+  whether either arrow is held. The desktop's arrow state serves Windows and macOS terminals
+  where no process observer is available. The desktop path is unavailable on Linux, over SSH,
+  outside a desktop session, and in tmux, Screen, Zellij or a VS Code remote terminal.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

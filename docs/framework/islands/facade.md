@@ -180,11 +180,15 @@ connection is lost and when the attachment ends.
 Where `host_tells_the_wheel` holds, the terminal app keeps its own selection, copying and right click for a CLI that
 leaves the mouse alone. On its alternate screen the app sends the wheel as Up and Down. Attach enables alternate
 scroll in Windows terminals and application cursor keys in macOS Terminal so they send those keys.
-`attach/mouse.rs` uses Base's `desktop::arrows` to tell wheel steps from keys the person pressed. Wheel steps browse
-the CLI's scrollback, and cursor keys reach it in the form it asked for. A Win32 record with the enhanced flag comes
-from the keyboard whatever its state is by then. The reader asks the keyboard before it waits for anything, because
-a key can be up again soon. A key's last repeat within 150 ms of a press is still that key. This needs the keyboard
-the person types on, so it applies in macOS Terminal and VS Code on macOS, and in every terminal on Windows.
+In local macOS Terminal and VS Code, Attach matches Up and Down sequences to the events Base observes at the
+host process. It matches keys and wheel steps in order, even when the host groups or splits their writes.
+A terminal may accumulate a small scroll gesture before writing an arrow. Attach keeps the matching key when
+the terminal writes just one sequence for those two events. Sequences without wheel evidence reach
+the CLI even after the key was released. When macOS cannot provide the host's events, Attach uses the desktop's
+arrow state. On Windows, a Win32 record with the enhanced flag identifies a keyboard event, and the desktop's
+arrow state helps classify legacy sequences.
+Wheel steps browse the CLI's scrollback. Attach forwards Up, Down, Left, Right, Home and End in the CLI's cursor
+key mode when it enabled application cursor keys on the host for scrolling.
 
 Elsewhere Attach requests SGR button, drag and wheel reports for a CLI that leaves the mouse alone. A drag selects
 from the viewport Shell painted. Releasing the button copies the selection, and Ctrl+C and a right press copy it again.
