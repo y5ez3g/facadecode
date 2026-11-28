@@ -63,7 +63,8 @@ pub(super) fn repair(bin: &Bin) -> anyhow::Result<Option<LegacyUpgrade>> {
         );
     }
 
-    select_framework(&previous, bin, &build)?;
+    select_framework(&previous, bin, &build)
+        .context("Fix the reported launcher error and rerun the installer")?;
     report(LegacyStatus::Migrated)
 }
 

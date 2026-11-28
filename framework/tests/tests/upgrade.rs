@@ -2252,6 +2252,30 @@ fn install_keeps_core_custody_and_repairs_legacy_launchers() {
     }
     drop(held);
 
+    let launcher = bin.join("facade");
+    std::fs::remove_file(&launcher).unwrap();
+    std::fs::write(&launcher, b"previous build").unwrap();
+    let failed = home.run_facade(&["daemon", "--install-only"]);
+    let diagnostic = stderr(&failed);
+    assert_eq!(failed.status.code(), Some(1), "{diagnostic}");
+    assert!(
+        diagnostic.contains(launcher.to_str().unwrap()),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("rerun the installer"), "{diagnostic}");
+    let cause = std::io::Error::from_raw_os_error(libc::EINVAL).to_string();
+    assert!(diagnostic.contains(cause.as_str()), "{diagnostic}");
+    assert_eq!(std::fs::read(&launcher).unwrap(), b"previous build");
+    assert_eq!(
+        bin.join("facade-mcp").canonicalize().unwrap(),
+        home.path
+            .join("framework/bin/facade-mcp")
+            .canonicalize()
+            .unwrap()
+    );
+    std::fs::remove_file(&launcher).unwrap();
+    std::os::unix::fs::symlink("0.1.6/facade", launcher).unwrap();
+
     for _ in 0..2 {
         home.run_facade_ok(&["daemon", "--install-only"]);
         for name in ["facade", "facade-mcp"] {
