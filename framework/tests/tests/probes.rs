@@ -15,8 +15,8 @@ use facade_scenarios::*;
 
 const SESSION: &str = "5a7c1e42-9d3b-4f60-8a21-0c4b7d9e6f13";
 const DRAFT: &str = "hello there";
-// The explicit Shell delivery wait uses the command budget, including time for its receipt.
-const SEND_TIMEOUT: &str = "9";
+const SEND_TIMEOUT: u64 = 9;
+const NOT_READY: &[&str] = &["input_unknown", "timeout"];
 
 /// The file the test CLI of agent `name` writes the bytes it reads to.
 fn keys_file(home: &TestHome, name: &str) -> PathBuf {
@@ -40,6 +40,16 @@ fn pressed(file: &Path) -> Vec<u8> {
         }
     }
     out
+}
+
+fn expect_keys(file: &Path, expected: &[u8], context: &str) {
+    // The delivery receipt can arrive before the test CLI records a key it was sent.
+    assert!(
+        wait_until(secs(30), || pressed(file).len() >= expected.len()),
+        "{context}: the test CLI recorded {:?}",
+        pressed(file)
+    );
+    assert_eq!(pressed(file), expected, "{context}");
 }
 
 /// Starts the test CLI as Muse, agent `name`, with `env`, its keys going to its file, and waits
@@ -101,11 +111,33 @@ fn report_session(home: &TestHome, agent: &str, name: &str) {
 
 /// `facade send <name> <text> -w`: whether it was delivered, and what it said.
 fn send(home: &TestHome, name: &str, text: &str) -> (bool, String) {
-    let sent = home.run_facade(&["send", name, text, "-w", "-t", SEND_TIMEOUT]);
+    let sent = home.run_facade(&["send", name, text, "-w", "-t", &SEND_TIMEOUT.to_string()]);
     (
         sent.status.success(),
         format!("{}{}", stdout(&sent), stderr(&sent)),
     )
+}
+
+/// Keeps the send budget short but waits for the actual settled receipt. The Shell command's
+/// total deadline can expire while the daemon is still returning that receipt.
+fn expect_blocked_delivery(home: &TestHome, reasons: &[&str]) {
+    let receipt = connect(home).call_ok(
+        "agent.send",
+        json!({
+            "to": "muse", "text": "a message", "wait_for": "delivery",
+            "time_left_ms": SEND_TIMEOUT * 1_000,
+        }),
+    );
+    let delivery = &receipt["message"]["delivery"];
+    assert!(
+        reasons.contains(&delivery["reason"].as_str().unwrap_or_default())
+            && delivery["status"] == "failure"
+            && receipt["withdrawn"] == true
+            && delivery["text_written"] == "none"
+            && delivery["enter_written"] == false,
+        "{receipt}\n{}",
+        home.daemon_log()
+    );
 }
 
 /// A hint is tried once a run: the space replaces it, the Backspace brings it back, and the
@@ -115,14 +147,6 @@ fn send(home: &TestHome, name: &str, text: &str) -> (bool, String) {
 fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     let home = TestHome::new("probehint");
     let file = keys_file(&home, "muse");
-    let expect_keys = |expected: &[u8], context: &str| {
-        assert!(
-            wait_until(secs(30), || pressed(&file).len() >= expected.len()),
-            "{context}: the test CLI recorded {:?}",
-            pressed(&file)
-        );
-        assert_eq!(pressed(&file), expected, "{context}");
-    };
     let id = start(
         &home,
         "muse",
@@ -140,11 +164,11 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     };
     let (sent, said) = send(&home, "muse", "first message");
     assert!(sent, "{said}");
-    expect_keys(b" \x7f\r", "space, Backspace, then the message");
+    expect_keys(&file, b" \x7f\r", "space, Backspace, then the message");
     wait_for_submissions(1);
     let (sent, said) = send(&home, "muse", "second message");
     assert!(sent, "{said}");
-    expect_keys(b" \x7f\r\r", "the run remembers the hint");
+    expect_keys(&file, b" \x7f\r\r", "the run remembers the hint");
     assert!(
         wait_until(secs(30), || home.submitted_messages().len() >= 2),
         "the test CLI records both submitted messages"
@@ -174,6 +198,7 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     let (sent, said) = send(&home, "muse", "third message");
     assert!(sent, "{said}");
     expect_keys(
+        &file,
         b" \x7f\r\r \x7f\r",
         "a new run of the CLI tries the hint again",
     );
@@ -188,12 +213,8 @@ fn a_draft_before_the_cursor_is_probed_once_and_holds_the_message() {
     let home = TestHome::new("probedraft");
     let file = keys_file(&home, "muse");
     start(&home, "muse", &[("FAKECLI_DRAFT_AT_START", DRAFT)], DRAFT);
-    let (sent, said) = send(&home, "muse", "a message");
-    assert!(
-        !sent && said.contains("Its terminal has an unfinished draft."),
-        "{said}"
-    );
-    assert_eq!(pressed(&file), b" \x7f", "one probe, through every retry");
+    expect_blocked_delivery(&home, &["input_draft"]);
+    expect_keys(&file, b" \x7f", "one probe, through every retry");
     assert!(home.submitted_messages().is_empty());
     assert!(
         home.screen("muse").contains(&format!("❯ {DRAFT}")),
@@ -214,18 +235,8 @@ fn a_probe_that_finds_neither_takes_its_space_out_and_reads_unknown() {
         ("FAKECLI_SPACE_SUGGESTS", " (suggested)"),
     ];
     start(&home, "muse", &env, DRAFT);
-    let (sent, said) = send(&home, "muse", "a message");
-    let probes: Vec<String> = home
-        .daemon_log()
-        .lines()
-        .filter(|line| line.contains("probe"))
-        .map(String::from)
-        .collect();
-    assert!(
-        !sent && said.contains("The delivery deadline passed before its terminal was ready."),
-        "{said}\n{probes:#?}"
-    );
-    assert_eq!(pressed(&file), b" \x7f");
+    expect_blocked_delivery(&home, NOT_READY);
+    expect_keys(&file, b" \x7f", "the probe removes its space");
     assert!(
         home.screen("muse").contains(&format!("❯ {DRAFT}")),
         "{}",
@@ -249,12 +260,8 @@ fn a_space_that_does_not_show_gets_no_backspace() {
             &[("FAKECLI_DRAFT_AT_START", DRAFT), env],
             DRAFT,
         );
-        let (sent, said) = send(&home, "muse", "a message");
-        assert!(
-            !sent && said.contains("The delivery deadline passed before its terminal was ready."),
-            "{label}: {said}"
-        );
-        assert_eq!(pressed(&file), b" ", "{label}: the space alone");
+        expect_blocked_delivery(&home, NOT_READY);
+        expect_keys(&file, b" ", &format!("{label}: the space alone"));
     }
 }
 
@@ -269,12 +276,8 @@ fn a_probe_whose_backspace_does_not_restore_the_row_presses_nothing_more() {
         ("FAKECLI_IGNORE_KEYS", "backspace"),
     ];
     start(&home, "muse", &env, DRAFT);
-    let (sent, said) = send(&home, "muse", "a message");
-    assert!(
-        !sent && said.contains("Its terminal has an unfinished draft."),
-        "{said}"
-    );
-    assert_eq!(pressed(&file), b" \x7f", "nothing after the Backspace");
+    expect_blocked_delivery(&home, &["input_draft"]);
+    expect_keys(&file, b" \x7f", "nothing after the Backspace");
     assert!(home.submitted_messages().is_empty());
 }
 
@@ -293,7 +296,14 @@ fn the_person_s_key_during_a_probe_follows_its_backspace() {
     });
     let mut sending = home
         .command(&test_binaries().facade)
-        .args(["send", "muse", "a message", "-w", "-t", SEND_TIMEOUT])
+        .args([
+            "send",
+            "muse",
+            "a message",
+            "-w",
+            "-t",
+            &SEND_TIMEOUT.to_string(),
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
