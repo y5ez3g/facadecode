@@ -167,6 +167,7 @@ To answer a message, use the sender address in `to` and the message number in `r
 shows `from command line (#c17@devbox)`. The original recipient can send one linked reply while the command waits.
 
 For a managed agent, the Orchestrator waits for an empty input box and checks the pasted draft before submitting it.
+An active turn shows Working while any unseen completion is retained. Just done can show again when work ends.
 Codex queues an ordinary message with Tab while Working. Idle delivery, startup prompts and recovered in-flight
 drafts use Enter. A Guest takes messages with `read_messages`. Background delivery has a 30-second deadline.
 When Shell explicitly waits,

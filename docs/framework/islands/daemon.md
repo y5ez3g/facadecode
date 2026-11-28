@@ -414,9 +414,13 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 - **Owns:** what the CLI reported and its screen showed, the turn, a question the CLI asks, the tools' connection, how the run ended, what was last said to the agent, and the file `framework/screens/<id>/state`.
 - **Keeps:**
-  - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
+  - `Ended` takes priority, followed by the CLI's own `WaitingForYou` or `Error`, a question in
+    place of the input box (`WaitingForYou`), and unavailable tools (`Error`). Current work reads
+    `Working` and retains any unseen completion. Next come `JustDone`, the brief `Working` hold,
+    `Starting`, `Idle`, a failed start (`Error`), and `Unknown`.
   - A recognized input interaction supplies its wait kind when known. Other input interactions use `unknown`.
-  - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
+  - When no earlier state wins, work that stops reads `Working` for one more second. A turn
+    someone asked for that ends unwatched records a completion until a terminal shows the agent.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
@@ -491,9 +495,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     A person's Enter can still prove that they submitted the whole message. Unread frames keep
     settle time running. A partial redraw ending inside the same live paste marker also keeps
     that time. Submission still requires the whole marker. A readable change restarts the wait.
-    Codex queues an ordinary message with Tab while Working. When `Just done` shows an unseen
-    completion, the submission key follows the current work evidence. The start prompt and recovered
-    pastes use Enter.
+    Codex queues an ordinary message with Tab while Working. While a new turn's work evidence
+    awaits publication, it can already select Tab over the previous `Just done` reading. The
+    start prompt and recovered pastes use Enter.
   - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
     paste, with the same person-input generation and the native disclosure visible. The CLI must
     draw after each write and earlier person input must be settled. A pending confirmation for an

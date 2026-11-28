@@ -117,9 +117,8 @@ impl StateTracker {
         }
 
         let current = self.evidence.current();
-        let held_until = self
-            .progress
-            .advance(Turn::from(current), now, viewing, &mut self.saved);
+        let turn = Turn::from(current);
+        let held_until = self.progress.advance(turn, now, viewing, &mut self.saved);
         let start_deadline = self.question.deadline(self.started);
         let tools_pending =
             tools == ToolsState::Connecting && !matches!(self.connection, Connection::Initialized);
@@ -146,9 +145,9 @@ impl StateTracker {
             )
         } else if tools == ToolsState::Unavailable {
             reasoned(ManagedAgentState::Error, StateReason::ToolsUnavailable)
-        } else if self.saved.just_done {
+        } else if self.saved.just_done && turn != Turn::Working {
             (ManagedAgentState::JustDone, None)
-        } else if held_until.is_some() || matches!(current, Some(EvidenceState::Working)) {
+        } else if held_until.is_some() || turn == Turn::Working {
             (ManagedAgentState::Working, None)
         } else if starting {
             (ManagedAgentState::Starting, None)
@@ -977,9 +976,13 @@ mod tests {
         agent.take(vec![report("state=working")]);
         assert_eq!(
             state(&mut agent, later),
-            (ManagedAgentState::JustDone, None),
-            "just done comes before working"
+            (ManagedAgentState::Working, None),
+            "current work is visible with an unseen completion"
         );
+        assert!(agent.kept().just_done, "the completion stays unseen");
+        let mut recovered = StateTracker::new(None, now, agent.kept(), None, None);
+        assert_eq!(state(&mut recovered, later).0, ManagedAgentState::Working);
+        assert!(recovered.kept().just_done);
         agent.seen();
         assert_eq!(state(&mut agent, later), (ManagedAgentState::Working, None));
         agent.take(vec![report("state=done")]);

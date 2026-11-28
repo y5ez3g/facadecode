@@ -1362,7 +1362,25 @@ fn codex_uses_tab_only_for_an_ordinary_delivery_while_working() {
     );
 
     // The resting send started another turn without a viewer seeing the previous one.
-    reaches(&home, "codex", "just_done");
+    reaches(&home, "codex", "working");
+    let status = home.run_facade_ok(&["status", "codex"]);
+    assert!(
+        status
+            .lines()
+            .any(|line| line.split_whitespace().eq(["State", "Working"])),
+        "{status}"
+    );
+    let roster = McpTestClient::open_guest(&home, "codex", &[]).call("list_agents", json!({}));
+    let codex = roster["data"]["agents"].as_array().and_then(|agents| {
+        agents
+            .iter()
+            .find(|agent| agent["name"] == "codex" && agent["type"] == "managed")
+    });
+    assert_eq!(
+        codex.expect("the managed Codex is listed")["state"],
+        "working",
+        "{roster}"
+    );
     let delivered = home.run_facade_ok(&["send", "codex", "queue during second turn", "-w"]);
     assert!(delivered.contains("Delivered"), "{delivered}");
     assert!(submitted("\nqueue during second turn "));
@@ -1371,5 +1389,7 @@ fn codex_uses_tab_only_for_an_ordinary_delivery_while_working() {
         b"\r\t\r\r\t",
         "an ordinary send while the CLI works still uses Tab with an unseen completion"
     );
+    reaches(&home, "codex", "working");
+    submit(&home, "codex", "/fake status idle");
     reaches(&home, "codex", "just_done");
 }
