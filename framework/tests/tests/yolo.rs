@@ -829,7 +829,7 @@ fn shell_and_ide_starts_leave_claude_trust_to_the_person_with_yolo_on() {
     let hello = ide.hello("ide", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(hello["result"]["api_version"], 1, "{hello}");
     let mut env: std::collections::BTreeMap<_, _> = home.isolating_env().into_iter().collect();
-    env.insert("FACADE_LAUNCH_UNATTENDED".into(), "1".into());
+    env.insert("FACADE_LAUNCH_UNATTENDED", "1".into());
     ide.call_ok(
         "agent.start",
         json!({
