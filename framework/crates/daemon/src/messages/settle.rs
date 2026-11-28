@@ -173,11 +173,12 @@ impl Deliveries {
         }
         let recorded = blocking_in_place(|| {
             if cleaned_paste {
-                let unsubmitted = matches!(
+                // An unissued reservation also withdraws. Only a confirmed erase can retire a
+                // settled message. Its receipt supplies the earlier daemon's write facts.
+                let confirmed_erase = matches!(
                     outcome,
                     Outcome::Withdrawn {
                         text_written: TextWritten::Full,
-                        enter_written: Some(false),
                         ..
                     }
                 );
@@ -186,7 +187,7 @@ impl Deliveries {
                     &results,
                     &withdrawals,
                     numbers,
-                    unsubmitted,
+                    confirmed_erase,
                 )
             } else if withdrawals.is_empty() {
                 self.table.settle_messages(&writes, &results)

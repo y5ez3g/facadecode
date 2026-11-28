@@ -535,8 +535,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     CLI is waiting, the live cleanup stays available for revalidation by later output.
     A deadline in an unread frame can wait for a complete frame within the existing grace.
     A receipt is given once, by two `RESPONSE_GRACE` after the deadline, and says what is known then.
-    A later confirmed erase withdraws ordinary messages whose receipts already reported the full
-    paste and no submission key, preserving the recorded delivery outcome.
+    A later confirmed erase, including one confirmed after a daemon replacement, withdraws
+    ordinary messages whose receipts already reported the full paste and no submission key.
+    The recorded delivery outcome stays available for replay.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run by its child

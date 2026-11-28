@@ -1768,6 +1768,115 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the debug hold on message submission"
+)]
+fn a_confirmed_erase_after_daemon_restart_withdraws_the_original_failed_send() {
+    let home = TestHome::new("restart-late-withdrawal");
+    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
+    home.fault("hold-message-enter", "");
+    let keys = home.folder().join("keys");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let text = "a full paste that expires before submission";
+    let request = "withdraw-after-restart";
+    let send = begin_send(&home, "worker", text, Some(request));
+    let store = rusqlite::Connection::open_with_flags(
+        home.path.join("framework/facade.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let has_observed_draft = || {
+        store
+            .query_row(
+                "SELECT length(paste_draft) = 32 FROM messages \
+                 WHERE number = 1 AND paste = 1 AND status = 'pending' AND paste_draft IS NOT NULL",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false)
+    };
+    assert!(wait_until(LOADED_TIMEOUT, has_observed_draft));
+    let screen = home.screen(&worker.address);
+    assert!(screen.contains("[Pasted text #1 +1 lines]"), "{screen}");
+    let pasted = std::fs::read(&keys).unwrap();
+    assert!(
+        pasted
+            .windows(text.len())
+            .any(|bytes| bytes == text.as_bytes())
+    );
+    assert!(pasted.ends_with(b"\x1b[201~"));
+
+    // The CLI retains the draft and its terminal takes the erase. Holding the CLI makes the
+    // sender receive its failure before any empty frame can confirm the erase.
+    pause_process(worker.pid);
+    let original = send.receipt();
+    let cleanup_written = store
+        .query_row(
+            "SELECT substr(paste_draft, 33) FROM messages WHERE number = 1 AND paste = 1 \
+             AND status = 'failure' AND reason = 'submission_unconfirmed' AND text_written = 'full' \
+             AND enter_written = 0 AND withdrawn = 0 AND text = ?1 AND length(paste_draft) = 37",
+            [text],
+            |row| row.get::<_, Vec<u8>>(0),
+        );
+    let old = home.kill_daemon();
+    let replacement = home.wait_for_daemon_after(old, LOADED_TIMEOUT);
+    resume_process(worker.pid);
+    replacement.expect("the keeper starts a replacement for the same CLI");
+    let cleanup_written =
+        cleanup_written.expect("a durable full/zero-key failure with cleanup progress");
+    assert_eq!(cleanup_written[0], 1, "the write is acknowledged");
+    let erase_count = u32::from_le_bytes(cleanup_written[1..].try_into().unwrap()) as usize;
+    assert!(erase_count > 0);
+    assert_eq!(original["id"], receipt_id(&home, &worker.id, "m1"));
+    assert_eq!(
+        delivery_of(&original),
+        (
+            json!("failure"),
+            json!("submission_unconfirmed"),
+            json!("full"),
+            Value::Null,
+        )
+    );
+    assert_eq!(original["message"]["delivery"]["enter_written"], false);
+
+    assert!(wait_until(LOADED_TIMEOUT, || store
+        .query_row(
+            "SELECT paste_draft IS NULL FROM messages WHERE number = 1 AND paste = 1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()));
+    for _ in 0..2 {
+        let retry = repeat_send(&home, "worker", text, request);
+        assert_eq!(retry["id"], original["id"], "{retry}");
+        assert_eq!(
+            retry["message"]["delivery"], original["message"]["delivery"],
+            "{retry}"
+        );
+        assert_eq!(retry["withdrawn"], true, "{retry}");
+        assert_eq!(retry["message"]["text"], "", "{retry}");
+    }
+    assert!(kept(&home, 1).is_none());
+    assert!(home.submitted_messages().is_empty());
+    assert_eq!(
+        &std::fs::read(&keys).unwrap()[pasted.len()..],
+        vec![0x7f; erase_count]
+    );
+
+    std::fs::remove_file(home.path.join("framework/hold-message-enter")).unwrap();
+    assert_eq!(
+        home.run_facade_ok(&["send", "worker", "next message", "-w"])
+            .trim(),
+        delivered(&home, &worker.id, "m2")
+    );
+    assert_eq!(
+        home.submitted_messages(),
+        ["📨 Message m2 from command line\nnext message "],
+    );
+}
+
+#[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test pause of debug builds")]
 fn the_relay_reports_the_interrupted_read_and_leaves_the_rest_unread() {
     let home = TestHome::new("relay-restart-read");

@@ -705,7 +705,7 @@ enum Withdrawal<'a> {
     CleanedPaste {
         withdraw: &'a [u64],
         batch: &'a [u64],
-        unsubmitted: bool,
+        confirmed_erase: bool,
     },
 }
 
@@ -1093,15 +1093,15 @@ impl MessageTable {
     }
 
     /// Settles a confirmed erase and retires its saved observation in the same transaction.
-    /// A settled Facade notice may become readable. If no submission key went out, a settled
-    /// ordinary message can leave the inbox while its original failure receipt survives.
+    /// A settled Facade notice may become readable. A confirmed erase withdraws an ordinary
+    /// message when its stored failure receipt proves the paste went in without a submission key.
     pub(crate) fn settle_cleaned_paste(
         &self,
         settled: &[(u64, &Delivery)],
         results: &[(u64, Message)],
         withdrawals: &[u64],
         batch: &[u64],
-        unsubmitted: bool,
+        confirmed_erase: bool,
     ) -> anyhow::Result<Settlement> {
         self.write_deliveries(
             settled,
@@ -1110,7 +1110,7 @@ impl MessageTable {
             Withdrawal::CleanedPaste {
                 withdraw: withdrawals,
                 batch,
-                unsubmitted,
+                confirmed_erase,
             },
         )
     }
@@ -1176,7 +1176,7 @@ impl MessageTable {
                     }
                 }
                 if let Withdrawal::CleanedPaste {
-                    batch, unsubmitted, ..
+                    batch, confirmed_erase, ..
                 } = withdrawal
                     && let Some(&paste) = batch.first()
                 {
@@ -1202,7 +1202,7 @@ impl MessageTable {
                         {
                             written.cleaned_notices.push(notice.message);
                         }
-                        if unsubmitted
+                        if confirmed_erase
                             && let Some(to) = unconsumed
                                 .query_row(params![number as i64, paste as i64], |row| row.get(0))
                                 .optional()?
