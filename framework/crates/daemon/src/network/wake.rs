@@ -1,18 +1,19 @@
-//! Wake requests use a remembered path and ask each machine to open its own saved connection.
+//! Verify live routes and ask each machine on a saved path to open its own connection.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use facade_base::api_v1::daemon::{
     Caller, ForwardParams, ForwardRequest, InternalEnsureRoute, InternalEnsureRouteArgs,
 };
 use facade_base::api_v1::{CallParams, EmptyResult, ErrorBody, Operation, decode_arguments};
-use facade_base::model::machine::ExecutionOutcome;
+use facade_base::model::machine::{ExecutionOutcome, MachineIdentity};
 use serde_json::json;
 
-use super::Network;
 use super::routes::is_uuid_v4;
 use super::session::Reply;
-use super::wire;
+use super::topology::{LinkRecheck, Topology};
+use super::{Network, SessionId, wire};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteAttempt {
@@ -24,8 +25,68 @@ impl RouteAttempt {
     pub(super) fn new(wake: bool) -> Self {
         if wake { Self::Wake } else { Self::Passive }
     }
+
+    fn request(self, route: Vec<String>, caller: Caller) -> ForwardParams {
+        ForwardParams {
+            route,
+            caller,
+            request: ForwardRequest::Call(CallParams {
+                op: InternalEnsureRoute::NAME.to_owned(),
+                args: json!(InternalEnsureRouteArgs {
+                    wake: self == Self::Wake
+                }),
+            }),
+            time_left_ms: None,
+            from_name: None,
+            start_result: None,
+        }
+    }
 }
 impl Network {
+    /// The replacement can route immediately. Only a response on the earlier stream can put
+    /// that stream back in the route table. The earlier session owns the check until it answers,
+    /// closes, or is checked again on a subsequent reconnect.
+    pub(super) fn recheck_foreground_link(
+        &self,
+        state: &mut Topology,
+        id: SessionId,
+        replacement: SessionId,
+    ) {
+        let caller = Caller::Terminal {
+            machine_id: state.local.machine_id.clone(),
+        };
+        let link = state.links.get_mut(&id).expect("earlier foreground link");
+        let machine = MachineIdentity {
+            machine_id: link.remote.machine_id.clone(),
+            name: link.remote.name.clone(),
+        };
+        let request = RouteAttempt::Passive.request(vec![machine.machine_id.clone()], caller);
+        let Ok(mut pending) = link.peer.request(request, None, machine) else {
+            self.withdraw_link(state, id, None);
+            return;
+        };
+        let network = Arc::downgrade(&self.0);
+        let task = tokio::spawn(async move {
+            if !matches!(pending.answer(None).await, Ok(Reply::Call { .. })) {
+                return;
+            }
+            let Some(network) = network.upgrade() else {
+                return;
+            };
+            let mut state = network.state.lock().unwrap();
+            if let Some(link) = state.links.get_mut(&id)
+                && link
+                    .recheck
+                    .as_ref()
+                    .is_some_and(|check| check.replacement == replacement)
+            {
+                link.recheck = None;
+                state.publish(&network.events, None);
+            }
+        });
+        link.recheck = Some(LinkRecheck { replacement, task });
+    }
+
     pub(crate) fn remembered_route(&self, machine_id: &str) -> Option<Vec<String>> {
         let state = self.0.state.lock().unwrap();
         state.remembered_routes.get(machine_id).cloned()
@@ -106,19 +167,7 @@ impl Network {
             })?;
             link.peer.clone()
         };
-        let forward = ForwardParams {
-            route,
-            caller: caller.clone(),
-            request: ForwardRequest::Call(CallParams {
-                op: InternalEnsureRoute::NAME.to_owned(),
-                args: json!(InternalEnsureRouteArgs {
-                    wake: attempt == RouteAttempt::Wake
-                }),
-            }),
-            time_left_ms: None,
-            from_name: None,
-            start_result: None,
-        };
+        let forward = attempt.request(route, caller.clone());
         match peer
             .request(forward, None, identity.clone())?
             .answer(None)

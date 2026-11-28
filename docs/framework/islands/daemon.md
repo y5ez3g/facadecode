@@ -925,6 +925,12 @@ holds it while processing the table. At each end, the session and daemon restart
 30-second idle timers when their last work ends. SSH keepalives, roster sync and local `daemon.ping`
 let the timers keep running.
 
+On a foreground SSH reconnect, publish the newly authenticated route immediately. Remove older
+links to the same peer boot with the same local SSH destination, arguments and home from route
+selection while a passive request verifies each earlier stream. Each link can supply routes again
+after its own authenticated response. An independently configured connection to the peer stays
+available throughout.
+
 ### guests
 
 The relay boundary uses its socket peer PID and process birth. A relay joins as a Guest on its first
