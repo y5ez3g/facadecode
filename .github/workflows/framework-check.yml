@@ -1,173 +1,185 @@
-name: Framework checks
-
+name: Final Windows x64 Framework package
 on:
-  pull_request:
-    paths:
-      - 'framework/**'
-      - 'extension/src/base/names.ts'
-      - '.github/workflows/framework-check.yml'
-      - 'ci/acceptance.py'
-      - 'ci/catalog.py'
-      - 'ci/check_keeper_recovery.py'
-      - 'ci/check_real_ssh_route.py'
-      - 'ci/evidence.py'
-      - 'ci/native_framework.py'
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: framework-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+env:
+  FACADE_EXPECTED_SHA: 393ca1b87ba4e3f9fa1d5311f4bd1d7cd5e22202
+  FACADE_EXPECTED_TREE: ca66c5ee542b2914c01f13adaecfe0655a635c72
+  FACADE_EXPECTED_BUILD: 0.1.6+1795860448.393ca1b87ba4e3f9fa1d5311f4bd1d7cd5e22202
+  CARGO_INCREMENTAL: '0'
 jobs:
-  verify:
-    name: Framework on ${{ matrix.target }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: darwin-arm64
-          - os: macos-15-intel
-            target: darwin-x64
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          - os: windows-latest
-            target: win32-x64
-          - os: windows-11-arm
-            target: win32-arm64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+  win32-x64:
+    name: Clean Framework package on Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 25
     defaults:
       run:
-        shell: bash
-        working-directory: framework
+        shell: pwsh
     steps:
       - uses: actions/checkout@v5
-      - name: Install the toolchain rust-toolchain.toml pins
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: framework
-      - name: Name the commits tests make
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
-      - name: Format
-        if: matrix.target == 'linux-x64'
-        run: cargo fmt --check
-      - name: Lint
-        if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Tests
-        if: ${{ !cancelled() && runner.os != 'Windows' }}
-        env:
-          TEST_ALL_PROGRESS: ${{ runner.os == 'macOS' && '1' || '0' }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/facade-tests"
-          TMPDIR="$RUNNER_TEMP/facade-tests" scripts/test-all.sh
-      # Its temporary folder is .test-temp, beside the checkout
-      - name: Tests on Windows
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
-        shell: powershell
-        run: scripts\test-all.ps1
-      - name: Agents outlive an SSH login
-        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
-        env:
-          CARGO_INCREMENTAL: '0'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q openssh-server
-          sudo systemctl start ssh
-          mkdir -p ~/.ssh
-          chmod go-w ~ && chmod 700 ~/.ssh
-          ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
-          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts
-          mkdir -p "$RUNNER_TEMP/facade-tests"
-          TMPDIR="$RUNNER_TEMP/facade-tests" scripts/ssh-check.sh
-      - name: Route a Framework agent over real SSH
-        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
-        run: |
-          out="$RUNNER_TEMP/facade-ssh-route"
-          mkdir -p "$out"
-          bin="${FACADE_SSH_CHECK_BIN:-${CARGO_TARGET_DIR:-$PWD/target}/debug}"
-          python3 -B ../ci/check_real_ssh_route.py --bin-dir "$bin" --receipt "$out/receipt.json" 2>&1 | tee "$out/console.log"
-          python3 -B ../ci/acceptance.py verify-native-ssh --bin-dir "$bin" "$out/receipt.json" "$out/console.log"
-      - name: Keep the real SSH route evidence
-        if: ${{ always() && matrix.target == 'linux-x64' }}
-        uses: actions/upload-artifact@v4
+          ref: ${{ env.FACADE_EXPECTED_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
         with:
-          name: framework-ssh-route-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/facade-ssh-route/
-          if-no-files-found: ignore
-      - name: Run and verify the exact Keeper recovery
-        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
+          node-version-file: extension/.nvmrc
+      - name: Build, package and verify the exact MSVC binaries
         run: |
-          python3 -B ../ci/check_keeper_recovery.py --reuse-workspace-build \
-            --ssh-receipt "$RUNNER_TEMP/facade-ssh-route/receipt.json" \
-            --output-dir "$RUNNER_TEMP/facade-keeper-recovery"
-      - name: Keep the Keeper recovery evidence
-        if: ${{ always() && matrix.target == 'linux-x64' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: framework-keeper-recovery-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/facade-keeper-recovery/
-          if-no-files-found: error
-      - name: Collect the failed Windows run
-        if: ${{ failure() && runner.os == 'Windows' }}
-        shell: powershell
-        run: |
-          $log = 'target/test-all.log.full'
-          if (Test-Path -LiteralPath $log) {
-            Select-String -LiteralPath $log -Pattern "^thread .* panicked at " -Context 0,5 |
-              Select-Object -First 20
-          }
-          $runs = Join-Path (Split-Path $env:GITHUB_WORKSPACE) '.test-temp'
-          if (Test-Path -LiteralPath $runs) {
-            $out = Join-Path $env:RUNNER_TEMP 'facade-tests'
-            New-Item -ItemType Directory -Force $out | Out-Null
-            Get-ChildItem -LiteralPath $runs -Directory -Filter 'facade-test-all.*' |
-              ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $out -Recurse }
-          }
-      - name: Keep the failed run's files
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: framework-tests-${{ matrix.target }}
-          path: |
-            ${{ runner.temp }}/facade-tests
-            framework/target/test-all.log
-            framework/target/test-all.log.full
-          if-no-files-found: ignore
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $root = Join-Path $env:RUNNER_TEMP 'fixw-windows-pr122-x64'
+          $out = Join-Path $root 'evidence'
+          $expanded = Join-Path $root 'expanded'
+          $installRoot = Join-Path $root 'install'
+          $env:CARGO_TARGET_DIR = Join-Path $root 'cargo-target'
+          if (Test-Path -LiteralPath $root) { throw 'The private build folder already exists' }
+          New-Item -ItemType Directory -Path $out, $env:CARGO_TARGET_DIR | Out-Null
 
-  each-commit:
-    name: Framework at each commit
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      # check-each-commit.sh builds in a worktree of its own; this reuses the cached dependencies.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/framework/target
-    defaults:
-      run:
-        shell: bash
-        working-directory: framework
-    steps:
-      - uses: actions/checkout@v5
+          function Confirm-Checkout {
+            $head = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0 -or $head -cne $env:FACADE_EXPECTED_SHA) { throw 'Checkout SHA differs' }
+            $tree = git rev-parse 'HEAD^{tree}'
+            if ($LASTEXITCODE -ne 0 -or $tree -cne $env:FACADE_EXPECTED_TREE) { throw 'Checkout tree differs' }
+            $changed = @(git status --porcelain=v1 --untracked-files=all)
+            if ($LASTEXITCODE -ne 0 -or $changed.Count) { throw "Checkout has changes: $changed" }
+            [ordered]@{ head = $head; tree = $tree; changed_files = $changed.Count }
+          }
+
+          function Get-Digest([string] $File) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant()
+          }
+
+          function Get-PeMachine([string] $File) {
+            $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($File))
+            try {
+              if ($reader.ReadUInt16() -ne 0x5a4d) { throw "Missing PE header in $File" }
+              $reader.BaseStream.Position = 0x3c
+              $offset = $reader.ReadUInt32()
+              $reader.BaseStream.Position = $offset
+              if ($reader.ReadUInt32() -ne 0x4550) { throw "Missing PE signature in $File" }
+              '0x{0:x4}' -f $reader.ReadUInt16()
+            } finally {
+              $reader.Dispose()
+            }
+          }
+
+          $before = Confirm-Checkout
+          $toolchain = @()
+          Push-Location framework
+          try {
+            rustup toolchain install
+            if ($LASTEXITCODE) { throw 'Toolchain install failed' }
+            $toolchain = @(rustc -vV)
+            if ($LASTEXITCODE -ne 0 -or $toolchain -cnotcontains 'host: x86_64-pc-windows-msvc') { throw 'Runner is not native x64 MSVC' }
+            $cargoVersion = cargo --version
+            if ($LASTEXITCODE) { throw 'Cargo version check failed' }
+          } finally { Pop-Location }
+          $toolchain | Set-Content (Join-Path $out 'rustc.txt')
+          "Checkout $($before.head) tree $($before.tree)"
+          $env:VSCMD_SKIP_SENDTELEMETRY = '1'
+          node extension/scripts/framework.mjs --target x86_64-pc-windows-msvc 2>&1 |
+            Tee-Object -FilePath (Join-Path $out 'build.log')
+          if ($LASTEXITCODE) { throw 'Framework build failed' }
+
+          $bin = Join-Path $repo 'extension/bin'
+          $build = (Get-Content -Raw -LiteralPath (Join-Path $bin 'VERSION')).TrimEnd()
+          $epochAndSha = git show -s --format='%ct.%H' HEAD
+          if ($LASTEXITCODE -ne 0 -or
+              $build -cne $env:FACADE_EXPECTED_BUILD -or
+              -not $build.EndsWith("+$epochAndSha", [StringComparison]::Ordinal)) {
+            throw 'The built VERSION differs from the pinned commit'
+          }
+          $shell = Join-Path $bin 'facade.exe'
+          $reported = & $shell --version
+          if ($LASTEXITCODE -ne 0 -or $reported -cne "facade $build") { throw 'Built Shell version differs' }
+
+          node framework/scripts/package-framework.mjs --target win32-x64 --bin-dir $bin --out-dir $out
+          if ($LASTEXITCODE) { throw 'Framework packaging failed' }
+          $archiveName = 'facade-framework-win32-x64.zip'
+          $archive = Join-Path $out $archiveName
+          $checksums = Join-Path $out 'SHA256SUMS'
+          $archiveSHA = Get-Digest $archive
+          if ((Get-Content -Raw -LiteralPath $checksums).TrimEnd() -cne "$archiveSHA  $archiveName") {
+            throw 'The ZIP digest differs from SHA256SUMS'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $files = @('facade.exe', 'facade-mcp.exe', 'conpty/conpty.dll', 'conpty/OpenConsole.exe')
+          $entries = @(Get-ChildItem -LiteralPath $expanded -File -Recurse | ForEach-Object {
+            [IO.Path]::GetRelativePath($expanded, $_.FullName).Replace('\', '/')
+          })
+          $expectedEntries = $files + @('VERSION', 'LICENSE.txt', 'conpty/LICENSE')
+          if (@(Compare-Object $expectedEntries $entries -CaseSensitive).Count) { throw 'Unexpected ZIP member list' }
+          if ((Get-Content -Raw -LiteralPath (Join-Path $expanded 'VERSION')) -cne "$build`n") {
+            throw 'The ZIP VERSION marker differs'
+          }
+
+          $env:TMP = $env:TEMP = Join-Path $root 'tmp'
+          New-Item -ItemType Directory -Path $env:TEMP | Out-Null
+          $version = ($build -split '\+', 2)[0]
+          & ./framework/install.ps1 -InstallRoot $installRoot -Version $version -ExpectedBuild $build `
+            -Package $archive -NoPath -NoActivate |
+            Tee-Object -FilePath (Join-Path $out 'install.log')
+          $launcher = Join-Path $installRoot 'framework/bin/facade.exe'
+          $installedVersion = & $launcher --version
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -cne "facade $build") { throw 'Installed Shell version differs' }
+          $installedDir = Join-Path $installRoot "framework/bin/$build"
+          $vendorVersions = @(Get-ChildItem -LiteralPath 'framework/vendor/conpty' -Directory)
+          if ($vendorVersions.Count -ne 1) { throw 'The source tree has an unexpected ConPTY layout' }
+          $vendor = Join-Path $vendorVersions[0].FullName 'win-x64'
+
+          $members = [ordered]@{}
+          foreach ($name in $files) {
+            $built = Join-Path $bin $name
+            $packaged = Join-Path $expanded $name
+            $installed = Join-Path $installedDir $name
+            $builtSHA = Get-Digest $built
+            $archiveFileSHA = Get-Digest $packaged
+            $installedSHA = Get-Digest $installed
+            $machine = Get-PeMachine $packaged
+            if ($builtSHA -cne $archiveFileSHA -or $builtSHA -cne $installedSHA -or $machine -cne '0x8664') {
+              throw "Artifact identity differs at $name"
+            }
+            $member = [ordered]@{
+              built_sha256 = $builtSHA
+              archive_sha256 = $archiveFileSHA
+              installed_sha256 = $installedSHA
+              pe_machine = $machine
+            }
+            if ($name.StartsWith('conpty/')) {
+              $vendored = Join-Path $vendor (Split-Path -Leaf $name)
+              $member['vendor_path'] = [IO.Path]::GetRelativePath($repo, $vendored).Replace('\', '/')
+              $member['vendor_sha256'] = Get-Digest $vendored
+              if ($member['vendor_sha256'] -cne $builtSHA) { throw "Vendored ConPTY differs at $name" }
+            }
+            $members[$name] = $member
+          }
+          $after = Confirm-Checkout
+          $receipt = [ordered]@{
+            workflow_revision = $env:GITHUB_SHA
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            job_name = $env:GITHUB_JOB
+            source_before = $before
+            source_after = $after
+            target = 'x86_64-pc-windows-msvc'
+            profile = 'release'
+            rustc = $toolchain
+            cargo = $cargoVersion
+            expected_build = $env:FACADE_EXPECTED_BUILD
+            build = $build
+            facade_version = $reported
+            installed_facade_version = $installedVersion
+            archive_name = $archiveName
+            archive_sha256 = $archiveSHA
+            checksums_sha256 = Get-Digest $checksums
+            members = $members
+          }
+          $receipt | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'verification.json')
+          "Verified $archiveName SHA-256 $archiveSHA for BUILD $build"
+      - name: Upload the exact Framework package and receipt
+        uses: actions/upload-artifact@v4
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || '' }}
-      - name: Install the toolchain rust-toolchain.toml pins
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: framework
-      - name: Each commit builds and leaves Cargo.lock as it is
-        env:
-          BASE: origin/${{ github.base_ref || 'main' }}
-        run: scripts/check-each-commit.sh "$(git merge-base "$BASE" HEAD)"
+          name: facade-framework-win32-x64-393ca1b8
+          path: ${{ runner.temp }}/fixw-windows-pr122-x64/evidence
+          if-no-files-found: error
