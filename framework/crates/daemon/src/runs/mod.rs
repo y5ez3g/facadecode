@@ -44,7 +44,9 @@ use keeper_link::{KeeperLink, RecordedExit};
 use preparation::Preparation;
 
 pub(crate) use keeper_link::{KeeperOnly, StartReservation};
-pub(crate) use preparation::{FirstRead, PluginHold, RunFiles, restore_launch_environment};
+pub(crate) use preparation::{
+    FirstRead, PluginHold, RunFiles, clean_inherited, restore_launch_environment,
+};
 
 /// Where a run's exit goes: set up by the daemon at launch, it hands the exit to the agent's actor.
 /// Called with no lock held.

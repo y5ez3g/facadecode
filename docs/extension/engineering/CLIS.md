@@ -38,12 +38,13 @@ disabled ones, report CONFIGURATION-4.1's errors. Recompute on settings-file/PAT
 and immediately before launch. Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or
 modifying settings, except creating a missing settings file under CONFIGURATION-1.3.
 
-A line of a CLI Facade does not support, known by the version its installation names, is unavailable for new starts and
-refused at a start, saying how to update. That line is OpenCode below version 2, as the `package.json` of npm's
-`opencode-ai` or `@opencode/cli` beside its program names it: it sends no activity reports, does not take `--standalone`
-and draws an input box no reader knows, so no message reaches it. Its refusal says to run `npm uninstall -g opencode-ai`,
-then `npm install -g @opencode/cli`. A version no installation file names is started; a 1.x program found so starts, and
-with the Facade tools exits at `--standalone` with its usage.
+OpenCode requires version 2.x or later. The `package.json` of npm's `opencode-ai` or `@opencode/cli` beside its
+program supplies the installed version. When that metadata is unavailable, an explicit start allows up to two seconds
+for `opencode --version`. A native executable receives the launch arguments in the version query. A script with
+additional arguments can select another program, so that launch uses package metadata where available. Shell and MCP
+refuse a confirmed 1.x version and tell the person how to upgrade. For npm installations, run
+`npm uninstall -g opencode-ai`, then `npm install -g @opencode/cli`. Discovery stays passive. An inconclusive check
+leaves the usual launch in place.
 
 ### 1.2 Executable and environment
 
@@ -168,7 +169,8 @@ its session integration (2.4) and, for Muse Code, its screen reader (2.3). It st
 unverified or unavailable, with why, never more than its evidence holds. A CLI's version is read only from what its
 installation keeps beside the program - the versions folder of Claude Code's native installer, Codex's
 `codex-package.json`, Muse Code's versioned program or its `.muse-version`, OpenCode's npm `package.json` - never by
-running it, and is kept with the launch as a diagnostic; Antigravity's and Pi's installations name none.
+running it, and is kept with the launch as a diagnostic. The explicit OpenCode start check in 1.1 can also identify the
+unsupported 1.x line in a standalone installation. Antigravity's and Pi's installations name no version.
 
 Ordinary input evidence distinguishes a usable input box, a draft, a native interaction and unknown. Activity or
 tracked keystrokes alone cannot prove the draft empty after paste/history navigation. Never send Enter as a probe.

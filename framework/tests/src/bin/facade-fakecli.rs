@@ -1372,6 +1372,13 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(code);
     }
     if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsStr::new("--version")])
+    {
+        println!("2.1.4");
+        return Ok(());
+    }
+    if std::env::args_os()
         .nth(1)
         .is_some_and(|arg| arg == "--attach-exit")
     {

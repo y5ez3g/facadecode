@@ -68,15 +68,20 @@ fn keep(name: &str) -> bool {
     }
 }
 
+/// Drops an enclosing agent's identity and launch settings before starting another process.
+pub(crate) fn clean_inherited(inherited: &mut BTreeMap<String, String>) {
+    facade_rules::restore_config_environment(inherited);
+    inherited.retain(|name, _| keep(name));
+    remove(inherited, LAUNCH_ENV);
+}
+
 pub(super) fn build(
     mut inherited: BTreeMap<String, String>,
     cwd: &str,
     home: &Path,
     id: &str,
 ) -> BTreeMap<String, String> {
-    facade_rules::restore_config_environment(&mut inherited);
-    inherited.retain(|name, _| keep(name));
-    remove(&mut inherited, LAUNCH_ENV);
+    clean_inherited(&mut inherited);
     for (name, value) in [
         ("TERM", "xterm-256color"),
         ("COLORTERM", "truecolor"),

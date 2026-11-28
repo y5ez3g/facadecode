@@ -22,7 +22,7 @@ use tokio::time::Instant;
 use super::{PreparedRun, RunEvent, RunKind, RunRequest, credential_digest};
 use crate::ToolsGiven;
 
-pub(crate) use environment::restore_launch_environment;
+pub(crate) use environment::{clean_inherited, restore_launch_environment};
 pub(crate) use folder::RunFiles;
 pub(crate) use plugin::PluginHold;
 pub(crate) use session::FirstRead;

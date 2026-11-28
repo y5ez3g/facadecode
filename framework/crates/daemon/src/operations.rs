@@ -494,6 +494,12 @@ impl Daemon {
         };
         let folder = destination.cwd;
         let location = destination.location_id;
+        if session.is_none() {
+            configured
+                .check_launch_version(&folder, effect_time_left(origin.deadline)?)
+                .await?;
+            effect_time_left(origin.deadline)?;
+        }
         let yolo = settings.yolo;
         let policy = LaunchPolicy {
             origin: origin.launch,

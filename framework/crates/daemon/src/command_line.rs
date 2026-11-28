@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
 
 use crate::operations::StartRequest;
 use facade_base::model::agent::{CliInfo, Overrides};
@@ -13,6 +15,7 @@ use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::settings::Settings;
 use facade_rules::Rule;
 use facade_rules::entries::{self, Entry, LaunchOptions};
+use tokio::io::AsyncReadExt;
 
 use crate::{Daemon, blocking_in_place};
 
@@ -124,6 +127,64 @@ impl Configured {
             )
         })?;
         self.program = Some(program.to_string_lossy().into_owned());
+        Ok(())
+    }
+
+    /// Checks the explicit launch's supported version before any run is created.
+    pub(crate) async fn check_launch_version(
+        &self,
+        folder: &str,
+        budget: Option<Duration>,
+    ) -> Result<(), ErrorBody> {
+        let Some(program) = self.program.as_deref() else {
+            return Ok(());
+        };
+        let words = blocking_in_place(|| {
+            self.entry.launch_version_probe(
+                Path::new(program),
+                Path::new(folder),
+                &self.env,
+                &self.options.args,
+            )
+        })?;
+        let Some(words) = words else {
+            return Ok(());
+        };
+        let Some((runner, args)) = words.split_first() else {
+            return Ok(());
+        };
+        let mut env = self.env.clone();
+        crate::runs::clean_inherited(&mut env);
+        let mut command = tokio::process::Command::from(facade_base::programs::command(runner));
+        command
+            .args(args)
+            .current_dir(folder)
+            .env_clear()
+            .envs(env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let limit = Duration::from_secs(2);
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => return Ok(()),
+        };
+        let read = async {
+            const MAX_VERSION_BYTES: u64 = 4096;
+            let mut output = Vec::new();
+            let mut stdout = child.stdout.take()?.take(MAX_VERSION_BYTES + 1);
+            stdout.read_to_end(&mut output).await.ok()?;
+            if output.len() as u64 > MAX_VERSION_BYTES || !child.wait().await.ok()?.success() {
+                return None;
+            }
+            String::from_utf8(output).ok()
+        };
+        if let Ok(Some(output)) =
+            tokio::time::timeout(budget.map_or(limit, |budget| budget.min(limit)), read).await
+        {
+            self.entry.check_launch_version(&output)?;
+        }
         Ok(())
     }
 }

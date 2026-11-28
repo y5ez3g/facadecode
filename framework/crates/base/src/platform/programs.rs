@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
@@ -22,8 +22,6 @@ use anyhow::{Context, bail, ensure};
 
 #[cfg(unix)]
 use std::fs::{OpenOptions, Permissions};
-#[cfg(unix)]
-use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::{FileExt, OpenOptionsExt, PermissionsExt, symlink};
 
@@ -128,6 +126,30 @@ pub fn direct_command(program: &Path, env: &BTreeMap<String, String>, cwd: &Path
     }
     #[cfg(windows)]
     windows::direct_command(program, env, cwd)
+}
+
+/// Whether the resolved file has a native executable header, including a universal Mach-O.
+pub fn has_native_executable_header(path: &Path) -> bool {
+    let mut header = [0; 4];
+    if File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_err()
+    {
+        return false;
+    }
+    if cfg!(windows) {
+        return header.starts_with(b"MZ");
+    }
+    matches!(
+        &header,
+        b"\x7fELF"
+            | b"\xcf\xfa\xed\xfe"
+            | b"\xfe\xed\xfa\xcf"
+            | b"\xca\xfe\xba\xbe"
+            | b"\xbe\xba\xfe\xca"
+            | b"\xca\xfe\xba\xbf"
+            | b"\xbf\xba\xfe\xca"
+    )
 }
 
 /// Shows the final program and arguments in the launch platform's command-line syntax.

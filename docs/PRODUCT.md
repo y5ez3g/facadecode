@@ -296,8 +296,8 @@ creator a 🔔. A startup blockage and its first prompt failure share that notic
   `<repo>.worktrees/<branch>`. A branch that already exists causes a refusal. Use `git worktree remove`
   to remove a worktree.
 - **CLIs.** The built-in entries are Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`), Muse Code
-  (`muse`), OpenCode (`opencode`), Pi (`pi`), Devin (`devin`), Cursor (`agent`), Kiro (`kiro-cli`), Qoder
-  (`qoder`), Oh My Pi (`omp`) and GitHub Copilot CLI (`copilot`). The target machine's settings can add entries
+  (`muse`), OpenCode 2.x or later (`opencode`), Pi (`pi`), Devin (`devin`), Cursor (`agent`), Kiro (`kiro-cli`),
+  Qoder (`qoder`), Oh My Pi (`omp`) and GitHub Copilot CLI (`copilot`). The target machine's settings can add entries
   for these and custom programs. A missing CLI name or unavailable entry produces an error with the available
   entries when applicable. The selected machine must have the program installed.
 - **Environment.** A local run uses the initiating Shell, VS Code, agent or Guest relay environment. A remote
