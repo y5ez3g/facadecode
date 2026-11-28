@@ -45,7 +45,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
-	"mcp": { "deferred_tool_list": true },
+	"mcp": { "native_relay_chain": ["managed_executable"], "deferred_tool_list": true },
 	"status": {
 		"mechanism": "composer",
 		"working": ["^ *.*\\(esc twice to interrupt\\)$"],

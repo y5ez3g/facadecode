@@ -56,7 +56,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["resume", "${session_id}"] },
-	"mcp": { "session_meta_key": "sessionId" },
+	"mcp": { "native_relay_chain": [], "session_meta_key": "sessionId" },
 	"status": {
 		"mechanism": "background_correction",
 		"hints": "^(?: {2}(?:← for agents · )?\\? for shortcuts(?: {2,}\\S.*)?| {20,}\\S.*)$",

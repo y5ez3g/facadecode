@@ -102,6 +102,11 @@ impl RelayHelloParams {
     pub(crate) fn cwd(&self) -> Option<&str> {
         self.cwd.as_deref()
     }
+
+    /// Whether this stdio relay has already opened a daemon connection.
+    pub(crate) fn reconnect(&self) -> bool {
+        self.reconnect
+    }
 }
 
 /// One relay connection, shared by the tasks that answer its lines.
@@ -112,8 +117,8 @@ pub(crate) struct Relay {
     birth: String,
     /// The actor its calls act for, and the daemon services that verify and reach it.
     verified: verified::Verified,
-    /// Its `send_message` and `read_messages` calls not yet answered.
-    sends: in_flight::Sends,
+    /// Request IDs not yet answered. Message calls can receive cancellations.
+    requests: in_flight::Requests,
     send_order: Arc<SendOrder>,
     /// The leases held by the open transport. Closing takes the entire value.
     presence: Mutex<Option<Presence>>,
@@ -146,7 +151,7 @@ impl Relay {
             pid,
             birth,
             verified: verified::Verified::new(services),
-            sends: in_flight::Sends::default(),
+            requests: in_flight::Requests::default(),
             send_order: Arc::default(),
             presence: Mutex::new(Some(Presence::default())),
         }
@@ -164,7 +169,7 @@ impl Relay {
 
     /// Whether the relay connected to a daemon before.
     pub(crate) fn reconnect(&self) -> bool {
-        self.hello.reconnect
+        self.hello.reconnect()
     }
 
     /// Reads a line and applies any cancellation before the next line is taken.
@@ -192,21 +197,13 @@ impl Relay {
             };
             match response {
                 Ok(answer) => answer.map(lines::Response::into_line),
-                Err(_) => {
-                    if let Some(key) = id
-                        .as_ref()
-                        .and_then(|id| serde_json::from_str::<Value>(id.get()).ok())
-                    {
-                        relay.sends.finish(&key.to_string());
-                    }
-                    Some(lines::internal_error(id))
-                }
+                Err(_) => Some(lines::internal_error(id)),
             }
         }))
     }
 
     pub(crate) async fn settle_cancelled(&self) {
-        self.sends.settle_cancelled().await;
+        self.requests.settle_cancelled().await;
     }
 
     #[cfg(test)]
@@ -221,7 +218,7 @@ impl Relay {
     }
 
     /// Holds verified catalog presence until the relay's connection ends.
-    pub(crate) async fn hold_verified_presence(&self, event: CatalogEvent) {
+    pub(crate) async fn hold_verified_presence(&self, event: CatalogEvent, meta: Option<&Value>) {
         {
             let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(open) = presence.as_mut() else {
@@ -234,7 +231,7 @@ impl Relay {
                 return;
             }
         }
-        if let Some(acquire) = self.verified.prepare_presence(self, event).await {
+        if let Some(acquire) = self.verified.prepare_presence(self, event, meta).await {
             self.acquire_presence(PresenceStage::Listed, acquire);
         }
     }
@@ -247,7 +244,11 @@ impl Relay {
         let held = match stage {
             PresenceStage::Initialized => &mut open.initialized,
             PresenceStage::Listed => &mut open.listed,
-            PresenceStage::Authenticated if open.catalog_seen => &mut open.listed,
+            // A client can keep its catalog across a daemon change. Only the first verified
+            // call after reconnect can renew that presence when the hello had no session proof.
+            PresenceStage::Authenticated if open.catalog_seen || self.reconnect() => {
+                &mut open.listed
+            }
             PresenceStage::Authenticated => return,
         };
         if held.is_none() {
@@ -321,8 +322,8 @@ impl Tool {
 struct ToolCall {
     /// Its JSON-RPC ID as a later result names it: the string itself, or the number written out.
     id: String,
-    /// Its JSON-RPC ID as JSON text, as the client's cancellation names it.
-    key: String,
+    /// Owns its in-flight ID and its cancellation signal, where it has one.
+    registration: Option<in_flight::Registration>,
     /// When its line arrived. Tool deadlines start here.
     arrived: Instant,
     replay: lines::Replay,
@@ -339,11 +340,18 @@ impl ToolCall {
         ToolCall {
             id: id.as_str().map_or_else(|| key.clone(), str::to_string),
             request_id: format!("facade-{}-{}-{key}", relay.pid, relay.birth),
-            key,
+            registration: None,
             arrived,
             replay,
             output: None,
         }
+    }
+
+    fn cancellation(&self) -> crate::Cancel {
+        self.registration.as_ref().map_or_else(
+            crate::Cancel::default,
+            in_flight::Registration::cancellation,
+        )
     }
 }
 
@@ -448,7 +456,7 @@ impl Relay {
             read_inbox: Box::new(|_, _, _, _| {
                 Box::pin(async { Err(ErrorBody::internal("unit tests have no daemon")) })
             }),
-            managed_instructions: Box::new(|_| {
+            managed_instructions: Box::new(|_, _| {
                 Box::pin(async {
                     Ok(Initialization {
                         instructions: None,
@@ -456,7 +464,9 @@ impl Relay {
                     })
                 })
             }),
-            ready: Box::new(|_, _| Box::pin(async { anyhow::bail!("unit tests have no daemon") })),
+            ready: Box::new(|_, _, _| {
+                Box::pin(async { anyhow::bail!("unit tests have no daemon") })
+            }),
         };
         Relay::of_verified(hello, 7, "1".to_string(), services)
     }
@@ -472,7 +482,7 @@ mod tests {
     #[tokio::test]
     async fn a_later_verified_actor_can_hold_tools_after_the_relay_serves_its_catalog() {
         let mut relay = Relay::for_test();
-        relay.verified.services.ready = Box::new(|_, _| Box::pin(async { Ok(None) }));
+        relay.verified.services.ready = Box::new(|_, _, _| Box::pin(async { Ok(None) }));
         let lease = Arc::new(());
         let acquire = || {
             let lease = lease.clone();
@@ -481,13 +491,36 @@ mod tests {
         relay.acquire_presence(PresenceStage::Authenticated, acquire());
         assert_eq!(Arc::strong_count(&lease), 1);
 
-        relay.hold_verified_presence(CatalogEvent::Listed).await;
+        relay
+            .hold_verified_presence(CatalogEvent::Listed, None)
+            .await;
         relay.acquire_presence(PresenceStage::Authenticated, acquire());
         relay.acquire_presence(PresenceStage::Authenticated, acquire());
         assert_eq!(Arc::strong_count(&lease), 2);
 
         relay.close_presence();
         relay.acquire_presence(PresenceStage::Authenticated, acquire());
+        assert_eq!(Arc::strong_count(&lease), 1);
+    }
+
+    #[tokio::test]
+    async fn a_verified_call_renews_catalog_presence_after_reconnect() {
+        let mut relay = Relay::for_test();
+        relay.hello.reconnect = true;
+        relay.verified.services.ready = Box::new(|_, _, _| Box::pin(async { Ok(None) }));
+        let lease = Arc::new(());
+        relay
+            .hold_verified_presence(CatalogEvent::Reconnect, None)
+            .await;
+        assert_eq!(Arc::strong_count(&lease), 1);
+
+        let proof = lease.clone();
+        relay.acquire_presence(
+            PresenceStage::Authenticated,
+            Box::new(move || Some(Box::new(proof))),
+        );
+        assert_eq!(Arc::strong_count(&lease), 2);
+        relay.close_presence();
         assert_eq!(Arc::strong_count(&lease), 1);
     }
 

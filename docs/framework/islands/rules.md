@@ -149,7 +149,7 @@ Rust regular expressions.
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
-| `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
+| `mcp` | the exact process chain to the CLI's native MCP host, the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
 | `yolo` | `work` controls for native permissions, `startup` controls for unattended launches with YOLO on, optional `off_args` for explicit consent mode, and the trust question to answer |
 | `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, `records_above_bmp`, and `line_break`, the key that puts a line break in the CLI's input, for a CLI whose Enter submits |
 
@@ -630,8 +630,9 @@ session in that case. A single `facade-mcp` entry named `facade` in the project'
 provides the path for a startup diagnostic if the managed relay is never verified. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
 other existing config entries are linked into that root. Devin loads a project's `.devin/` files,
-`.mcp.json` and `.cursor/mcp.json` ahead of that root, so a `facade` server in any of them leaves the
-run without Facade's tools, and the daemon's log names the file. Devin 3000 keeps its sessions in
+`.mcp.json` and `.cursor/mcp.json` ahead of that root. An imported Facade relay can serve the run
+through Devin's child MCP host. A different server using the same name still prevents Facade
+from giving the run its tools, and the daemon's log names the file. Devin 3000 keeps its sessions in
 `devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original
 configuration root. Oh My Pi takes a local plugin, a settings overlay for the managed tools' approvals,
 and an extension that reports session and turn changes. Oh My Pi announces the servers and tools it

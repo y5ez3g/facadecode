@@ -32,6 +32,6 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--session", "${session_id}"] },
-	"mcp": { "managed_instructions_from_hook": true },
+	"mcp": { "native_relay_chain": [], "managed_instructions_from_hook": true },
 	"yolo": { "startup": { "args": ["--approve"] } }
 }

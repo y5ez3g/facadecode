@@ -166,10 +166,11 @@ pub(crate) struct RunCredentialRecord {
     pub(crate) process: ProcessIdentity,
 }
 
-/// The installed run named by a private relay credential.
+/// The installed run identified by a relay.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct RunIdentity {
     pub(crate) agent_id: String,
-    pub(crate) pid: u32,
+    pub(crate) process: ProcessIdentity,
     pub(crate) run: u64,
 }
 

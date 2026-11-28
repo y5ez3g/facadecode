@@ -50,6 +50,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume-id", "${session_id}"] },
+	"mcp": { "native_relay_chain": [{ "executable": "bun" }, { "executable": "node" }] },
 	"status": {
 		"mechanism": "composer",
 		"working": ["^ *(?:[⠁-⣿] )?Thinking(?:\\.\\.\\.|…)(?: .*)?$"],

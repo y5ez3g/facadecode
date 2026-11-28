@@ -46,9 +46,9 @@ pub use input::{
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
-    is_session_variable, list_sessions, parse_session_id, read_session_file, run_folder,
-    session_evidence, session_for_id, session_from_hook, session_from_prompt, session_from_title,
-    session_variable, write_session_file,
+    is_session_variable, list_sessions, live_mcp_session_matches, parse_session_id,
+    read_session_file, run_folder, session_evidence, session_for_id, session_from_hook,
+    session_from_prompt, session_from_title, session_variable, write_session_file,
 };
 pub use state::{ScreenState, read_state};
 pub use wiring::{
@@ -148,6 +148,10 @@ pub struct Rule {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpRule {
+    /// The children from the managed process to the relay's parent, in order. An empty
+    /// chain means the managed process starts the relay itself.
+    #[serde(default)]
+    pub native_relay_chain: Option<Vec<NativeRelayHost>>,
     /// The CLI initializes its managed relay at startup and lists tools on its first turn.
     #[serde(default)]
     pub deferred_tool_list: bool,
@@ -165,6 +169,15 @@ pub struct McpRule {
     /// The CLI gets a managed run's instructions from its hook or extension.
     #[serde(default)]
     pub managed_instructions_from_hook: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeRelayHost {
+    /// The helper runs the same executable as the managed process.
+    ManagedExecutable,
+    /// The helper runs this executable name, as read from its loaded image.
+    Executable(String),
 }
 
 /// What a run's start types to ready the CLI's tools: `text` once the input first reads empty,
@@ -1828,6 +1841,11 @@ mod tests {
     /// session and which managed runs get their instructions through a hook or extension.
     #[test]
     fn each_cli_s_rule_says_what_its_mcp_client_does() {
+        let opencode = find("opencode").unwrap().unwrap();
+        assert!(matches!(
+            opencode.mcp.native_relay_chain.as_deref(),
+            Some([NativeRelayHost::ManagedExecutable])
+        ));
         assert_eq!(
             session_meta_keys().collect::<Vec<_>>(),
             [

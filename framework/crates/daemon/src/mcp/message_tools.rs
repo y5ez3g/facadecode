@@ -91,7 +91,7 @@ pub(super) async fn send_verified(
     if left.is_zero() && call.replay == super::lines::Replay::First {
         return send_before_deadline(budget).into();
     }
-    let mut cancel = relay.sends.read_cancel(&call.key);
+    let mut cancel = call.cancellation();
     let turn = match send_turn {
         Some(turn) => tokio::select! {
             biased;
@@ -191,7 +191,7 @@ async fn sent_result(
                 "the send receipt did not identify its recipient",
             ));
         };
-        let cancel = relay.sends.read_cancel(&call.key);
+        let cancel = call.cancellation();
         if cancel.is_requested() {
             return Err(ErrorBody::new(
                 Reason::Cancelled,

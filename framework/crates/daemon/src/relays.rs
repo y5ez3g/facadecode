@@ -1,4 +1,7 @@
-//! The same-user relay socket and the actor it establishes at its first tool call.
+//! The same-user relay socket and the process and session that establish its actor.
+
+mod bindings;
+pub(super) use bindings::Bindings;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -8,8 +11,9 @@ use std::time::Instant;
 use facade_base::api_v1::daemon::{self as wire, AgentKind};
 use facade_base::model::agent::{AgentRef, AgentsUpdate, ManagedAgent, is_session_id};
 use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::process::ProcessState;
+use facade_base::process::{ProcessIdentity, ProcessState};
 use facade_base::{system, unix_process};
+use facade_rules::NativeRelayHost;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
@@ -32,6 +36,18 @@ struct RelayEvidence {
     env: BTreeMap<String, String>,
     cwd: Option<String>,
     guest_cli: Option<String>,
+    reconnect: bool,
+    actor: OnceLock<BoundActor>,
+    authenticating: tokio::sync::Mutex<()>,
+    verified_run: VerifiedRelayRun,
+}
+
+impl RelayEvidence {
+    fn bound_actor(&self) -> Result<&BoundActor, ErrorBody> {
+        self.actor
+            .get()
+            .ok_or_else(|| ErrorBody::internal("the relay did not establish an actor"))
+    }
 }
 
 struct BoundActor {
@@ -44,16 +60,27 @@ struct CurrentActor {
     info: ManagedAgent,
 }
 
+enum RelayRole<T> {
+    Managed(T),
+    AwaitingSession,
+    Guest,
+}
+
+struct ManagedRun {
+    current: CurrentActor,
+    generation: u64,
+}
+
 type VerifiedRelayRun = watch::Sender<Option<(AgentHandle, u64)>>;
 
 impl BoundActor {
-    fn managed(run: RunIdentity, machine_id: &str) -> Self {
+    fn managed(run: &RunIdentity, machine_id: &str) -> Self {
         Self {
             reference: AgentRef {
                 machine_id: machine_id.into(),
-                agent_id: run.agent_id,
+                agent_id: run.agent_id.clone(),
             },
-            run: Some((run.run, run.pid)),
+            run: Some((run.run, run.process.pid)),
         }
     }
 
@@ -120,6 +147,7 @@ impl Daemon {
         let process = relay_process(peer_pid)?;
         let hello = RelayHelloParams::decode(params)?;
         let link = self.lifecycle.relays.join()?;
+        let (verified_run, mut run) = watch::channel(None);
         let evidence = Arc::new(RelayEvidence {
             process: process.clone(),
             env: hello
@@ -133,13 +161,18 @@ impl Daemon {
                 .args()
                 .windows(2)
                 .find_map(|pair| (pair[0] == "--guest").then(|| pair[1].clone())),
+            reconnect: hello.reconnect(),
+            actor: OnceLock::new(),
+            authenticating: tokio::sync::Mutex::new(()),
+            verified_run,
         });
-        let (verified_run, mut run) = watch::channel(None);
-        let relay = Arc::new(self.relay(hello, evidence, verified_run));
+        let relay = Arc::new(self.relay(hello, evidence));
         if relay.reconnect() {
             let relay = relay.clone();
             tokio::spawn(async move {
-                relay.hold_verified_presence(CatalogEvent::Reconnect).await;
+                relay
+                    .hold_verified_presence(CatalogEvent::Reconnect, None)
+                    .await;
             });
         }
         let lines = RelayConnection {
@@ -167,69 +200,71 @@ impl Daemon {
         })
     }
 
-    fn relay(
-        self: &Arc<Self>,
-        hello: RelayHelloParams,
-        evidence: Arc<RelayEvidence>,
-        verified_run: VerifiedRelayRun,
-    ) -> Relay {
-        let bound: Arc<OnceLock<BoundActor>> = Arc::new(OnceLock::new());
+    fn relay(self: &Arc<Self>, hello: RelayHelloParams, evidence: Arc<RelayEvidence>) -> Relay {
         let (pid, birth) = (evidence.process.pid, evidence.process.birth.clone());
         let authenticate: mcp::verified::Authenticate = {
-            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
-            let verified_run = verified_run.clone();
+            let (daemon, evidence) = (self.clone(), evidence.clone());
             Box::new(
                 move |credential: Option<&str>, meta: Option<&Value>, app: Option<&str>| {
-                    let (daemon, evidence, bound) =
-                        (daemon.clone(), evidence.clone(), bound.clone());
-                    let verified_run = verified_run.clone();
+                    let (daemon, evidence) = (daemon.clone(), evidence.clone());
                     Box::pin(async move {
-                        let run = daemon
-                            .relay_run(&evidence, credential, meta, &verified_run)
-                            .await?;
-                        let actor = match run {
-                            Some(run) => BoundActor::managed(run, &daemon.machine_id),
-                            None => {
-                                let id = daemon.join_relay_guest(&evidence, app).await?;
-                                BoundActor {
-                                    reference: AgentRef {
-                                        machine_id: daemon.machine_id.clone(),
-                                        agent_id: id,
-                                    },
-                                    run: None,
+                        let _authenticating = evidence.authenticating.lock().await;
+                        let (current, acquire) =
+                            match daemon.relay_run(&evidence, credential, meta).await? {
+                                RelayRole::Managed(ManagedRun {
+                                    current,
+                                    generation,
+                                }) => {
+                                    current.handle.note_tool_use(generation);
+                                    let acquire =
+                                        (!deferred_tool_list(&current.handle)).then(|| {
+                                            prepare_tool_presence(
+                                                current.handle.clone(),
+                                                generation,
+                                                ToolsStage::Listed,
+                                            )
+                                        });
+                                    (current, acquire)
                                 }
-                            }
-                        };
-                        let current = actor.current(&daemon, &evidence.process)?;
-                        let identity = actor.identity(&current.handle);
-                        if let Some((run, _)) = actor.run {
-                            current.handle.note_tool_use(run);
-                        }
-                        let acquire = actor
-                            .run
-                            .filter(|_| !deferred_tool_list(&current.handle))
-                            .map(|(run, _)| {
-                                prepare_tool_presence(current.handle, run, ToolsStage::Listed)
-                            });
-                        bound.set(actor).ok();
+                                RelayRole::AwaitingSession => return Err(native_session_mismatch()),
+                                RelayRole::Guest => {
+                                    if evidence.actor.get().is_none() {
+                                        let id = daemon.join_relay_guest(&evidence, app).await?;
+                                        let actor = BoundActor {
+                                            reference: AgentRef {
+                                                machine_id: daemon.machine_id.clone(),
+                                                agent_id: id,
+                                            },
+                                            run: None,
+                                        };
+                                        evidence.actor.set(actor).ok();
+                                    }
+                                    (
+                                        evidence
+                                            .bound_actor()?
+                                            .current(&daemon, &evidence.process)?,
+                                        None,
+                                    )
+                                }
+                            };
+                        let identity = evidence.bound_actor()?.identity(&current.handle);
                         Ok(mcp::verified::AuthenticatedActor { identity, acquire })
                     })
                 },
             )
         };
         let call: mcp::verified::ActorCall = {
-            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            let (daemon, evidence) = (self.clone(), evidence.clone());
             Box::new(
                 move |reference: &AgentRef, call: wire::DaemonCall, deadline, cancel| {
-                    let (daemon, evidence, bound) =
-                        (daemon.clone(), evidence.clone(), bound.clone());
+                    let (daemon, evidence) = (daemon.clone(), evidence.clone());
                     Box::pin(async move {
                         call.authorize(wire::ClientKind::Mcp)?;
                         if let Some(error) = daemon.lifecycle.draining() {
                             return Err(error);
                         }
-                        let actor =
-                            attached_actor(&bound, reference).map_err(api::project_error)?;
+                        let actor = attached_actor(&evidence.actor, reference)
+                            .map_err(api::project_error)?;
                         let CurrentActor { handle, info } = actor
                             .current(&daemon, &evidence.process)
                             .map_err(api::project_error)?;
@@ -290,13 +325,12 @@ impl Daemon {
             )
         };
         let read_inbox: mcp::verified::ReadInbox = {
-            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            let (daemon, evidence) = (self.clone(), evidence.clone());
             Box::new(
                 move |reference: &AgentRef, read: InboxRead, cancel: Cancel, output| {
-                    let (daemon, evidence, bound) =
-                        (daemon.clone(), evidence.clone(), bound.clone());
+                    let (daemon, evidence) = (daemon.clone(), evidence.clone());
                     Box::pin(async move {
-                        let actor = attached_actor(&bound, reference)?;
+                        let actor = attached_actor(&evidence.actor, reference)?;
                         daemon
                             .read_relay_inbox(
                                 actor,
@@ -311,11 +345,11 @@ impl Daemon {
             )
         };
         let read_reply: ReadReply = {
-            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            let (daemon, evidence) = (self.clone(), evidence.clone());
             Box::new(move |reference, read, cancel, output| {
-                let (daemon, evidence, bound) = (daemon.clone(), evidence.clone(), bound.clone());
+                let (daemon, evidence) = (daemon.clone(), evidence.clone());
                 Box::pin(async move {
-                    let actor = attached_actor(&bound, reference)?;
+                    let actor = attached_actor(&evidence.actor, reference)?;
                     daemon
                         .read_relay_inbox(actor, &evidence, RelayInbox::Reply(read), cancel, output)
                         .await
@@ -323,11 +357,11 @@ impl Daemon {
             })
         };
         let discover_clis: DiscoverClis = {
-            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            let (daemon, evidence) = (self.clone(), evidence.clone());
             Box::new(move |reference, machines, deadline| {
-                let (daemon, evidence, bound) = (daemon.clone(), evidence.clone(), bound.clone());
+                let (daemon, evidence) = (daemon.clone(), evidence.clone());
                 Box::pin(async move {
-                    let actor = attached_actor(&bound, reference)
+                    let actor = attached_actor(&evidence.actor, reference)
                         .and_then(|actor| actor.current(&daemon, &evidence.process));
                     match actor {
                         Ok(current) => {
@@ -347,24 +381,23 @@ impl Daemon {
         let managed_instructions: mcp::verified::ManagedInstructions = {
             let daemon = self.clone();
             let evidence = evidence.clone();
-            let verified_run = verified_run.clone();
-            Box::new(move |credential: Option<&str>| {
+            Box::new(move |credential, meta| {
                 let (daemon, evidence) = (daemon.clone(), evidence.clone());
-                let verified_run = verified_run.clone();
                 Box::pin(async move {
-                    let Some(run) = daemon
-                        .relay_run(&evidence, credential, None, &verified_run)
-                        .await?
+                    let role = {
+                        let _authenticating = evidence.authenticating.lock().await;
+                        daemon.relay_run(&evidence, credential, meta).await?
+                    };
+                    let RelayRole::Managed(ManagedRun {
+                        current: CurrentActor { handle, info },
+                        generation,
+                    }) = role
                     else {
                         return Ok(Initialization {
                             instructions: None,
                             acquire: None,
                         });
                     };
-                    let number = run.run;
-                    let actor = BoundActor::managed(run, &daemon.machine_id);
-                    let CurrentActor { handle, info } =
-                        actor.current(&daemon, &evidence.process)?;
                     let (instructions, handle) = if handle
                         .rule()
                         .is_some_and(facade_rules::managed_instructions_from_hook)
@@ -373,11 +406,14 @@ impl Daemon {
                     } else {
                         let instructions =
                             blocking_in_place(|| daemon.instructions_for_current_run(&info))?;
-                        let current = actor.current(&daemon, &evidence.process)?;
+                        let current = evidence
+                            .bound_actor()?
+                            .current(&daemon, &evidence.process)?;
                         (Some(instructions), current.handle)
                     };
-                    let acquire = (credential.is_some() && deferred_tool_list(&handle))
-                        .then(|| prepare_tool_presence(handle, number, ToolsStage::Initialized));
+                    let acquire = deferred_tool_list(&handle).then(|| {
+                        prepare_tool_presence(handle, generation, ToolsStage::Initialized)
+                    });
                     Ok(Initialization {
                         instructions,
                         acquire,
@@ -387,28 +423,27 @@ impl Daemon {
         };
         let ready: mcp::verified::Ready = {
             let daemon = self.clone();
-            Box::new(move |credential: Option<&str>, event| {
+            Box::new(move |credential, meta, event| {
                 let (daemon, evidence) = (daemon.clone(), evidence.clone());
-                let verified_run = verified_run.clone();
                 Box::pin(async move {
-                    let Some(run) = daemon
-                        .relay_run(&evidence, credential, None, &verified_run)
-                        .await?
+                    let role = {
+                        let _authenticating = evidence.authenticating.lock().await;
+                        daemon.relay_run(&evidence, credential, meta).await?
+                    };
+                    let RelayRole::Managed(ManagedRun {
+                        current: CurrentActor { handle, .. },
+                        generation,
+                    }) = role
                     else {
                         return Ok(None);
                     };
-                    let number = run.run;
-                    let actor = BoundActor::managed(run, &daemon.machine_id);
-                    let handle = actor.current(&daemon, &evidence.process)?.handle;
                     // An older relay can reconnect before the CLI has listed its tools.
-                    if deferred_tool_list(&handle)
-                        && (credential.is_none() || matches!(event, CatalogEvent::Reconnect))
-                    {
+                    if deferred_tool_list(&handle) && matches!(event, CatalogEvent::Reconnect) {
                         return Ok(None);
                     }
                     Ok(Some(prepare_tool_presence(
                         handle,
-                        number,
+                        generation,
                         ToolsStage::Listed,
                     )))
                 })
@@ -564,55 +599,109 @@ impl Daemon {
         results
     }
 
+    /// Resolves or establishes the same actor from initialize, catalog and tools.
+    /// The caller holds the evidence's authentication lock while it may establish an actor.
     async fn relay_run(
         &self,
         evidence: &RelayEvidence,
         credential: Option<&str>,
         meta: Option<&Value>,
-        verified_run: &VerifiedRelayRun,
-    ) -> Result<Option<RunIdentity>, ErrorBody> {
-        if self.guests.member_of(&evidence.process).is_some() {
-            return Ok(None);
-        }
-        if let Some(credential) = credential {
-            let run = self.runs.verify_credential(credential).await?;
-            if let Some(run) = &run
-                && let Some(handle) = self.get_agent(&run.agent_id)
-            {
-                verified_run.send_if_modified(|bound| {
-                    if bound.is_some() {
-                        return false;
-                    }
-                    *bound = Some((handle, run.run));
-                    true
-                });
+    ) -> Result<RelayRole<ManagedRun>, ErrorBody> {
+        if let Some(actor) = evidence.actor.get() {
+            let current = actor.current(self, &evidence.process)?;
+            let Some((generation, pid)) = actor.run else {
+                return Ok(RelayRole::Guest);
+            };
+            if credential.is_none() {
+                let proof = blocking_in_place(|| {
+                    self.native_relay_run(evidence, meta, [current.handle.clone()])
+                })?;
+                if !matches!(proof, RelayRole::Managed(run)
+                    if run.agent_id == actor.reference.agent_id
+                        && run.run == generation && run.process.pid == pid)
+                {
+                    return Ok(RelayRole::AwaitingSession);
+                }
             }
-            return Ok(run);
+            return Ok(RelayRole::Managed(ManagedRun {
+                current,
+                generation,
+            }));
         }
-        blocking_in_place(|| self.legacy_relay_run(evidence, meta))
+        if self.guests.member_of(&evidence.process).is_some() {
+            return Ok(RelayRole::Guest);
+        }
+        let proof = match credential {
+            Some(credential) => self
+                .runs
+                .verify_credential(credential)
+                .await?
+                .map_or(RelayRole::Guest, RelayRole::Managed),
+            None => blocking_in_place(|| {
+                self.relay_bindings
+                    .verify(&evidence.process, evidence.reconnect, |agent| match agent {
+                        Some(agent) => self.native_relay_run(evidence, meta, self.get_agent(agent)),
+                        None => self.native_relay_run(evidence, meta, self.agents()),
+                    })
+            })?,
+        };
+        let run = match proof {
+            RelayRole::Managed(run) => run,
+            RelayRole::AwaitingSession => return Ok(RelayRole::AwaitingSession),
+            RelayRole::Guest => return Ok(RelayRole::Guest),
+        };
+        let actor = BoundActor::managed(&run, &self.machine_id);
+        let current = actor.current(self, &evidence.process)?;
+        if credential.is_none() {
+            blocking_in_place(|| self.relay_bindings.remember(&evidence.process, &run))?;
+        }
+        evidence.actor.set(actor).ok();
+        evidence
+            .verified_run
+            .send_replace(Some((current.handle.clone(), run.run)));
+        Ok(RelayRole::Managed(ManagedRun {
+            current,
+            generation: run.run,
+        }))
     }
 
-    fn legacy_relay_run(
+    fn native_relay_run(
         &self,
         evidence: &RelayEvidence,
         meta: Option<&Value>,
-    ) -> Result<Option<RunIdentity>, ErrorBody> {
-        let process = &evidence.process;
-        let legacy_id = system::env_var(&evidence.env, "FACADE_AGENT");
-        let parent = unix_process::parent(process.pid).ok().flatten();
-        let ancestors = legacy_id.map(|_| unix_process::ancestors(process.pid));
-        let mut authenticated = None;
-        for handle in self.agents() {
+        candidates: impl IntoIterator<Item = AgentHandle>,
+    ) -> Result<RelayRole<RunIdentity>, ErrorBody> {
+        let relay = ProcessIdentity {
+            pid: evidence.process.pid,
+            birth: evidence.process.birth.clone(),
+        };
+        let mut parents = Vec::new();
+        let mut role = RelayRole::Guest;
+        for handle in candidates {
             let (run, info) = handle.installed_record();
-            let Some(pid) = info
-                .pid
-                .filter(|_| !info.guest && info.process == ProcessState::Running)
+            if info.guest || info.process != ProcessState::Running {
+                continue;
+            }
+            let Some(rule) = handle
+                .rule()
+                .and_then(|name| facade_rules::find(name).ok().flatten())
             else {
                 continue;
             };
-            let legacy_candidate = legacy_id == Some(info.agent_id.as_str())
-                && ancestors.as_ref().is_some_and(|line| line.contains(&pid));
-            if parent != Some(pid) && !legacy_candidate {
+            let Some(chain) = rule.mcp.native_relay_chain.as_deref() else {
+                continue;
+            };
+            while parents.len() <= chain.len() {
+                let child = parents.last().unwrap_or(&relay);
+                let Some(parent) = unix_process::parent_identity(child).ok().flatten() else {
+                    break;
+                };
+                parents.push(parent);
+            }
+            let Some(managed) = parents.get(chain.len()) else {
+                continue;
+            };
+            if info.pid != Some(managed.pid) {
                 continue;
             }
             let Some(kept) = self
@@ -622,53 +711,34 @@ impl Daemon {
             else {
                 continue;
             };
-            if kept.process.pid != pid
-                || unix_process::birth(pid).ok().flatten().as_deref() != Some(&kept.process.birth)
+            if kept.process != *managed
+                || !chain
+                    .iter()
+                    .zip(parents[..chain.len()].iter().rev())
+                    .all(|(expected, observed)| native_host_matches(expected, observed, managed))
             {
                 continue;
             }
-            let accepted = match kept.version {
-                2 => {
-                    legacy_candidate
-                        && evidence.guest_cli.as_deref().is_none_or(|cli| {
-                            let same_cli =
-                                info.cli == cli && facade_rules::guest_entry_serves_run(cli);
-                            let reported = facade_rules::session_variable(cli)
-                                .and_then(|key| system::env_var(&evidence.env, key))
-                                .filter(|session| is_session_id(session));
-                            same_cli
-                                && info
-                                    .session
-                                    .as_deref()
-                                    .zip(reported)
-                                    .is_none_or(|(known, given)| known == given)
-                        })
-                }
-                3 if parent == Some(pid) => info.session.as_deref().is_some_and(|session| {
-                    self.get_agent(&info.agent_id)
-                        .and_then(|agent| {
-                            agent
-                                .rule()
-                                .and_then(|rule| facade_rules::find(rule).ok().flatten())
-                        })
-                        .is_some_and(|rule| {
-                            facade_rules::session_evidence(rule, session, &evidence.env, meta)
-                        })
-                }),
+            let version_matches = match kept.version {
+                2 => legacy_run_matches(evidence, &info),
+                3 => true,
                 _ => false,
             };
-            if accepted {
-                if authenticated.is_some() {
-                    return Ok(None);
-                }
-                authenticated = Some(RunIdentity {
-                    agent_id: info.agent_id,
-                    pid,
-                    run,
-                });
+            if !matches!(role, RelayRole::Guest) {
+                return Ok(RelayRole::AwaitingSession);
             }
+            role = if version_matches && native_session_matches(rule, &info, managed, &relay, meta)?
+            {
+                RelayRole::Managed(RunIdentity {
+                    agent_id: info.agent_id,
+                    process: kept.process,
+                    run,
+                })
+            } else {
+                RelayRole::AwaitingSession
+            };
         }
-        Ok(authenticated)
+        Ok(role)
     }
 
     /// Explains a reply from a project Guest when its relay is descended from a managed run
@@ -752,6 +822,83 @@ impl Daemon {
     }
 }
 
+fn native_host_matches(
+    expected: &NativeRelayHost,
+    observed: &ProcessIdentity,
+    managed: &ProcessIdentity,
+) -> bool {
+    let Some(image) = unix_process::executable(observed).ok().flatten() else {
+        return false;
+    };
+    match expected {
+        NativeRelayHost::ManagedExecutable => {
+            unix_process::executable(managed).ok().flatten().as_ref() == Some(&image)
+        }
+        NativeRelayHost::Executable(name) => facade_base::programs::program_name(&image) == *name,
+    }
+}
+
+fn native_session_matches(
+    rule: &facade_rules::Rule,
+    info: &ManagedAgent,
+    managed: &ProcessIdentity,
+    relay: &ProcessIdentity,
+    meta: Option<&Value>,
+) -> Result<bool, ErrorBody> {
+    if rule.mcp.session_env_key.is_none() && rule.mcp.session_meta_key.is_none() {
+        return Ok(true);
+    }
+    let env = if rule.mcp.session_env_key.is_some() {
+        let Some(env) = unix_process::environment(relay).ok().flatten() else {
+            return Ok(false);
+        };
+        env
+    } else {
+        BTreeMap::new()
+    };
+    if let Some(session) = info.session.as_deref() {
+        return Ok(facade_rules::session_evidence(rule, session, &env, meta));
+    }
+    let Some(id) = rule
+        .mcp
+        .session_env_key
+        .as_deref()
+        .and_then(|key| system::env_var(&env, key))
+    else {
+        return Ok(false);
+    };
+    let Some(managed_env) = unix_process::environment(managed).ok().flatten() else {
+        return Ok(false);
+    };
+    let Some(started_at) = unix_process::started_at(managed).ok().flatten() else {
+        return Ok(false);
+    };
+    facade_rules::live_mcp_session_matches(
+        rule,
+        Path::new(&info.cwd),
+        &managed_env,
+        id,
+        managed.pid,
+        started_at,
+    )
+}
+
+fn legacy_run_matches(evidence: &RelayEvidence, info: &ManagedAgent) -> bool {
+    system::env_var(&evidence.env, "FACADE_AGENT") == Some(info.agent_id.as_str())
+        && evidence.guest_cli.as_deref().is_none_or(|cli| {
+            let reported = facade_rules::session_variable(cli)
+                .and_then(|key| system::env_var(&evidence.env, key))
+                .filter(|session| is_session_id(session));
+            info.cli == cli
+                && facade_rules::guest_entry_serves_run(cli)
+                && info
+                    .session
+                    .as_deref()
+                    .zip(reported)
+                    .is_none_or(|(known, given)| known == given)
+        })
+}
+
 async fn run_ended(handle: &AgentHandle, run: u64) {
     let mut exit = handle.exit();
     let _ = exit
@@ -800,6 +947,10 @@ impl RelayLines for RelayConnection {
             self.daemon.end_listed_guest(&id);
         }
     }
+}
+
+fn native_session_mismatch() -> ErrorBody {
+    ErrorBody::refused("this request does not match the relay's managed session")
 }
 
 fn relay_process(peer_pid: Option<u32>) -> Result<RelayProcess, ErrorBody> {

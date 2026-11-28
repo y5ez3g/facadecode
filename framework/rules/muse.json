@@ -30,7 +30,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["resume", "${session_id}"] },
-	"mcp": { "session_env_key": "MUSE_SESSION_ID", "managed_instructions_from_hook": true },
+	"mcp": { "native_relay_chain": [], "session_env_key": "MUSE_SESSION_ID", "managed_instructions_from_hook": true },
 	"status": {
 		"mechanism": "frame_transcript",
 		"footer": "^ {2}\\S.* · \\S.* · \\S.*$",

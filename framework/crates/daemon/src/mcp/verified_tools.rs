@@ -93,13 +93,13 @@ pub(super) async fn dispatch(
     meta: Option<Value>,
     send_turn: Option<SendTurn>,
 ) -> ToolReply {
-    let actor = match relay.verified.actor(relay, meta.as_ref()).await {
-        Ok(actor) => actor,
-        Err(error) => return envelope::refusal(&error).into(),
-    };
     let (tool, arguments) = match validate(name, &given) {
         Ok(checked) => checked,
         Err(failure) => return failure.into(),
+    };
+    let actor = match relay.verified.actor(relay, meta.as_ref()).await {
+        Ok(actor) => actor,
+        Err(error) => return envelope::refusal(&error).into(),
     };
     drop((given, meta));
     if matches!(tool, Tool::ReadMessages) && call.replay == super::lines::Replay::Interrupted {
@@ -381,7 +381,7 @@ async fn read(
     arguments: Map<String, Value>,
     call: &ToolCall,
 ) -> ToolReply {
-    let cancel = relay.sends.read_cancel(&call.key);
+    let cancel = call.cancellation();
     if cancel.is_requested() {
         return ToolReply::Cancelled;
     }

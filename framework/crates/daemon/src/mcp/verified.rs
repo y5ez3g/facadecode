@@ -93,7 +93,10 @@ pub(crate) type DiscoverClis = Box<
 
 /// The instructions for the verified run and its prepared initialize lease.
 pub(crate) type ManagedInstructions = Box<
-    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, Result<Initialization, ErrorBody>>
+    dyn for<'a> Fn(
+            Option<&'a str>,
+            Option<&'a Value>,
+        ) -> ActorFuture<'a, Result<Initialization, ErrorBody>>
         + Send
         + Sync,
 >;
@@ -102,6 +105,7 @@ pub(crate) type ManagedInstructions = Box<
 pub(crate) type Ready = Box<
     dyn for<'a> Fn(
             Option<&'a str>,
+            Option<&'a Value>,
             CatalogEvent,
         ) -> ActorFuture<'a, anyhow::Result<Option<AcquirePresence>>>
         + Send
@@ -143,6 +147,7 @@ impl Verified {
         &self,
         relay: &Relay,
         client_name: Option<&str>,
+        meta: Option<&Value>,
     ) -> Result<Initialization, ErrorBody> {
         {
             let mut connection = self.connection.lock().await;
@@ -150,7 +155,7 @@ impl Verified {
                 connection.client_name = client_name.map(str::to_string);
             }
         }
-        (self.services.managed_instructions)(credential(relay)).await
+        (self.services.managed_instructions)(credential(relay), meta).await
     }
 
     pub(super) async fn actor(
@@ -158,16 +163,18 @@ impl Verified {
         relay: &Relay,
         meta: Option<&Value>,
     ) -> Result<ActorIdentity, ErrorBody> {
+        let credential = credential(relay);
         let mut connection = self.connection.lock().await;
-        if let Some(actor) = &connection.actor {
+        // A native host can share its server across sessions. Its current request still
+        // has to prove the managed actor even after the connection established one.
+        if let Some(actor) = &connection.actor
+            && (credential.is_some() || actor.kind == AgentKind::Guest)
+        {
             return Ok(actor.clone());
         }
-        let AuthenticatedActor { identity, acquire } = (self.services.authenticate)(
-            credential(relay),
-            meta,
-            connection.client_name.as_deref(),
-        )
-        .await?;
+        let AuthenticatedActor { identity, acquire } =
+            (self.services.authenticate)(credential, meta, connection.client_name.as_deref())
+                .await?;
         if let Some(acquire) = acquire {
             relay.acquire_presence(PresenceStage::Authenticated, acquire);
         }
@@ -179,8 +186,9 @@ impl Verified {
         &self,
         relay: &Relay,
         event: CatalogEvent,
+        meta: Option<&Value>,
     ) -> Option<AcquirePresence> {
-        match (self.services.ready)(credential(relay), event).await {
+        match (self.services.ready)(credential(relay), meta, event).await {
             Ok(acquire) => acquire,
             // The callback can inspect private run material. Keep it out of logs.
             Err(_) => {

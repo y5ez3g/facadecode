@@ -322,6 +322,7 @@ pub(crate) struct Daemon {
     records: Records,
     windows: Windows,
     guests: Guests,
+    relay_bindings: relays::Bindings,
     /// `framework/results/`, MCP results too long to return inline.
     results: PathBuf,
     /// What each open watch lets go of when it ends, by its viewer number.
@@ -580,6 +581,7 @@ async fn start_and_serve(
         screens: Screens::new(framework.join("screens")),
         windows: Windows::default(),
         guests: Guests::new(store.guest_table()),
+        relay_bindings: relays::Bindings::default(),
         results: mcp::results_folder(&framework),
         watch_ends: Mutex::default(),
         messages,
@@ -750,6 +752,7 @@ impl Daemon {
             Err(err) => log("warn", &format!("{err:#}")),
         }
         mcp::clean_results(&self.results, now, &|number| self.messages.keeps(number));
+        self.relay_bindings.sweep();
         if let Err(err) = lifecycle::prune(now) {
             log(
                 "warn",

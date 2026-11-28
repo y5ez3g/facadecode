@@ -44,6 +44,7 @@
 		"placeholders": [{ "pattern": "^\\[Paste #\\d+ - (\\d+) lines\\]$", "count": "lines", "spaced": true }]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume=${session_id}"], "resume_requires_saved_session": true },
+	"mcp": { "native_relay_chain": [] },
 	"yolo": {
 		"work": { "args": ["--allow-all"] },
 		"question": {

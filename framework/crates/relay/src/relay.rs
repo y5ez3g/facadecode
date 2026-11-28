@@ -610,13 +610,33 @@ impl Relay {
     /// Passes a line from the CLI on to the daemon, or holds it while no daemon takes lines.
     fn handle_cli_line(&mut self, line: Vec<u8>) {
         let read = match jsonrpc::read(&line) {
-            Message::Request { id } => ClientLine::Request(Pending {
-                id: Id::read(id),
-                line,
-                first_line_ns: monotonic_now(),
-                replay: Replay::First,
-                cancelled: false,
-            }),
+            Message::Request { id } => {
+                let id = Id::read(id);
+                if self.pending.iter().any(|request| request.id == id)
+                    || self.held.iter().any(
+                        |line| matches!(line, ClientLine::Request(request) if request.id == id),
+                    )
+                {
+                    // A reply with the duplicate ID would also retire the original request.
+                    let answer = b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"a request with this ID is still in flight\"}}\n";
+                    if let Err(error) = self
+                        .output
+                        .write_all(answer)
+                        .and_then(|()| self.output.flush())
+                    {
+                        log("warn", &format!("cannot answer the CLI: {error}"));
+                        self.input = None;
+                    }
+                    return;
+                }
+                ClientLine::Request(Pending {
+                    id,
+                    line,
+                    first_line_ns: monotonic_now(),
+                    replay: Replay::First,
+                    cancelled: false,
+                })
+            }
             Message::Notification { method } => {
                 if let Some(id) = jsonrpc::cancelled_id(&line, method) {
                     self.note_cancellation(&id);

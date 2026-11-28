@@ -74,7 +74,13 @@ public `run()` entry point.
   connection negotiates its supported version and gets the operation and topic directory for its
   client kind. MCP calls use a typed asynchronous dispatch with the same operation registry and
   the actor proved by the relay connection. The caller's permissions come from the installed run
-  record verified for that call.
+  record verified for that call. A native relay without a run credential checks the declared
+  process chain and session evidence on every managed request. Another session on the same
+  connection cannot borrow or replace that connection's managed actor. Initialization, the catalog
+  and valid tool calls share that binding. A matching native host with incomplete session evidence
+  can load the catalog and cannot register as a Guest. A native relay reconnecting to the same
+  daemon needs its in-memory binding and renewed proof. A new daemon refuses a reconnect without
+  the original binding. Each open request reserves its ID until its response task ends.
 - On Windows, the daemon keeps two Tokio workers for asynchronous work. The blocking pool has
   up to ten threads and returns idle threads after 150 ms. Its SQLite connection uses a 128 KiB
   page cache target with WAL and FULL synchronization.
@@ -1068,10 +1074,14 @@ its daemon connection with the `relay:1` handshake. MCP negotiates its own date-
 Guest is listed. The first tool call locks the identity of its connection.
 Runs generate a private, unpredictable credential for each new run and Rules put it in that launch's
 MCP arguments. Authentication, initialization and tool discovery await that run's installation on
-the daemon runtime and verify its keeper PID, birth and run generation. A verified CLI-native
-session can also identify a matching live run. A run recovered
-from protocol 2 may keep its earlier recognition rules until that run ends. Resume has a new
-credential scope even when it uses the same Agent ID.
+the daemon runtime and verify its keeper PID, birth and run generation. A relay without a run
+credential must have the exact live parent chain declared by the installed CLI rule. Rules that
+declare a native session source also require the current run's reported session to match that
+source. The daemon reads a declared environment key from the relay process and a declared
+metadata key from the MCP request. Before Muse reports its session, its native session log must
+name the same session, managed process and folder in an event recorded during that verified
+process's lifetime. A recovered protocol 2 run also requires its legacy marker.
+Resume has a new credential scope even when it uses the same Agent ID.
 
 At initialization the parent can verify a managed run and consult its installed CLI rule. A run
 whose rule supplies the managed instructions through a hook receives the general connection text,
@@ -1088,7 +1098,7 @@ One table defines the eight tools served by `tools/list` and dispatched by `tool
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.
 If the catalog was already served when a tool call verifies the managed run, the same connection
 keeps that run's tools ready until the connection ends.
-When a CLI defers its tool catalog, the holder tracks a live, credentialed initializer independently of
+When a CLI defers its tool catalog, the holder tracks a live, verified initializer independently of
 the verified catalog response. Both refer to the current installed run and end with their relay connection.
 A reconnect or a tool-call routing connection supplies no catalog evidence for that CLI. After Daemon
 replacement the holder waits for fresh verified evidence and reports tools available after `tools/list`.

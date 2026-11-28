@@ -60,6 +60,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
+	"mcp": { "native_relay_chain": [] },
 	"status": { "mechanism": "background_report", "background": " still running$" },
 	"status_glyph": { "working": ["◐", "◑"], "resting": "✳", "frame_ms": 960 },
 	"yolo": {
