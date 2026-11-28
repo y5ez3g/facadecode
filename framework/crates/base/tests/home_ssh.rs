@@ -104,6 +104,21 @@ fn windows_login_keeps_its_native_shell_on_the_open_stream() {
         .args(["-NoLogo", "-NoProfile", "-Command", REMOTE_LOGIN_COMMAND])
         .env_remove("ComSpec");
 
+    // Windows PowerShell can cache startup data even when profiles are skipped.
+    let home = LoginHome::new();
+    let roaming = home.0.join("AppData/Roaming");
+    let local = home.0.join("AppData/Local");
+    std::fs::create_dir_all(&roaming).unwrap();
+    std::fs::create_dir_all(&local).unwrap();
+    for command in [&mut cmd, &mut powershell] {
+        command
+            .env("USERPROFILE", &home.0)
+            .env("HOME", &home.0)
+            .env("APPDATA", &roaming)
+            .env("LOCALAPPDATA", &local)
+            .current_dir(&home.0);
+    }
+
     check_open_login_stream(&mut cmd, RemoteLoginShell::Cmd);
     check_open_login_stream(&mut powershell, RemoteLoginShell::PowerShell);
 }
@@ -112,19 +127,9 @@ fn windows_login_keeps_its_native_shell_on_the_open_stream() {
 #[test]
 fn c_shell_login_keeps_its_profile_on_the_open_stream() {
     use facade_base::ssh::REMOTE_LOGIN_COMMAND;
-    use std::path::PathBuf;
     use std::process::Command;
 
-    struct LoginHome(PathBuf);
-    impl Drop for LoginHome {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    let path = std::env::temp_dir().join(format!("facade-ssh-login-{}", facade_base::random_u64()));
-    std::fs::create_dir(&path).unwrap();
-    let home = LoginHome(path);
+    let home = LoginHome::new();
     // A Unix probe requires an empty PSHOME. Only a login shell reads this file.
     std::fs::write(home.0.join(".login"), "setenv PSHOME \"\"\n").unwrap();
     for shell in ["/bin/csh", "/bin/tcsh"] {
@@ -138,6 +143,26 @@ fn c_shell_login_keeps_its_profile_on_the_open_stream() {
             .env("PSHOME", "login-profile-not-loaded")
             .current_dir(&home.0);
         check_open_login_stream(&mut command, RemoteLoginShell::Unix);
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+struct LoginHome(std::path::PathBuf);
+
+#[cfg(any(windows, target_os = "macos"))]
+impl LoginHome {
+    fn new() -> Self {
+        let path =
+            std::env::temp_dir().join(format!("facade-ssh-login-{}", facade_base::random_u64()));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl Drop for LoginHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
