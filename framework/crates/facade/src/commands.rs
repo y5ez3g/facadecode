@@ -717,6 +717,7 @@ fn made_request_id() -> String {
 fn terminal_environment(terminal: &LaunchConsole) -> BTreeMap<String, String> {
     let mut env = environment();
     facade_base::start::carry_terminal_colors(&mut env, &terminal.colors);
+    facade_base::start::carry_unattended(&mut env, terminal.unattended);
     env
 }
 

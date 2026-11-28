@@ -101,6 +101,7 @@ pub enum Tools {
 /// What giving a run's CLI the tools adds to its command line.
 #[derive(Default, PartialEq, Eq)]
 pub(crate) struct Wiring {
+    pub(crate) unattended: bool,
     pub(crate) args: Vec<String>,
     pub(crate) env: Vec<(String, String)>,
     pub(crate) tools_config: Option<PathBuf>,

@@ -749,26 +749,27 @@ summarizes the user-visible limits.
 
 **Use the initiating operation and the target home's YOLO setting.**
 
-MCP `start_agent` starts a run as an agent. Shell and editor starts and both forms of resume use person policy.
+MCP `start_agent` has agent origin. Shell and editor launches have person origin.
+MCP `start_agent` and Shell `start -d` and `resume -d` run unattended.
 All managed runs receive the approvals for Facade's MCP tools and its Codex hook. The CLI keeps its own login,
 project hooks and other approvals with YOLO off. YOLO selects the CLI's native work permissions and sandbox mode.
-A person-started run keeps the CLI's initial trust, update and risk prompts. A YOLO agent-started run uses the
-applicable startup controls below.
+Foreground Shell and editor launches leave startup trust and updates to the person and the CLI.
+Unattended launches with YOLO on use the applicable startup trust controls below.
 
-| CLI | Startup controls for agent plus YOLO |
+| CLI | Unattended startup controls with YOLO on |
 | --- | --- |
 | Claude Code | Suppress the bypass-permission warning in run settings and confirm the recognized folder-trust question. |
-| Codex | Trust the launch folder and suppress its startup update offer and recognized model-change notices. The run's `check_for_update_on_startup=false` takes precedence over ordinary overrides in this mode. |
+| Codex | Trust the launch folder and acknowledge recognized model-change notices. |
 | Antigravity | Trust the launch folder in the run settings. |
 | Muse Code | Trust the launch folder. |
-| OpenCode | The per-run updater switch also suppresses its update check. |
-| Pi | Approve the folder's project resources and skip the startup version check. |
+| Copilot | Confirm the one-time folder-trust answer when it is selected. |
+| Pi | Approve the folder's project resources. |
 
-An agent start disables automatic updates in Claude Code, Antigravity, OpenCode and the Muse Code launcher
-using their process environment. Automatic updater settings are applied independently of YOLO. Muse Code can
-still print a banner about a previous update. Its Windows native executable starts without the launcher (2.4).
+Unattended launches apply each CLI's supported per-run updater control in either YOLO mode. Codex's
+`check_for_update_on_startup=false` takes precedence over ordinary overrides. Muse Code can still print
+a banner about a previous update. Its Windows native executable starts without the launcher (2.4).
 When a Facade launch reuses a running CLI's environment, it restores the updater inputs before applying the
-destination's CLI entry. This includes a person start issued from inside that run.
+destination's CLI entry. This includes a Shell launch issued from inside that run.
 
 ## Checks
 

@@ -1,4 +1,4 @@
-//! YOLO's work options and the startup options for an agent start with YOLO on.
+//! YOLO's work options and the startup options for an unattended launch with YOLO on.
 
 use std::collections::BTreeMap;
 use std::path::Path;

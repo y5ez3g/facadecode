@@ -54,7 +54,9 @@ public `run()` entry point.
 - A start or resume takes the private launch context off its caller's environment. Shell supplies
   the terminal colors it sampled. A managed MCP start samples the caller's terminal colors through
   actor inspection. Launch colors reach the agent's screen before it reads the run's first output.
-  A forwarded launch's environment carries only the launch context. The daemon keeps terminal
+  A forwarded launch's environment carries the launch context and the Shell's explicit detached
+  launch choice. The daemon uses that choice and the caller kind to select the unattended startup
+  policy. The daemon keeps terminal
   colors in memory. A new agent without launch colors, including one started by a Guest, uses its
   CLI's default theme. A resume with launch colors replaces all terminal colors. A resume without
   them keeps the agent's terminal colors, including any colors supplied by an editor.

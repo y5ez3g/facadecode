@@ -975,6 +975,7 @@ impl Actor {
                 tools,
                 tools_config,
                 colors,
+                allow_auto_trust,
                 reply,
             } => {
                 let Some((_, Size { cols, rows })) =
@@ -1020,9 +1021,11 @@ impl Actor {
                 self.untouched_input = false;
                 self.before_input_box = false;
                 self.start_rows = false;
-                self.ready_at =
-                    self.readiness
-                        .begin(self.state.started(), self.state.tools_given(), false);
+                self.ready_at = self.readiness.begin(
+                    self.state.started(),
+                    self.state.tools_given(),
+                    allow_auto_trust,
+                );
                 self.record_state();
                 if self.early_exit.is_none() {
                     // Offer the new generation before the installed record becomes visible.

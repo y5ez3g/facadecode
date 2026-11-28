@@ -23,14 +23,16 @@ pub enum LaunchOrigin {
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchPolicy<'a> {
     pub origin: LaunchOrigin,
+    /// An MCP start or a detached Shell start or resume.
+    pub unattended: bool,
     /// The launch folder when YOLO is enabled.
     pub yolo: Option<&'a Path>,
 }
 
 impl<'a> LaunchPolicy<'a> {
-    /// The folder when Facade may handle startup trust and notices for this run.
+    /// The folder when Facade may handle startup trust for this run.
     pub fn startup_folder(self) -> Option<&'a Path> {
-        self.yolo.filter(|_| self.origin == LaunchOrigin::Agent)
+        self.yolo.filter(|_| self.unattended)
     }
 }
 
@@ -125,7 +127,7 @@ pub fn start_managed_launch_command(
     );
     command.extend(merged);
     command.extend(hook_args);
-    place_startup_args(rule, &mut rest, policy);
+    place_overrides(rule, &mut rest, policy);
     command.extend(rest);
     CommandLine {
         command,
@@ -183,7 +185,7 @@ pub fn resume_managed_launch_command(
     let after_words = wiring.takes_values_to_next_option && merged.is_empty();
     place_tool_args(rule, &mut command, &mut rest, &mut wiring, after_words);
     command.extend(merged);
-    place_startup_args(rule, &mut rest, policy);
+    place_overrides(rule, &mut rest, policy);
     command.extend(rest);
     Some(CommandLine {
         command,
@@ -225,7 +227,8 @@ fn wire(
         Ok(None) => (Wiring::default(), Tools::NotInjected, false),
     };
     wiring.profile_name = profile.unwrap_or_default();
-    let mut launch_env = if policy.origin == LaunchOrigin::Agent {
+    wiring.unattended = policy.unattended;
+    let mut launch_env = if policy.unattended {
         rule.launch.agent_env.clone()
     } else {
         BTreeMap::new()
@@ -297,15 +300,23 @@ fn rule_args(rule: &Rule, yolo: Option<&Path>) -> Vec<String> {
     command
 }
 
-/// Startup overrides go after the person's options so the run's last value takes precedence.
-fn place_startup_args(rule: &Rule, rest: &mut Vec<String>, policy: LaunchPolicy<'_>) {
-    if let Some(folder) = policy
-        .startup_folder()
-        .filter(|_| !rule.yolo.startup.args.is_empty())
-    {
-        let end = rule.arguments.end_of_options(rest);
-        rest.splice(end..end, rule.yolo.startup.args(folder));
+/// The run's overrides and startup trust controls follow the person's options.
+fn place_overrides(rule: &Rule, rest: &mut Vec<String>, policy: LaunchPolicy<'_>) {
+    if !policy.unattended {
+        return;
     }
+    let startup = policy
+        .startup_folder()
+        .map(|folder| rule.yolo.startup.args(folder))
+        .unwrap_or_default();
+    if rule.launch.unattended_args.is_empty() && startup.is_empty() {
+        return;
+    }
+    let end = rule.arguments.end_of_options(rest);
+    rest.splice(
+        end..end,
+        rule.launch.unattended_args.iter().cloned().chain(startup),
+    );
 }
 
 /// The arguments that carry the tools' and YOLO's settings merged with the person's, the files they
@@ -374,6 +385,7 @@ fn passed_settings(launch: &CommandLine) -> serde_json::Value {
 #[cfg(test)]
 const PERSON: LaunchPolicy<'static> = LaunchPolicy {
     origin: LaunchOrigin::Person,
+    unattended: false,
     yolo: None,
 };
 

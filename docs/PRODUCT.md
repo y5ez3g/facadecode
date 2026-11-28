@@ -63,11 +63,11 @@ Facade Code
   30-second wait or Error state and tells the live creator. A replacement daemon starts a fresh interval.
   The creator also receives an immediate notice when the agent ends without that creator stopping it.
 - **YOLO controls native work prompts.** Facade handles the prompts it causes in either mode. YOLO bypasses
-  native work approvals where supported, and clears supported startup prompts for agent starts. Person starts
-  keep the CLI's native startup prompts.
-- **The initiating operation determines the start policy.** Only MCP `start_agent` is an agent start. Shell,
-  VS Code and resume use person policy, including Shell commands typed by agents. Agent starts disable native
-  automatic updates and person starts honor the CLI's update settings.
+  native work approvals where supported and clears supported startup trust prompts on unattended launches.
+- **The initiating operation determines the start policy.** MCP `start_agent` and Shell `start -d` and
+  `resume -d` run unattended. Facade disables updates for these launches where the CLI offers a per-run
+  control. Foreground Shell and VS Code leave startup trust prompts and updates to the CLI. MCP
+  `start_agent` has agent origin. Shell and VS Code have person origin, including Shell commands typed by agents.
 - **A Facade home is one installation.** Its programs, data and services belong to that home. Select a home with
   `FACADE_HOME` and manage its installation independently.
 - **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
@@ -304,8 +304,8 @@ creator a 🔔. A startup blockage and its first prompt failure share that notic
   run uses the target login environment.
 - **Models, effort and prompts.** Pass supported native options after the CLI name. The target machine's
   settings can supply defaults. A managed resume reuses the recorded launch choices.
-- **Folder trust and setup.** Person starts and resumes keep the CLI's initial trust and risk prompts.
-  An MCP start with YOLO on at the target home uses that CLI's supported startup trust and notice settings.
+- **Folder trust and setup.** Foreground Shell and VS Code keep the CLI's startup trust prompts.
+  Unattended launches use the CLI's supported startup trust controls when YOLO is on at the target home.
   Facade configures its MCP tools and hooks per run, including their own approvals. The CLI handles login.
 - **Ending and resuming.** A CLI exit, crash or machine reboot ends the run. Use `resume` to continue it.
   VS Code can resume pinned agents when their workspace reopens.
@@ -325,7 +325,7 @@ for the full rules.
 
 | CLI | Facade behavior |
 | --- | --- |
-| Claude Code | A person who starts the CLI answers its native folder trust question. For an agent-initiated start with YOLO on, Facade verifies the question and the selected trust option before confirming. |
+| Claude Code | Facade verifies the native folder trust question and the selected trust option before confirming on an unattended launch with YOLO on. In an attended launch, the person answers the question. |
 | Antigravity | Facade makes a project plugin available under `.agents/plugins/facade/` while needed. A second Antigravity process that reads the same run configuration can be identified as that run. On startup Facade checks that the `facade` MCP tools are ready before delivering a first prompt. |
 | Muse | When the CLI uses an existing `facade` MCP entry in place of the managed entry, Facade resolves identity from the CLI session. |
 | Pi | The managed entry carries the run identity because Pi does not pass a session ID to the MCP server. A manually configured Pi MCP entry joins as a Guest. |

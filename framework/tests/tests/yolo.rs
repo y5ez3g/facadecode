@@ -812,6 +812,7 @@ fn shell_and_ide_starts_leave_claude_trust_to_the_person_with_yolo_on() {
     let shell_keys = configure_claude(&home, "shell", Answered::Leaves, true);
     let mut shell = TestTerminal::spawn(
         home.command(&test_binaries().facade)
+            .env("FACADE_LAUNCH_UNATTENDED", "1")
             .args(["start", "--name", "shell", "claude"]),
         80,
         24,
@@ -827,7 +828,8 @@ fn shell_and_ide_starts_leave_claude_trust_to_the_person_with_yolo_on() {
     let mut ide = DaemonTestClient::open(&home);
     let hello = ide.hello("ide", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(hello["result"]["api_version"], 1, "{hello}");
-    let env: std::collections::BTreeMap<_, _> = home.isolating_env().into_iter().collect();
+    let mut env: std::collections::BTreeMap<_, _> = home.isolating_env().into_iter().collect();
+    env.insert("FACADE_LAUNCH_UNATTENDED".into(), "1".into());
     ide.call_ok(
         "agent.start",
         json!({
@@ -898,6 +900,26 @@ fn shell_and_ide_starts_leave_claude_trust_to_the_person_with_yolo_on() {
             Some(0)
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_detached_shell_start_answers_claude_trust_with_yolo_on() {
+    let home = TestHome::new("backgroundtrust");
+    let keys = configure_claude(&home, "background", Answered::Leaves, true);
+    home.run_facade_ok(&["start", "-d", "--name", "background", "claude"]);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || key(&keys, "enter")
+            .is_some_and(|key| !key.is_empty())),
+        "{}",
+        home.screen("background")
+    );
+    assert_eq!(key(&keys, "lost"), Some(Vec::new()));
+    assert_eq!(key(&keys, "down"), Some(b"\x1b[B".to_vec()));
+    assert_eq!(key(&keys, "enter"), Some(b"\r".to_vec()));
+    let status = home.run_facade_ok(&["status", "background"]);
+    assert_eq!(status_field(&status, "Started by"), Some("Shell"));
+    assert!(record(&home, "background").get("creator").is_none());
 }
 
 /// An Agent start with YOLO on in the target home answers Claude Code's folder trust question once,

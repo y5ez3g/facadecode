@@ -24,7 +24,7 @@ use super::{
 };
 use crate::delivery::SendTurn;
 use crate::messages::{InboxRead, read_before_deadline};
-use crate::service::{CallResult, launch_color_environment};
+use crate::service::{CallResult, launch_environment};
 
 const EFFECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -166,7 +166,7 @@ async fn start(
         match daemon_call(relay, actor, inspect, None).await {
             Ok(CallResult::Inspected(inspected, colors)) => {
                 size = inspected.agent.size.unwrap_or(size);
-                env = launch_color_environment(Some(&colors));
+                env = launch_environment(Some(&colors), false);
                 if folder.is_none() {
                     folder = Some(inspected.agent.cwd);
                     folder_is_default = true;

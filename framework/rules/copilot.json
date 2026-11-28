@@ -2,6 +2,7 @@
 	"cli": "copilot",
 	"display_name": "GitHub Copilot CLI",
 	"program": "copilot",
+	"launch": { "agent_env": { "COPILOT_AUTO_UPDATE": "false" } },
 	"arguments": {
 		"reserved": ["-h", "--help", "-v", "--version", "--print-debug-info", "--collect-debug-logs", "-p", "--prompt", "-i", "--interactive", "--attachment", "--assisted-approval", "--trust-folder", "--acp", "--server", "--headless", "--ahp", "--environment", "--remote", "--cloud", "--connect", "-r", "--resume", "--continue", "--session-id", "--new-session-id", "-w", "--worktree", "-C", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--yolo"],
 		"clusters": ["-C", "-i", "-n", "-p", "-r", "-w"]
@@ -43,5 +44,14 @@
 		"placeholders": [{ "pattern": "^\\[Paste #\\d+ - (\\d+) lines\\]$", "count": "lines", "spaced": true }]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume=${session_id}"], "resume_requires_saved_session": true },
-	"yolo": { "work": { "args": ["--allow-all"] } }
+	"yolo": {
+		"work": { "args": ["--allow-all"] },
+		"question": {
+			"shown": "^│ Do you trust the files in this folder\\? +│$",
+			"answer": "^│ ❯ 1\\. Yes +│$",
+			"selected": "^│ ❯ 1\\. Yes +│$",
+			"keys": [],
+			"confirm": "Enter"
+		}
+	}
 }

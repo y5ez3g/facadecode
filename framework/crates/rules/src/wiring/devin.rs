@@ -248,6 +248,9 @@ pub(super) fn settings(
             "config.json",
         ),
     };
+    if wiring.unattended {
+        settings["auto_update"] = json!(false);
+    }
     if !wiring.hooks.is_empty() {
         let starts = session_start(&mut settings).ok()?;
         for (_, command) in &wiring.hooks {

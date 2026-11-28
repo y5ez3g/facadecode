@@ -2,6 +2,7 @@
 	"cli": "agent",
 	"display_name": "Cursor",
 	"program": "agent",
+	"launch": { "unattended_args": ["--disable-auto-update"] },
 	"arguments": {
 		"reserved": ["--resume", "--continue", "--new-session-id", "--print", "-p", "--output-format", "--force", "-f", "--yolo", "--auto-review", "--approve-mcps", "--sandbox", "--trust", "--workspace", "--worktree", "-w", "--data-dir", "--exclude-workspace-context", "--model"],
 		"required": ["--model", "--mode", "--add-dir", "--plugin-dir", "--image", "--api-key"],

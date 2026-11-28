@@ -86,6 +86,10 @@ pub(super) fn settings(
     if let Some(additions) = &wiring.settings {
         merge_settings(&mut settings, additions);
     }
+    if wiring.unattended {
+        settings["startup"]["checkUpdate"] = json!(false);
+        settings["update"]["auto"] = json!(false);
+    }
     let mut args = Vec::new();
     let mut rest = Vec::new();
     let mut at = 0;

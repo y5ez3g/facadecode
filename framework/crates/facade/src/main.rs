@@ -359,15 +359,17 @@ fn local_machine_name() -> String {
 struct LaunchConsole {
     size: (u16, u16),
     colors: LaunchColors,
+    unattended: bool,
     /// The console a launch in the foreground keeps for its view.
     view: Option<attach::Probe>,
 }
 
 impl LaunchConsole {
-    fn without_terminal() -> Self {
+    fn without_terminal(unattended: bool) -> Self {
         Self {
             size: DEFAULT_TERMINAL_SIZE,
             colors: LaunchColors::default(),
+            unattended,
             view: None,
         }
     }
@@ -400,19 +402,20 @@ fn read_screen_tip(agent: &str) -> String {
 /// from there. A launch without a terminal takes the defaults.
 fn launch_console(detach: bool) -> anyhow::Result<LaunchConsole> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Ok(LaunchConsole::without_terminal());
+        return Ok(LaunchConsole::without_terminal(detach));
     }
     let size = attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE);
     if detach && !asks_colors() {
         return Ok(LaunchConsole {
             size,
-            ..LaunchConsole::without_terminal()
+            ..LaunchConsole::without_terminal(true)
         });
     }
     if detach {
         return Ok(LaunchConsole {
             size,
             colors: attach::Probe::read_colors()?,
+            unattended: true,
             view: None,
         });
     }
@@ -420,6 +423,7 @@ fn launch_console(detach: bool) -> anyhow::Result<LaunchConsole> {
     Ok(LaunchConsole {
         size,
         colors: probe.colors,
+        unattended: false,
         view: Some(probe),
     })
 }
@@ -451,7 +455,12 @@ fn missing_cli(options: StartOptions) -> i32 {
     let error = connect_or_start()
         .ok()
         .and_then(|mut client| {
-            commands::start(&mut client, options, &LaunchConsole::without_terminal()).err()
+            commands::start(
+                &mut client,
+                options,
+                &LaunchConsole::without_terminal(false),
+            )
+            .err()
         })
         .unwrap_or_else(|| {
             errors::Problem::MissingCli {

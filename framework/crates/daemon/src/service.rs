@@ -788,6 +788,7 @@ impl Daemon {
         deadline: Option<Instant>,
     ) -> Result<wire::StartResult, ErrorBody> {
         let by_model = matches!(caller, Caller::Agent { .. });
+        let unattended = shell_unattended(caller, args.env.as_mut());
         if by_model && !args.args.is_empty() {
             return Err(ErrorBody::invalid_argument(
                 "start_agent accepts a configured CLI without trailing arguments",
@@ -813,7 +814,7 @@ impl Daemon {
             && let Some(machine) = self.machine_for(machine.as_deref())?
             && machine != self.machine_id
         {
-            args.env = Some(launch_color_environment(colors.as_ref()).unwrap_or_default());
+            args.env = Some(launch_environment(colors.as_ref(), unattended).unwrap_or_default());
             if args.folder_is_default {
                 args.folder = None;
             }
@@ -869,6 +870,7 @@ impl Daemon {
             caller: caller.clone(),
             sender: sender_from(caller, name),
             deadline,
+            unattended: by_model || unattended,
             launch: if by_model {
                 LaunchOrigin::Agent
             } else {
@@ -1671,15 +1673,26 @@ pub(crate) fn shell_launch_colors(
         .filter(|_| matches!(caller, Caller::Terminal { .. }))
 }
 
+/// Takes the private Shell launch choice from the environment before a CLI can inherit it.
+pub(crate) fn shell_unattended(
+    caller: &Caller,
+    env: Option<&mut std::collections::BTreeMap<String, String>>,
+) -> bool {
+    env.is_some_and(facade_base::start::take_unattended)
+        && matches!(caller, Caller::Terminal { .. })
+}
+
 /// The only environment a start or resume forwards to another machine.
-pub(crate) fn launch_color_environment(
+pub(crate) fn launch_environment(
     colors: Option<&LaunchColors>,
+    unattended: bool,
 ) -> Option<std::collections::BTreeMap<String, String>> {
-    colors.map(|colors| {
-        let mut env = std::collections::BTreeMap::new();
+    let mut env = std::collections::BTreeMap::new();
+    if let Some(colors) = colors {
         facade_base::start::carry_terminal_colors(&mut env, colors);
-        env
-    })
+    }
+    facade_base::start::carry_unattended(&mut env, unattended);
+    (!env.is_empty()).then_some(env)
 }
 
 pub(crate) fn terminal_colors(

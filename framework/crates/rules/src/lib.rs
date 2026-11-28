@@ -338,7 +338,10 @@ pub struct CommandLineRule {
     /// Arguments right after the program.
     #[serde(default)]
     pub args: Vec<String>,
-    /// The nonpersistent updater switches for agent starts.
+    /// Literal overrides for an unattended run, after the other launch arguments.
+    #[serde(default)]
+    pub unattended_args: Vec<String>,
+    /// The nonpersistent updater switches for unattended starts and resumes.
     #[serde(default)]
     pub agent_env: BTreeMap<String, String>,
 }
@@ -834,7 +837,13 @@ impl Rule {
                 "program {program:?} must be an executable's file name"
             ));
         }
-        match self.launch.args.iter().find(|arg| !is_literal(arg)) {
+        match self
+            .launch
+            .args
+            .iter()
+            .chain(&self.launch.unattended_args)
+            .find(|arg| !is_literal(arg))
+        {
             Some(arg) => Err(format!(
                 "launch argument {arg:?} must be literal text without NUL"
             )),

@@ -2,7 +2,7 @@
 	"cli": "kiro-cli",
 	"display_name": "Kiro",
 	"program": "kiro-cli",
-	"launch": { "args": ["chat", "--v3"] },
+	"launch": { "args": ["chat", "--v3"], "agent_env": { "KIRO_NO_AUTO_UPDATE": "1" } },
 	"arguments": {
 		"reserved": ["--v1", "--v2", "--v3", "--agent-engine", "--classic", "--legacy-ui", "--resume", "-r", "--resume-picker", "--resume-id", "--sessions", "--list-sessions", "--cloud", "--repo", "--no-interactive", "--non-interactive", "--output-format", "--trust-workspace", "--trust-all-tools", "-a", "--trust-tools", "--sandbox", "--model", "--effort"],
 		"required": ["--agent", "--profile", "--model", "--effort", "--mode", "--wrap"],

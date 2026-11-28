@@ -1004,6 +1004,7 @@ impl Harness {
             tools,
             tools_config: None,
             colors: Default::default(),
+            allow_auto_trust: false,
             reply,
         })
         .await;

@@ -218,7 +218,10 @@ runs get their managed instructions from their run hook or extension.
 settings at start or resume. A Guest reads YOLO from its machine's settings and appears in `list` at its first MCP
 tool call. With YOLO on, an agent can reach any agent the Orchestrator can reach. With YOLO off, it can act within
 its creation tree. Shell and VS Code have full reach for the actions they offer. Each CLI's rules describe how it
-handles tool approval, trust and sandbox settings. See the [product description](../PRODUCT.md) and
+handles tool approval, trust and sandbox settings. MCP `start_agent` and Shell `start -d` and `resume -d` are
+unattended. With YOLO on, Facade handles their supported startup trust questions. For unattended launches, it turns
+off updates where the CLI offers a per-run control. The person handles native trust and updates in foreground
+Shell and VS Code launches. See the [product description](../PRODUCT.md) and
 [configuration](../extension/features/CONFIGURATION.md).
 
 ## Folders and machines

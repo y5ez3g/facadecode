@@ -111,6 +111,12 @@ pub(super) fn hook(
     if let Some(additions) = &wiring.settings {
         merge_settings(&mut settings, additions);
     }
+    if wiring.unattended {
+        merge_settings(
+            &mut settings,
+            &json!({"general": {"enableAutoUpdate": false}}),
+        );
+    }
     event_hooks(&mut settings, "SessionStart")?.push(json!({
         "hooks": [{
             "type": "command",

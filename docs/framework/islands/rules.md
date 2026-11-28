@@ -140,7 +140,7 @@ Rust regular expressions.
 | Key | Says |
 |---|---|
 | `cli`, `display_name`, `program` | the name (same as the file), the name people know, the program on `PATH` |
-| `launch.args` | literal arguments right after the program |
+| `launch` | literal arguments after the program, and arguments and environment for an unattended run |
 | `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
@@ -150,7 +150,7 @@ Rust regular expressions.
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
-| `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, optional `off_args` for explicit consent mode, and the trust question to answer |
+| `yolo` | `work` controls for native permissions, `startup` controls for unattended launches with YOLO on, optional `off_args` for explicit consent mode, and the trust question to answer |
 | `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, `records_above_bmp`, and `line_break`, the key that puts a line break in the CLI's input, for a CLI whose Enter submits |
 
 **Adding a CLI.** Write `framework/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
@@ -173,13 +173,14 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
 - **Keeps:**
   - A rule's `session.resume` names `${session_id}` exactly once and nothing else to fill in, so a
     resume puts the session ID in one place.
-  - YOLO enables `work` controls. `startup` controls require both YOLO and an agent start.
+  - YOLO enables `work` controls. `startup` controls require YOLO and an unattended launch.
     A rule can specify `off_args` to select its normal approval mode explicitly.
     Rule options interpolate `${folder}` and `${folder_toml}`. The TOML value uses the
     resolved working folder, lowercased on Windows as Codex keys a project there.
   - Kiro's trust-all-tools question can be recognized by its consent text when the title has
     scrolled out of view. The one-time acceptance must show as selected before confirmation.
-  - The rule's agent-start updater environment applies to agent starts in either YOLO mode.
+  - The rule's updater controls apply to unattended launches in either YOLO mode. They apply to MCP
+    `start_agent`, Shell `start -d` and Shell `resume -d`.
     Reusing a run's environment restores the inputs its launch controls replaced, before the destination's
     entry settings apply. Later changes in the invoking shell take precedence.
   - `${env:NAME}` in an entry is read through `env_var`.

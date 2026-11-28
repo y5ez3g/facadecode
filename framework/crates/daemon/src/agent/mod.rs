@@ -264,6 +264,7 @@ pub(crate) enum AgentCommand {
         tools_config: Option<PathBuf>,
         /// None leaves the screen's colors in use. Some replaces all of them, an omitted entry included.
         colors: Option<TerminalColors>,
+        allow_auto_trust: bool,
         reply: oneshot::Sender<ManagedAgent>,
     },
     /// Tells viewers the agent is removed, waits for a checkpoint being written, replies and ends

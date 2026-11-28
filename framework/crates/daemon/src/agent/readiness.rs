@@ -609,6 +609,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn copilot_startup_confirms_only_the_selected_one_time_trust() {
+        let rule = facade_rules::find("copilot").unwrap();
+        for (allowed, selected, expected) in [(true, 1, 1), (true, 2, 0), (false, 1, 0)] {
+            let mut screen = Screen::new(120, 30, 0);
+            let first = if selected == 1 { '❯' } else { ' ' };
+            let second = if selected == 2 { '❯' } else { ' ' };
+            screen.feed(
+                format!(
+                    "│ Do you trust the files in this folder? │\r\n\
+                     │ {first} 1. Yes │\r\n\
+                     │ {second} 2. Yes, and remember this folder for future sessions │\r\n\
+                     │   3. No (Esc) │"
+                )
+                .as_bytes(),
+            );
+            let now = Instant::now();
+            let mut readiness = Readiness::new(rule, "a1");
+            readiness.begin(now, ToolsGiven::Injected, allowed);
+            let view = StartView {
+                screen: &screen,
+                input: InputState::Interaction,
+                draft: None,
+                works: false,
+                start_bound: None,
+                drawn_at: Some(now),
+                typing: false,
+            };
+            let mut keys = Vec::new();
+            for elapsed in [Duration::ZERO, SCREEN_STILL, SCREEN_STILL * 2] {
+                readiness.step(now + elapsed, &view, &mut |press| {
+                    let Press::Keys(chosen) = press else {
+                        panic!("Copilot's trust question asks for a key");
+                    };
+                    keys.extend(chosen);
+                    Ok(())
+                });
+            }
+            assert_eq!(keys, vec!["Enter"; expected]);
+        }
+    }
+
+    #[test]
     fn a_late_tool_panel_keeps_the_persons_keys_until_it_is_ready_or_the_start_ends() {
         let rule = facade_rules::find("agy").unwrap();
         for (echoes, finishes) in [(true, true), (true, false), (false, false)] {
