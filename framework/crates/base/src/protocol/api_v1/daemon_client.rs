@@ -495,6 +495,65 @@ fn response_result<T: DeserializeOwned>(response: Response) -> anyhow::Result<T>
     }
 }
 
+/// Reads the roster from an already authenticated, pre-rename Core daemon. Core used `protocol`
+/// in hello and returned an array for the agents snapshot.
+pub(crate) fn core_active_agents(
+    mut writer: ClientSocket,
+    pid: u32,
+    until: Instant,
+) -> anyhow::Result<Vec<String>> {
+    use crate::model::terminal::display_name;
+    use crate::process::ProcessState;
+
+    #[derive(serde::Deserialize)]
+    struct CoreAgent {
+        agent_id: String,
+        name: String,
+        process: ProcessState,
+    }
+
+    let mut reader = BufReader::new(writer.try_clone()?);
+    let mut line = Vec::new();
+    let mut exchange = |id, method, params| {
+        let request = Request::new(Some(id), method, params);
+        write_frame(&mut writer, &encode_line(&request), Some(until))?;
+        let Some(ServerMessage::Response(response)) =
+            read_frame(&mut reader, &mut line, Some(until))?
+        else {
+            anyhow::bail!("Core closed or did not answer {method}");
+        };
+        anyhow::ensure!(response.id == Some(id), "Core did not answer {method}");
+        response_result::<Value>(response)
+    };
+
+    let hello = exchange(
+        HELLO_ID,
+        methods::HELLO,
+        serde_json::json!({ "protocol": [1, 1], "build": crate::build_id(), "kind": "terminal" }),
+    )?;
+    anyhow::ensure!(
+        hello["pid"] == pid && hello["protocol"] == 1,
+        "unexpected Core hello"
+    );
+    let watch: WatchResult = serde_json::from_value(exchange(
+        HELLO_ID + 1,
+        methods::WATCH,
+        serde_json::json!({ "topic": "agents", "args": {} }),
+    )?)?;
+    let agents: Vec<CoreAgent> = serde_json::from_value(watch.snapshot)?;
+    Ok(agents
+        .into_iter()
+        .filter(|agent| agent.process != ProcessState::Ended)
+        .map(|agent| {
+            format!(
+                "{} ({})",
+                display_name(&agent.name),
+                display_name(&agent.agent_id)
+            )
+        })
+        .collect())
+}
+
 /// A refusal before the operation began, while a new daemon takes over.
 pub fn upgrading(error: &anyhow::Error) -> bool {
     error
@@ -545,6 +604,43 @@ mod tests {
         peer.write_all(bytes).unwrap();
         drop(peer);
         BufReader::new(client)
+    }
+
+    #[test]
+    fn the_core_roster_reports_active_runs_and_skips_ended_records() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut reader = BufReader::new(peer.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "hello");
+            assert_eq!(request["params"]["protocol"], serde_json::json!([1, 1]));
+            peer.write_all(&encode_line(&Response::ok(
+                1,
+                serde_json::json!({"protocol": 1, "pid": 42}),
+            )))
+            .unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "watch");
+            assert_eq!(request["params"]["topic"], "agents");
+            peer.write_all(&encode_line(&Response::ok(
+                2,
+                serde_json::json!({"watch": 1, "snapshot": [
+                    {"agent_id": "a1", "name": "finished", "process": "ended"},
+                    {"agent_id": "a2", "name": "working", "process": "running"},
+                    {"agent_id": "a3", "name": "unknown", "process": "future_state"},
+                ]}),
+            )))
+            .unwrap();
+        });
+
+        let active = core_active_agents(client, 42, Instant::now() + Duration::from_secs(2));
+        server.join().unwrap();
+        assert_eq!(active.unwrap(), ["working (a2)", "unknown (a3)"]);
     }
 
     #[test]

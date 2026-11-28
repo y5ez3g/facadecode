@@ -23,8 +23,8 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_BASIC_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_VM_READ,
-    QueryFullProcessImageNameW, WaitForSingleObject,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, PROCESS_VM_READ,
+    QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 
 use super::{Observed, PROC_POLL_INTERVAL, Presence, ProcessObservation};
@@ -59,6 +59,24 @@ pub fn presence(identity: &ProcessIdentity) -> io::Result<Presence> {
         return Ok(Presence::Ended);
     }
     Ok(Presence::Running)
+}
+
+pub(crate) fn terminate(identity: &ProcessIdentity) -> io::Result<()> {
+    let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
+    let Some(process) = open(identity.pid, access)? else {
+        return Ok(());
+    };
+    if birth_of(process.as_handle())? != identity.birth || has_ended(process.as_handle())? {
+        return Ok(());
+    }
+    // SAFETY: this handle belongs to the identified process and grants PROCESS_TERMINATE.
+    if unsafe { TerminateProcess(process.as_raw_handle(), 0) } == 0 {
+        let error = io::Error::last_os_error();
+        if !has_ended(process.as_handle())? {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 /// Nanoseconds on this machine's clock that does not jump, the clock of stop deadlines, the same

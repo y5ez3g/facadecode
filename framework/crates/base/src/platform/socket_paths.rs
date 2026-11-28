@@ -159,6 +159,15 @@ pub fn daemon_socket_for(home: &Path) -> anyhow::Result<PathBuf> {
     socket_for(home, "daemon")
 }
 
+/// The endpoint used by the daemon from before the Core-to-Framework rename.
+pub fn legacy_daemon_socket_for(home: &Path) -> PathBuf {
+    let key = home_key(home);
+    #[cfg(unix)]
+    return PathBuf::from(format!("/tmp/facade-core-{}/daemon-{key}.sock", uid()));
+    #[cfg(windows)]
+    return PathBuf::from(format!(r"\\.\pipe\facade-core-daemon-{key}"));
+}
+
 /// Whether `error` says the other end of a connection went away, by a raw code that the standard
 /// library gives no kind of its own: `EIO` on Unix; `ERROR_BROKEN_PIPE`, `ERROR_NO_DATA` and
 /// `ERROR_PIPE_NOT_CONNECTED` on Windows.

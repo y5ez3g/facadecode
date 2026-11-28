@@ -2219,6 +2219,59 @@ fn install_only_refuses_linked_program_directories() {
 }
 
 #[test]
+#[cfg(unix)]
+fn install_keeps_core_custody_and_repairs_legacy_launchers() {
+    let home = TestHome::new("previous-launchers");
+    let core = home.path.join("core");
+    let bin = core.join("bin");
+    let old = bin.join("0.1.6");
+    std::fs::create_dir_all(&old).unwrap();
+    for name in ["facade", "facade-mcp"] {
+        std::fs::write(old.join(name), b"previous build").unwrap();
+        std::os::unix::fs::symlink(Path::new("0.1.6").join(name), bin.join(name)).unwrap();
+    }
+    let database = core.join("facade.db");
+    std::fs::write(&database, b"saved records").unwrap();
+    let stale = facade_base::unix_process::own_identity().unwrap();
+    let stale = json!({ "pid": stale.pid, "birth": stale.birth }).to_string();
+    let record = core.join("daemon.lock");
+    std::fs::write(&record, &stale).unwrap();
+
+    let held = facade_base::service::lock_keeper_if_unowned(&core)
+        .unwrap()
+        .unwrap();
+    let deferred = home.run_facade(&["daemon", "--install-only"]);
+    assert!(deferred.status.success(), "{}", stderr(&deferred));
+    assert!(stderr(&deferred).contains("still use Core"));
+    for name in ["facade", "facade-mcp"] {
+        assert_eq!(
+            bin.join(name).canonicalize().unwrap(),
+            old.join(name).canonicalize().unwrap()
+        );
+        assert_eq!(std::fs::read(old.join(name)).unwrap(), b"previous build");
+    }
+    drop(held);
+
+    for _ in 0..2 {
+        home.run_facade_ok(&["daemon", "--install-only"]);
+        for name in ["facade", "facade-mcp"] {
+            let link = std::fs::read_link(bin.join(name)).unwrap();
+            let build = link.iter().next().unwrap().to_str().unwrap();
+            assert!(facade_base::compare_builds(build, build).is_some());
+            let launcher = bin.join(name).canonicalize().unwrap();
+            let selected = home.path.join("framework/bin").join(name);
+            assert_eq!(launcher, selected.canonicalize().unwrap());
+            assert_eq!(std::fs::read(old.join(name)).unwrap(), b"previous build");
+        }
+        assert_eq!(std::fs::read(&database).unwrap(), b"saved records");
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), stale);
+    }
+
+    let mut mcp = McpTestClient::spawn(&home, home.command(bin.join("facade-mcp")));
+    assert_eq!(mcp.call("list_agents", json!({}))["status"], "success");
+}
+
+#[test]
 fn a_same_version_newer_build_changes_only_its_selected_home() {
     let first = TestHome::new("home-build-first");
     let second = TestHome::new("home-build-second");

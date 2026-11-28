@@ -511,7 +511,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Daemon { takeover: true, .. } => daemon_client::takeover(),
         Command::Daemon {
             install_only: true, ..
-        } => facade_base::programs::select_running().map(|_| 0),
+        } => daemon_client::install_only(),
         Command::Daemon { detach: true, .. } => {
             let installed_relay =
                 std::env::var_os("FACADE_STARTUP_SELECT_HOME").is_some_and(|value| value == "1");

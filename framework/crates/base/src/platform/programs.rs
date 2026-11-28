@@ -25,6 +25,7 @@ use std::fs::{OpenOptions, Permissions};
 #[cfg(unix)]
 use std::os::unix::fs::{FileExt, OpenOptionsExt, PermissionsExt, symlink};
 
+mod legacy;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
@@ -281,6 +282,22 @@ pub fn select_running() -> anyhow::Result<PathBuf> {
             launcher.display()
         )
     })
+}
+
+pub struct LegacyUpgrade {
+    pub bin: PathBuf,
+    pub status: LegacyStatus,
+}
+
+pub enum LegacyStatus {
+    Migrated,
+    Active(Vec<String>),
+    Deferred(String),
+}
+
+/// Keeps the pre-rename launcher paths working after a successful install or upgrade.
+pub fn repair_legacy_launchers() -> anyhow::Result<Option<LegacyUpgrade>> {
+    legacy::repair(&Bin::here()?)
 }
 
 /// Selects a sleeping home's programs. None means a live service must admit the replacement.

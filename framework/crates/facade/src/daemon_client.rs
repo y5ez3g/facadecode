@@ -1011,7 +1011,45 @@ pub(super) fn takeover() -> anyhow::Result<i32> {
         }
         return Err(report_editor_startup(error));
     }
+    repair_legacy_launchers()?;
     Ok(0)
+}
+
+pub(super) fn install_only() -> anyhow::Result<i32> {
+    programs::select_running()?;
+    repair_legacy_launchers()?;
+    Ok(0)
+}
+
+fn repair_legacy_launchers() -> anyhow::Result<()> {
+    let Some(upgrade) = programs::repair_legacy_launchers()? else {
+        return Ok(());
+    };
+    match upgrade.status {
+        programs::LegacyStatus::Migrated => {
+            eprintln!(
+                "Updated the previous Facade launchers in {}. If VS Code still has the Facade Code extension \
+                 that starts Core, update the extension in VS Code.",
+                upgrade.bin.display()
+            );
+            return Ok(());
+        }
+        programs::LegacyStatus::Active(agents) => {
+            eprintln!(
+                "The previous Facade Core still has active agents: {}.",
+                agents.join(", ")
+            );
+        }
+        programs::LegacyStatus::Deferred(reason) => {
+            eprintln!("{reason} The previous Core launchers are still in use.");
+        }
+    }
+    eprintln!(
+        "Configurations that point into {} still use Core. Update the Facade Code extension in \
+         VS Code. Let the Core agents finish or stop them, then rerun the installer.",
+        upgrade.bin.display()
+    );
+    Ok(())
 }
 
 /// Reports typed daemon refusals separately from human diagnostics for editor startup.

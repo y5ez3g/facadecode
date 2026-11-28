@@ -38,6 +38,8 @@ pub use super::io_thread::WaitPacket;
 #[cfg(windows)]
 use windows as os;
 #[cfg(windows)]
+pub(crate) use windows::terminate;
+#[cfg(windows)]
 pub use windows::{birth, monotonic_now, presence};
 
 // The exits of this process's children.

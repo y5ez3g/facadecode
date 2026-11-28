@@ -66,17 +66,10 @@ pub fn lock_home(framework: &Path, service: Service) -> anyhow::Result<Locked> {
         .create(true)
         .truncate(false)
         .open(&path)?;
-    // SAFETY: an all-zero OVERLAPPED is valid; it gives the lock's offset.
-    let mut at: OVERLAPPED = unsafe { std::mem::zeroed() };
-    at.Anonymous.Anonymous.OffsetHigh = u32::MAX;
-    let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
-    // SAFETY: the file is open and `at` outlives the call, which does not wait.
-    if unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut at) } == 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
-            return Ok(Locked::Contended);
-        }
-        anyhow::bail!("could not lock {}: {error}", path.display());
+    if !try_service_lock(&file)
+        .map_err(|error| anyhow::anyhow!("could not lock {}: {error}", path.display()))?
+    {
+        return Ok(Locked::Contended);
     }
     let mut record = serde_json::to_vec(&own_identity()?)?;
     record.push(b'\n');
@@ -87,6 +80,45 @@ pub fn lock_home(framework: &Path, service: Service) -> anyhow::Result<Locked> {
     // that writes the home's files.
     std::mem::forget(file);
     Ok(Locked::Held)
+}
+
+fn try_service_lock(file: &File) -> io::Result<bool> {
+    // SAFETY: an all-zero OVERLAPPED is valid; it gives the lock's offset.
+    let mut at: OVERLAPPED = unsafe { std::mem::zeroed() };
+    at.Anonymous.Anonymous.OffsetHigh = u32::MAX;
+    let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
+    // SAFETY: the file is open and `at` outlives the call, which does not wait.
+    if unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut at) } == 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    Ok(true)
+}
+
+pub(super) fn try_lock_unowned(folder: &Path, service: Service) -> anyhow::Result<Option<File>> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    let path = folder.join(service.lock_name());
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&path)?;
+    let meta = file.metadata()?;
+    anyhow::ensure!(
+        meta.is_file() && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0,
+        "cannot use {} as a service lock",
+        path.display()
+    );
+    Ok(try_service_lock(&file)?.then_some(file))
 }
 
 /// The identity in `service`'s lock file; None where the file is missing, empty or incomplete.

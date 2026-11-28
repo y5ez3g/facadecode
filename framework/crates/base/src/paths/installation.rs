@@ -23,6 +23,14 @@ pub(crate) fn installed_bin(program: &Path) -> Option<&Path> {
         let Some(home) = bin.parent().and_then(Path::parent) else {
             return false;
         };
+        // Windows compatibility launchers are copies in core/bin. On Unix, their links
+        // resolve to framework/bin before this check.
+        #[cfg(windows)]
+        if bin.ends_with(Path::new("core").join("bin"))
+            && home.join(&suffix).join("current-build").is_file()
+        {
+            return true;
+        }
         bin.ends_with(&suffix)
             || home
                 .join(&suffix)
