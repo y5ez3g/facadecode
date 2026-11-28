@@ -29,6 +29,10 @@ pub(crate) enum Mark {
     BeginSync,
     /// The end of a synchronized frame, where a reader can inspect the applied screen.
     EndSync,
+    /// The CLI placed and showed its cursor immediately after a synchronized update.
+    CursorRestored,
+    /// Output after a synchronized update did not restore its cursor.
+    DiscardCursorRestore,
     /// An unfinished unit left by an earlier read has finished.
     CarriedUnitEnd,
     /// The CLI switched between the main and the alternate screen.
@@ -45,6 +49,67 @@ pub(crate) enum Mark {
     Status(StatusEvent),
 }
 
+/// Recognizes the cursor position and reveal that Copilot writes just after closing a frame.
+#[derive(Default)]
+pub(crate) struct CursorRestore {
+    next: Option<(CursorRestoreStep, i64)>,
+}
+
+enum CursorRestoreStep {
+    Position,
+    Reveal,
+}
+
+impl CursorRestore {
+    fn take_piece(&mut self, end: usize, piece: &Piece<'_>, marks: &mut Vec<OutputMark>) {
+        if let Some((step, start)) = self.next.take() {
+            match (step, piece) {
+                (CursorRestoreStep::Position, Piece::Csi(sequence))
+                    if end as i64 - sequence.len() as i64 == start
+                        && absolute_cursor_position(sequence) =>
+                {
+                    self.next = Some((CursorRestoreStep::Reveal, end as i64));
+                }
+                (CursorRestoreStep::Reveal, Piece::Csi(sequence))
+                    if end as i64 - sequence.len() as i64 == start && *sequence == b"\x1b[?25h" =>
+                {
+                    marks.push((end, None, Mark::CursorRestored));
+                }
+                _ => marks.push((start.max(0) as usize, None, Mark::DiscardCursorRestore)),
+            }
+        }
+        if matches!(piece, Piece::Csi(sequence) if *sequence == b"\x1b[?2026l") {
+            self.next = Some((CursorRestoreStep::Position, end as i64));
+        }
+    }
+
+    fn finish_read(&mut self, end: usize, splitter: &Splitter, marks: &mut Vec<OutputMark>) {
+        let Some((step, start)) = self.next.take() else {
+            return;
+        };
+        let pending = end as i64 - start;
+        if pending == 0 || splitter.holds_escape_prefix(pending as usize) {
+            self.next = Some((step, -pending));
+        } else {
+            marks.push((start.max(0) as usize, None, Mark::DiscardCursorRestore));
+        }
+    }
+}
+
+fn absolute_cursor_position(sequence: &[u8]) -> bool {
+    let [b'\x1b', b'[', coordinates @ .., b'H'] = sequence else {
+        return false;
+    };
+    let mut coordinates = coordinates.split(|&byte| byte == b';');
+    let decimal =
+        |digits: &[u8]| (1..=5).contains(&digits.len()) && digits.iter().all(u8::is_ascii_digit);
+    coordinates.next().is_some_and(decimal)
+        && coordinates.next().is_some_and(decimal)
+        && coordinates.next().is_none()
+}
+
+type OutputMark = (usize, Option<i64>, Mark);
+
 /// A CLI's output split for viewers and the screen.
 #[derive(Debug, Default)]
 pub(crate) struct Filtered {
@@ -53,7 +118,7 @@ pub(crate) struct Filtered {
     /// Complete OSC 9;4 activity sequences kept in the viewer output.
     pub(crate) native_activity: Vec<u8>,
     /// Each mark with its end offset, and for OSC status reports the offset of their opening ESC.
-    pub(crate) marks: Vec<(usize, Option<i64>, Mark)>,
+    pub(crate) marks: Vec<OutputMark>,
     /// Where the first complete ESU ended, including one begun in a previous call.
     pub(crate) sync_ended_at: Option<usize>,
     /// Where a carried character or control sequence ended.
@@ -73,12 +138,16 @@ pub(crate) fn filter(
     title_negotiation: &mut TitleNegotiation,
     status_glyph: Option<&str>,
     watch_frames: bool,
+    cursor_restore: &mut CursorRestore,
 ) -> Filtered {
     let mut filtered = Filtered {
         viewer_output: Vec::with_capacity(bytes.len()),
         ..Filtered::default()
     };
     let carried_unit_ended_at = splitter.split(bytes, |offset, piece| {
+        if watch_frames {
+            cursor_restore.take_piece(offset, &piece, &mut filtered.marks);
+        }
         if watch_frames && matches!(piece, Piece::Csi(sequence) if sequence == b"\x1b[?2026h") {
             filtered.marks.push((offset, None, Mark::BeginSync));
         }
@@ -138,6 +207,9 @@ pub(crate) fn filter(
         }
     });
     filtered.carried_unit_ended_at = carried_unit_ended_at;
+    if watch_frames {
+        cursor_restore.finish_read(bytes.len(), splitter, &mut filtered.marks);
+    }
     if watch_frames && let Some(at) = carried_unit_ended_at {
         let index = filtered
             .marks

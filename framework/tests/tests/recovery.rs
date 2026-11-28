@@ -280,7 +280,11 @@ fn attach_reconnects_without_leaving_or_duplicating_the_view() {
         &mut wire,
         &home,
         "lines",
-        "seq -f 'numbered-%03g' 1 150; echo READY; while read line; do echo \"got:$line\"; done",
+        "seq -f 'numbered-%03g' 1 150; echo READY; \
+         while read -r line; do \
+             if [ \"$line\" = color-reporting ]; then printf '\\033[?2031h'; \
+             else echo \"got:$line\"; fi; \
+         done",
     );
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
     let mut term = TestTerminal::spawn(
@@ -295,6 +299,14 @@ fn attach_reconnects_without_leaving_or_duplicating_the_view() {
         "{}",
         term.text()
     );
+    // On Unix, the PTY preserves this mode change in the output. Have the agent enable it in the
+    // live view before reconnect, since this mode is carried by passthrough rather than redraws.
+    #[cfg(unix)]
+    {
+        let previous = term.output_len();
+        term.send(b"color-reporting\r");
+        assert!(term.wait_for_bytes(previous, b"\x1b[?2031h", secs(10)));
+    }
     for round in 1..=2 {
         let reconnected = home.path.join("framework/reached-attach-reconnected");
         if round > 1 {
@@ -339,12 +351,16 @@ fn attach_reconnects_without_leaving_or_duplicating_the_view() {
         "{}",
         term.text()
     );
+    #[cfg(unix)]
+    let before_detach = term.output_len();
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(5))
             .is_some_and(|status| status.success())
     );
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
+    #[cfg(unix)]
+    assert!(term.wait_for_bytes(before_detach, b"\x1b[?2031l", secs(5)));
 }
 
 /// Disconnected input is discarded. Attach redraws the screen before reporting its UTF-8 bytes.

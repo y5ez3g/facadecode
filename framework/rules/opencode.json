@@ -23,7 +23,7 @@
 		"placeholders": [{ "pattern": "^\\[Pasted~(\\d+)lines?\\]$", "count": "trimmed_lines" }]
 	},
 	"session": { "capture": "session_start", "resume": ["--session", "${session_id}"] },
-	"mcp": { "session_meta_key": "ai.opencode/sessionID" },
+	"mcp": { "native_relay_chain": ["managed_executable"], "session_meta_key": "ai.opencode/sessionID" },
 	"status": {
 		"mechanism": "turn_error",
 		"error": "^ {5}Error: (.+)$",

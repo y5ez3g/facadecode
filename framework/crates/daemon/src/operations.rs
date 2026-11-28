@@ -99,6 +99,7 @@ pub(crate) struct StartOrigin {
     pub(crate) caller: Caller,
     pub(crate) sender: Sender,
     pub(crate) launch: LaunchOrigin,
+    pub(crate) unattended: bool,
     pub(crate) deadline: Option<std::time::Instant>,
 }
 
@@ -160,6 +161,7 @@ pub(crate) struct StopResult {
 
 pub(crate) struct RestartRequest {
     pub(crate) env: BTreeMap<String, String>,
+    pub(crate) unattended: bool,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
     /// None keeps the colors the agent's screen already has.
@@ -492,9 +494,16 @@ impl Daemon {
         };
         let folder = destination.cwd;
         let location = destination.location_id;
+        if session.is_none() {
+            configured
+                .check_launch_version(&folder, effect_time_left(origin.deadline)?)
+                .await?;
+            effect_time_left(origin.deadline)?;
+        }
         let yolo = settings.yolo;
         let policy = LaunchPolicy {
             origin: origin.launch,
+            unattended: origin.unattended,
             yolo: yolo.then_some(Path::new(&folder)),
         };
         let allow_auto_trust = policy.startup_folder().is_some();
@@ -739,6 +748,7 @@ impl Daemon {
             deliveries: self.messages.delivery_handle(),
             observed_loss: false,
             state: StateStart {
+                tools_config: prepared.tools_config.take(),
                 file: agent::state_file(&screen),
                 kept: Kept::new_run(prepared.tools),
                 started: tokio::time::Instant::now(),
@@ -1277,6 +1287,7 @@ impl Daemon {
             cwd: &info.cwd,
             policy: LaunchPolicy {
                 origin: LaunchOrigin::Person,
+                unattended: args.unattended,
                 yolo: yolo.then_some(Path::new(&info.cwd)),
             },
             session: Some(&session),
@@ -1362,7 +1373,9 @@ impl Daemon {
             captures: prepared.captures,
             launch_command: prepared.launch_command.take(),
             tools: prepared.tools,
+            tools_config: prepared.tools_config.take(),
             colors: args.colors,
+            allow_auto_trust: args.unattended && yolo,
             reply,
         };
         if !agent.send(install).await {

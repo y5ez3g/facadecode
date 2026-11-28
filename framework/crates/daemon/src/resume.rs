@@ -32,7 +32,7 @@ use crate::network_operations::{LIST_DEADLINE, machine_query_result, require_per
 use crate::operations::{RestartRequest, StartOrigin, StartRequest};
 use crate::records::{self, OperationTarget, Reach};
 use crate::service::{
-    check_size, launch_color_environment, sender_from, shell_launch_colors, value_of,
+    check_size, launch_environment, sender_from, shell_launch_colors, shell_unattended, value_of,
 };
 use crate::{Daemon, blocking_in_place, command_line};
 
@@ -56,6 +56,7 @@ struct ResumeRequest {
     machine_id: Option<String>,
     env: BTreeMap<String, String>,
     colors: Option<LaunchColors>,
+    unattended: bool,
     cols: u16,
     rows: u16,
 }
@@ -487,6 +488,7 @@ impl Daemon {
         require_person(caller)?;
         check_size(args.size.cols, args.size.rows)?;
         let colors = shell_launch_colors(caller, args.env.as_mut());
+        let unattended = shell_unattended(caller, args.env.as_mut());
         let exact_machine = match &args.target {
             wire::ResumeTarget::Agent { reference } => Some(reference.machine_id.clone()),
             wire::ResumeTarget::Session { machine_id, .. } => Some(machine_id.clone()),
@@ -508,7 +510,14 @@ impl Daemon {
                 ));
             }
             return self
-                .forward_resume(id, caller, args.target, args.size, colors.as_ref())
+                .forward_resume(
+                    id,
+                    caller,
+                    args.target,
+                    args.size,
+                    colors.as_ref(),
+                    unattended,
+                )
                 .await;
         }
         let (target, exact_session) = match args.target {
@@ -574,6 +583,7 @@ impl Daemon {
                 machine_id: exact_machine,
                 env: args.env.unwrap_or_default(),
                 colors,
+                unattended,
                 cols: args.size.cols,
                 rows: args.size.rows,
             },
@@ -606,7 +616,14 @@ impl Daemon {
             }
             let target = self.remote_resume_target(caller, id, &args.target).await?;
             return self
-                .forward_resume(id, caller, target, size, args.colors.as_ref())
+                .forward_resume(
+                    id,
+                    caller,
+                    target,
+                    size,
+                    args.colors.as_ref(),
+                    args.unattended,
+                )
                 .await;
         }
 
@@ -706,6 +723,7 @@ impl Daemon {
                     caller: caller.clone(),
                     sender: sender_from(caller, None),
                     launch: LaunchOrigin::Person,
+                    unattended: args.unattended,
                 };
                 let started = self
                     .start_saved_session(
@@ -761,6 +779,7 @@ impl Daemon {
                     target,
                     size,
                     args.colors.as_ref(),
+                    args.unattended,
                 )
                 .await;
         }
@@ -777,6 +796,7 @@ impl Daemon {
                 &handle,
                 RestartRequest {
                     env,
+                    unattended: args.unattended,
                     cols: args.cols,
                     rows: args.rows,
                     colors: args.colors.map(crate::presence::launch_colors),
@@ -923,6 +943,7 @@ impl Daemon {
         target: wire::ResumeTarget,
         size: Size,
         colors: Option<&LaunchColors>,
+        unattended: bool,
     ) -> Result<wire::ResumeResult, ErrorBody> {
         self.ensure_machine_route(id, caller).await?;
         let expected_agent = match &target {
@@ -937,7 +958,7 @@ impl Daemon {
                 args: value_of(wire::ResumeArgs {
                     target,
                     size,
-                    env: launch_color_environment(colors),
+                    env: launch_environment(colors, unattended),
                 }),
             }),
             time_left_ms: None,

@@ -7,13 +7,17 @@ use serde_json::Value;
 /// `text` read as JSON the way a CLI reads its own configuration: comments, a leading byte order
 /// mark, and a comma before a closing `}` or `]` are allowed. Strings are kept as they are.
 pub(crate) fn parse_jsonc(text: &str) -> Result<Value, serde_json::Error> {
-    serde_json::from_str(&strict_json(text))
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    serde_json::from_str(&strict_json(text, true))
 }
 
-/// `text` as strict JSON (see [`parse_jsonc`]). Each comment becomes one space, so the tokens on
-/// either side stay apart.
-fn strict_json(text: &str) -> String {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+/// JSON with comments, as Qoder reads the project's `.mcp.json`.
+pub(crate) fn parse_json_with_comments(text: &str) -> Result<Value, serde_json::Error> {
+    serde_json::from_str(&strict_json(text, false))
+}
+
+/// Each comment becomes one space, so the tokens on either side stay apart.
+fn strict_json(text: &str, trailing_commas: bool) -> String {
     let mut strict = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -44,7 +48,7 @@ fn strict_json(text: &str) -> String {
                 }
                 strict.push(' ');
             }
-            ('}' | ']', _) => {
+            ('}' | ']', _) if trailing_commas => {
                 let end = strict.trim_end().len();
                 if strict[..end].ends_with(',') {
                     strict.truncate(end - 1);

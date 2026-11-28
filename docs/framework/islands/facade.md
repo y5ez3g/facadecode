@@ -71,8 +71,10 @@ adds Shell guidance to the Orchestrator's diagnostics.
 The layers share the terminal formatters, the selected client's connection and the display name and address returned
 by the Orchestrator. Persistent Agent, machine and message records belong to the Orchestrator.
 
-`daemon_client.rs` opens the socket for the selected `FACADE_HOME`. For an ordinary command, it starts a keeper when
-neither service is running. The keeper starts the daemon. Local `status` probes without starting or upgrading
+`daemon_client.rs` opens the socket for the selected `FACADE_HOME`. If the command and a live daemon use spellings
+with the same path components, including redundant separators, Shell can use the daemon's original socket after
+verifying the selected home's daemon lock. For an ordinary command, it starts a keeper when neither service is
+running. The keeper starts the daemon. Local `status` probes without starting or upgrading
 services. When they sleep, local status and start help use the committed machine name through the daemon's offline
 reader. Agent status uses the normal connection and the Orchestrator routes that query. The caller can cancel an
 Attach reconnect while the socket opens or while the Orchestrator answers hello.
@@ -130,9 +132,10 @@ default foreground, background and cursor colors with OSC 10, 11 and 12, and for
 per color. It ends with the Device Attributes query DA1, which terminal apps answer in order, so its reply says that
 every color reply arrived. Shell waits up to one second for that reply. The launch passes the colors that arrived as
 display context, and the agent's screen answers the CLI's color queries with them. A color without a readable reply
-stays absent. A background launch asks as well when Shell reads the terminal as its foreground job. A process started
-with `&`, a redirected console, `TERM=dumb` and ordinary Attach ask nothing. Keys typed while a background launch
-asks go back to the terminal's input for the next program.
+stays absent. A background launch asks as well when Shell reads the terminal as its foreground job and the terminal
+supports queries. Keys typed while a background launch asks go back to the terminal's input for the next program.
+Ordinary Attach asks for only the three named colors before drawing, when Shell owns a console that supports
+queries. It uses those replies for the host and keeps the agent's launch colors.
 
 Every reply to those queries belongs to Shell, including one with a value it cannot use. `attach/palette.rs` takes
 complete replies out of the input and hands Attach the same console reader, the remaining input in order, the queries
@@ -177,11 +180,15 @@ connection is lost and when the attachment ends.
 Where `host_tells_the_wheel` holds, the terminal app keeps its own selection, copying and right click for a CLI that
 leaves the mouse alone. On its alternate screen the app sends the wheel as Up and Down. Attach enables alternate
 scroll in Windows terminals and application cursor keys in macOS Terminal so they send those keys.
-`attach/mouse.rs` uses Base's `desktop::arrows` to tell wheel steps from keys the person pressed. Wheel steps browse
-the CLI's scrollback, and cursor keys reach it in the form it asked for. A Win32 record with the enhanced flag comes
-from the keyboard whatever its state is by then. The reader asks the keyboard before it waits for anything, because
-a key can be up again soon. A key's last repeat within 150 ms of a press is still that key. This needs the keyboard
-the person types on, so it applies in macOS Terminal and VS Code on macOS, and in every terminal on Windows.
+In local macOS Terminal and VS Code, Attach matches Up and Down sequences to the events Base observes at the
+host process. It matches keys and wheel steps in order, even when the host groups or splits their writes.
+A terminal may accumulate a small scroll gesture before writing an arrow. Attach keeps the matching key when
+the terminal writes just one sequence for those two events. Sequences without wheel evidence reach
+the CLI even after the key was released. When macOS cannot provide the host's events, Attach uses the desktop's
+arrow state. On Windows, a Win32 record with the enhanced flag identifies a keyboard event, and the desktop's
+arrow state helps classify legacy sequences.
+Wheel steps browse the CLI's scrollback. Attach forwards Up, Down, Left, Right, Home and End in the CLI's cursor
+key mode when it enabled application cursor keys on the host for scrolling.
 
 Elsewhere Attach requests SGR button, drag and wheel reports for a CLI that leaves the mouse alone. A drag selects
 from the viewport Shell painted. Releasing the button copies the selection, and Ctrl+C and a right press copy it again.
@@ -208,8 +215,13 @@ Screen encodes native wheels in the CLI's mouse format. Windows uses deferred wr
 Attach so cursor moves after a full row follow the same geometry as the agent's screen.
 
 At the end of an attachment, Attach leaves the alternate screen if it entered it, returning to the shell page,
-cursor and scrollback. It restores the terminal modes and prints the receipt and any unsent-input warning after
-the opening line. A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
+cursor and scrollback. Before the receipt, it restores the terminal modes and any measured foreground, background
+or cursor colors that forwarded CLI output set or reset. It preserves the channel values reported by the host,
+including values with more than eight bits. Attach also disables color scheme notifications (DEC mode 2031) when
+its forwarded output left them enabled, including after a daemon reconnect. Attach asks the host for its grapheme
+cluster mode (DEC mode 2027) before viewing. It restores a reported set or reset mode when forwarded output changed it.
+The receipt and any unsent-input warning follow the opening line.
+A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
 lets an active dedicated watcher receive the final output and exit in order, then closes that connection within its
 post-exit grace period. A removal or lost connection uses the corresponding Shell diagnostic.
 

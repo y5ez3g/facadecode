@@ -49,6 +49,14 @@ Windows, copies of its programs, pointed at another build by renaming the one in
 with `framework/bin/current-build` naming the build. Runs are given launcher paths only, so a run's next hook or MCP server
 is always the current build's.
 
+An install or upgrade also checks the launchers in an existing `core/bin/` for configurations
+saved before the directory was renamed. While Core has active agents, both launchers keep serving
+Core and the installer names the agents to finish or stop before rerunning it. When Core is idle,
+the installer checks its service identities, stops the old daemon and lets the old keeper exit.
+It waits up to five seconds to reserve both Core locks, then updates both launchers to a Framework
+build that the old VS Code extension can start. The installer asks the user to update the extension.
+The saved records and programs remain in `core/`.
+
 **The keeper keeps the CLIs.** The keeper starts and supervises managed CLIs. On macOS and Linux each leads a session
 and process group of its own in a PTY. On Windows each runs in a pseudo console made through ConPTY, in a job of its
 own. The keeper and daemon retain native terminal copies, and the agent actor uses a copy for I/O. A replacement keeper

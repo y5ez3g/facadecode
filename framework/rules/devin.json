@@ -18,7 +18,20 @@
 		"lower": "^[─-]+ *$",
 		"scrolled": { "position": "rows", "above": "^\\^ (\\d+) more above$", "below": "^v (\\d+) more below$" },
 		"menus": [
+			{
+				"selected": "^ How would you like to log in\\?$",
+				"hint": { "pattern": "^ (?:❭| ) 1 Log in with browser$", "within": 4 },
+				"wait_kind": "auth"
+			},
 			{ "selected": "^ *[*●•✱] Do you trust the authors of this directory\\?" },
+			{
+				"selected": "^ *Detected dark theme but configured for light\\. Switch\\?$",
+				"hint": { "pattern": "^ *↑↓ select · ↵ confirm$", "within": 7 }
+			},
+			{
+				"selected": "^/ Type to search$",
+				"hint": { "pattern": "^↑↓ select · opt\\+p pin · ↵ confirm · opt\\+↵ this session only · esc cancel$", "within": 20 }
+			},
 			{ "selected": "^ *[›>] +[0-9]+\\.? +\\S", "next": "^ +[0-9]+\\.? +\\S" },
 			{ "selected": "^ *[○●] /\\S", "next": "^ +/\\S" }
 		]
@@ -32,7 +45,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
-	"mcp": { "deferred_tool_list": true },
+	"mcp": { "native_relay_chain": ["managed_executable"], "deferred_tool_list": true },
 	"status": {
 		"mechanism": "composer",
 		"working": ["^ *.*\\(esc twice to interrupt\\)$"],

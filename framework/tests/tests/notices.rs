@@ -1276,7 +1276,16 @@ fn a_continuous_error_reports_again_only_after_recovery_and_30_more_seconds() {
             reaches(&home, "child", "unknown");
         }
     }
-    assert_eq!(system_inbox(&mut tools).len(), 2, "{:?}", notices(&home));
+    // The fake CLI logs Enter before its next frame confirms the submission.
+    let mut inbox = Vec::new();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            inbox = system_inbox(&mut tools);
+            inbox.len() >= 2
+        }),
+        "the submitted notices did not settle in the inbox: {inbox:?}"
+    );
+    assert_eq!(inbox.len(), 2, "{inbox:?}");
 }
 
 #[test]
@@ -1342,10 +1351,7 @@ fn codex_uses_tab_only_for_an_ordinary_delivery_while_working() {
     submit(&home, "codex", "/fake status idle");
     assert!(submitted("/fake status idle"));
     assert_eq!(submission_keys(), b"\r\t\r", "manual Enter while Working");
-    assert!(wait_until(LOADED_TIMEOUT, || {
-        let agent = home.agent_from_watch("codex").unwrap();
-        matches!(agent["state"].as_str(), Some("idle" | "just_done"))
-    }));
+    reaches(&home, "codex", "just_done");
     let delivered = home.run_facade_ok(&["send", "codex", "send at rest", "-w"]);
     assert!(delivered.contains("Delivered"), "{delivered}");
     assert!(submitted("\nsend at rest "));
@@ -1354,4 +1360,36 @@ fn codex_uses_tab_only_for_an_ordinary_delivery_while_working() {
         b"\r\t\r\r",
         "an ordinary resting send uses Enter"
     );
+
+    // The resting send started another turn without a viewer seeing the previous one.
+    reaches(&home, "codex", "working");
+    let status = home.run_facade_ok(&["status", "codex"]);
+    assert!(
+        status
+            .lines()
+            .any(|line| line.split_whitespace().eq(["State", "Working"])),
+        "{status}"
+    );
+    let roster = McpTestClient::open_guest(&home, "codex", &[]).call("list_agents", json!({}));
+    let codex = roster["data"]["agents"].as_array().and_then(|agents| {
+        agents
+            .iter()
+            .find(|agent| agent["name"] == "codex" && agent["type"] == "managed")
+    });
+    assert_eq!(
+        codex.expect("the managed Codex is listed")["state"],
+        "working",
+        "{roster}"
+    );
+    let delivered = home.run_facade_ok(&["send", "codex", "queue during second turn", "-w"]);
+    assert!(delivered.contains("Delivered"), "{delivered}");
+    assert!(submitted("\nqueue during second turn "));
+    assert_eq!(
+        submission_keys(),
+        b"\r\t\r\r\t",
+        "an ordinary send while the CLI works still uses Tab with an unseen completion"
+    );
+    reaches(&home, "codex", "working");
+    submit(&home, "codex", "/fake status idle");
+    reaches(&home, "codex", "just_done");
 }

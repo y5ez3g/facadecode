@@ -832,8 +832,6 @@ fn an_equal_build_with_different_bytes_leaves_the_selected_hard_link() {
 
 #[cfg(any(windows, target_os = "linux"))]
 fn keep_equal_build_bytes(hard_link: bool) {
-    use std::io::Write;
-
     let home = TestHome::new(if hard_link {
         "samebuildlink"
     } else {
@@ -844,14 +842,8 @@ fn keep_equal_build_bytes(hard_link: bool) {
         let folder = home.folder().join(name);
         std::fs::create_dir_all(&folder).unwrap();
         let program = folder.join(program_name("facade"));
-        std::fs::copy(&binaries.facade, &program).unwrap();
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&program)
-            .unwrap()
-            .write_all(marker)
-            .unwrap();
-        std::fs::copy(&binaries.mcp, folder.join(program_name("facade-mcp"))).unwrap();
+        copy_executable_with_suffix(&binaries.facade, &program, marker);
+        copy_executable(&binaries.mcp, &folder.join(program_name("facade-mcp")));
         #[cfg(windows)]
         {
             let conpty = folder.join("conpty");
@@ -1023,7 +1015,6 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
     #[cfg(unix)]
     {
-        let program = folder.join(program_name("facade"));
         let fails = if role.is_empty() {
             String::new()
         } else {
@@ -1037,12 +1028,7 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
             ran.display(),
             test_binaries().facade.display()
         );
-        std::fs::write(&program, script).unwrap();
-        std::fs::set_permissions(
-            &program,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let program = install_script(&folder, "facade", &script);
         install_program(&folder, "facade-mcp", &test_binaries().mcp);
         program
     }
@@ -2230,6 +2216,83 @@ fn install_only_refuses_linked_program_directories() {
         assert!(!socket_exists(&home.daemon_socket()));
         assert!(!socket_exists(&home.keeper_socket()));
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn install_keeps_core_custody_and_repairs_legacy_launchers() {
+    let home = TestHome::new("previous-launchers");
+    let core = home.path.join("core");
+    let bin = core.join("bin");
+    let old = bin.join("0.1.6");
+    std::fs::create_dir_all(&old).unwrap();
+    for name in ["facade", "facade-mcp"] {
+        std::fs::write(old.join(name), b"previous build").unwrap();
+        std::os::unix::fs::symlink(Path::new("0.1.6").join(name), bin.join(name)).unwrap();
+    }
+    let database = core.join("facade.db");
+    std::fs::write(&database, b"saved records").unwrap();
+    let stale = facade_base::unix_process::own_identity().unwrap();
+    let stale = json!({ "pid": stale.pid, "birth": stale.birth }).to_string();
+    let record = core.join("daemon.lock");
+    std::fs::write(&record, &stale).unwrap();
+
+    let held = facade_base::service::lock_keeper_if_unowned(&core)
+        .unwrap()
+        .unwrap();
+    let deferred = home.run_facade(&["daemon", "--install-only"]);
+    assert!(deferred.status.success(), "{}", stderr(&deferred));
+    assert!(stderr(&deferred).contains("still use Core"));
+    for name in ["facade", "facade-mcp"] {
+        assert_eq!(
+            bin.join(name).canonicalize().unwrap(),
+            old.join(name).canonicalize().unwrap()
+        );
+        assert_eq!(std::fs::read(old.join(name)).unwrap(), b"previous build");
+    }
+    drop(held);
+
+    let launcher = bin.join("facade");
+    std::fs::remove_file(&launcher).unwrap();
+    std::fs::write(&launcher, b"previous build").unwrap();
+    let failed = home.run_facade(&["daemon", "--install-only"]);
+    let diagnostic = stderr(&failed);
+    assert_eq!(failed.status.code(), Some(1), "{diagnostic}");
+    assert!(
+        diagnostic.contains(launcher.to_str().unwrap()),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("rerun the installer"), "{diagnostic}");
+    let cause = std::io::Error::from_raw_os_error(libc::EINVAL).to_string();
+    assert!(diagnostic.contains(cause.as_str()), "{diagnostic}");
+    assert_eq!(std::fs::read(&launcher).unwrap(), b"previous build");
+    assert_eq!(
+        bin.join("facade-mcp").canonicalize().unwrap(),
+        home.path
+            .join("framework/bin/facade-mcp")
+            .canonicalize()
+            .unwrap()
+    );
+    std::fs::remove_file(&launcher).unwrap();
+    std::os::unix::fs::symlink("0.1.6/facade", launcher).unwrap();
+
+    for _ in 0..2 {
+        home.run_facade_ok(&["daemon", "--install-only"]);
+        for name in ["facade", "facade-mcp"] {
+            let link = std::fs::read_link(bin.join(name)).unwrap();
+            let build = link.iter().next().unwrap().to_str().unwrap();
+            assert!(facade_base::compare_builds(build, build).is_some());
+            let launcher = bin.join(name).canonicalize().unwrap();
+            let selected = home.path.join("framework/bin").join(name);
+            assert_eq!(launcher, selected.canonicalize().unwrap());
+            assert_eq!(std::fs::read(old.join(name)).unwrap(), b"previous build");
+        }
+        assert_eq!(std::fs::read(&database).unwrap(), b"saved records");
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), stale);
+    }
+
+    let mut mcp = McpTestClient::spawn(&home, home.command(bin.join("facade-mcp")));
+    assert_eq!(mcp.call("list_agents", json!({}))["status"], "success");
 }
 
 #[test]

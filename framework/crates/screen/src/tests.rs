@@ -277,6 +277,59 @@ fn only_completed_frames_can_follow_a_report() {
 }
 
 #[test]
+fn a_cursor_restored_after_sync_retains_the_frames_writes_across_reads() {
+    let output = b"\x1b[?2026h\x1b[?25l\x1b[2;1Heditor\x1b[4;1H\x1b[?2026l\x1b[2;7H\x1b[?25h";
+    for split in 0..=output.len() {
+        let mut screen = Screen::new(20, 5, 0);
+        let mut restored = 0;
+        let mut viewer_output = Vec::new();
+        for chunk in [&output[..split], &output[split..]] {
+            let parsed = screen.feed_observing(
+                chunk,
+                Some(&mut |event| {
+                    if let InputEvent::Frame(screen, CursorRowWrites::Current) = event
+                        && screen.view().cursor_visible
+                    {
+                        assert_eq!(screen.cursor(), (6, 1));
+                        assert!(screen.frame_printed_cell(1, 0));
+                        restored += 1;
+                    }
+                }),
+            );
+            viewer_output.extend(parsed.viewer_output);
+        }
+        assert_eq!(restored, 1, "output split at {split}");
+        assert_eq!(viewer_output, output);
+    }
+}
+
+#[test]
+fn a_cursor_reveal_does_not_reuse_writes_across_output_or_input_boundaries() {
+    let frame = b"\x1b[?2026h\x1b[?25l\x1b[2;1Heditor\x1b[4;1H\x1b[?2026l";
+    let restore = b"\x1b[2;7H\x1b[?25h";
+    for (between, input) in [
+        (b"\x1b]7501;state=idle\x07".as_slice(), false),
+        (b"\x1b[3;1Hnew".as_slice(), false),
+        (b"".as_slice(), true),
+    ] {
+        let mut screen = Screen::new(20, 5, 0);
+        let mut observe = |event: InputEvent<'_>| {
+            if let InputEvent::Frame(screen, _) = event
+                && screen.view().cursor_visible
+            {
+                assert!(!screen.frame_printed_cell(1, 0));
+            }
+        };
+        screen.feed_observing(frame, Some(&mut observe));
+        if input {
+            screen.mark_pending_frame_earlier();
+        }
+        screen.feed_observing(&[between, restore].concat(), Some(&mut observe));
+        assert!(screen.view().cursor_visible);
+    }
+}
+
+#[test]
 fn a_synchronized_update_is_one_frame() {
     let mut screen = Screen::new(20, 5, 0);
     screen.feed(b"\x1b[?2026hhalf");

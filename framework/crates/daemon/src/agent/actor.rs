@@ -20,11 +20,12 @@ use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::{
     model::agent::{
-        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState, WaitKind,
+        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsReason,
+        ToolsState, WaitKind,
     },
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
-use facade_rules::{BoxReading, InputRule, Rule};
+use facade_rules::{BoxReading, InputRule, PasteDisclosure, Rule};
 use facade_screen::{CursorRowWrites, InputEvent, ParsedOutput, StatusEvent, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -193,6 +194,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         screen: None,
         screen_start: Some(screen),
         state: tracker,
+        tools_config: state.tools_config,
         input_gate,
         glyph: Glyph::new(rule.and_then(|rule| rule.status_glyph.as_ref())),
         glyph_at: None,
@@ -263,6 +265,8 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
 #[derive(Default)]
 struct DeliveryFrames {
     drawn: Option<BoxReading>,
+    /// Where the current paste's disclosure was shown before its key reached the terminal.
+    disclosure: Option<PasteDisclosure>,
     /// The empty frame's output position while it awaits confirmation.
     pending_empty_at: Option<u64>,
     /// When the ready output first confirmed an eligible, complete empty frame.
@@ -270,9 +274,21 @@ struct DeliveryFrames {
 }
 
 impl DeliveryFrames {
+    fn read_disclosure(
+        &self,
+        rule: Option<&InputRule>,
+        screen: &facade_screen::Screen,
+        live: &BoxReading,
+    ) -> Option<(BoxReading, usize)> {
+        if !live.is_unread() {
+            return None;
+        }
+        self.disclosure?.read(rule?, screen)
+    }
+
     fn observe(&mut self, reading: BoxReading, position: u64, before_edit: bool, typist: &Typist) {
         if self.confirmed_empty_at.is_none() {
-            match typist.recall(reading.clone()).info.state {
+            match typist.delivery_frame_state(&typist.recall(reading.clone())) {
                 InputState::Usable if typist.accepts_new_empty_evidence() => {
                     self.pending_empty_at.get_or_insert(position);
                 }
@@ -311,6 +327,8 @@ struct Actor {
     /// What the screen starts from, taken as the task begins.
     screen_start: Option<ScreenStart>,
     state: StateTracker,
+    /// The run's configured server file, kept until a connection deadline is reported.
+    tools_config: Option<PathBuf>,
     input_gate: InputGate,
     glyph: Glyph,
     /// When the next working glyph frame is due.
@@ -901,6 +919,7 @@ impl Actor {
                 let _ = reply.send(Inspection {
                     agent,
                     input: self.read_input_box(self.untouched_input).info,
+                    colors: self.screen().colors(),
                     session_tracking: self.captures && !self.ended(),
                     viewers: if self.ended() {
                         Vec::new()
@@ -954,7 +973,9 @@ impl Actor {
                 captures,
                 launch_command,
                 tools,
+                tools_config,
                 colors,
+                allow_auto_trust,
                 reply,
             } => {
                 let Some((_, Size { cols, rows })) =
@@ -990,6 +1011,7 @@ impl Actor {
                 self.links.settled.send_replace(false);
                 let _ = self.links.exit.send(None);
                 self.state.restarted(Instant::now(), tools);
+                self.tools_config = tools_config;
                 self.input_gate = InputGate::default();
                 self.glyph.restart();
                 self.glyph_at = None;
@@ -999,9 +1021,11 @@ impl Actor {
                 self.untouched_input = false;
                 self.before_input_box = false;
                 self.start_rows = false;
-                self.ready_at =
-                    self.readiness
-                        .begin(self.state.started(), self.state.tools_given(), false);
+                self.ready_at = self.readiness.begin(
+                    self.state.started(),
+                    self.state.tools_given(),
+                    allow_auto_trust,
+                );
                 self.record_state();
                 if self.early_exit.is_none() {
                     // Offer the new generation before the installed record becomes visible.
@@ -1283,6 +1307,7 @@ impl Actor {
     /// size changed, which redraws viewers.
     fn resize(&mut self, cols: u16, rows: u16) -> bool {
         if (cols, rows) != self.size() {
+            self.delivery_frames.disclosure = None;
             self.screen_mut().checkpoint_if_due();
             if self.pending_delivery.take().is_some() {
                 self.typist_at = Some(Instant::now());
@@ -1342,6 +1367,13 @@ impl Actor {
                     .take()
                     .expect("the terminal issued its intent");
                 self.delivery_frames = DeliveryFrames::default();
+                if matches!(pending.kind, DeliveryWrite::Reveal) {
+                    let reading = self.read_input_box(false);
+                    self.delivery_frames.disclosure = self
+                        .typist
+                        .disclosure_text_len(&reading)
+                        .and_then(|len| PasteDisclosure::at(self.screen().screen(), &reading, len));
+                }
                 if matches!(pending.kind, DeliveryWrite::Paste) {
                     self.screen_mut().observe_paint(false);
                     self.escape_may_edit = false;
@@ -1704,6 +1736,9 @@ impl Actor {
                 state.take_event(event.clone(), sync_open);
                 let native_wait = state.native_wait();
                 gate.report(native_wait);
+                if native_wait.is_some() || matches!(event, StatusEvent::Reset) {
+                    delivery.disclosure = None;
+                }
                 if native_wait.is_some() {
                     let evidence = report_start.filter(|_| matches!(event, StatusEvent::Report(_)));
                     if native_wait == Some(WaitKind::Question)
@@ -1732,21 +1767,39 @@ impl Actor {
                 let frame_closed = screen.synchronized_update_deadline().is_none();
                 let frame_follows_write = screen.frame_follows_input_boundary();
                 let complete = frame_closed && frame_follows_write;
-                let startup_menu = first_hint && gate.waits_for_startup_composer();
+                let waiting_for_menu_composer = gate.waits_for_menu_composer();
                 let check_composer = complete
                     && (state.watches_question_composer()
                         || gate.needs_recovery_redraw()
-                        || startup_menu);
+                        || waiting_for_menu_composer);
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
-                *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
-                if after_probe && writes == CursorRowWrites::Current {
-                    let probe_reading = if untouched {
+                if reading.info.state == InputState::Interaction || screen.on_alternate_screen() {
+                    delivery.disclosure = None;
+                }
+                let disclosed = if observes_delivery && complete && before_edit && !ended {
+                    delivery
+                        .read_disclosure(rule, screen, &reading)
+                        .filter(|(_, row)| {
+                            screen.frame_row_writes(*row) == CursorRowWrites::Current
+                        })
+                } else {
+                    None
+                };
+                let menu_composer_redrawn = waiting_for_menu_composer && complete && redrawn;
+                let input_written = writes == CursorRowWrites::Current;
+                *drew_input.get_or_insert(false) |= input_written || disclosed.is_some();
+                if after_probe && (input_written || complete) {
+                    let probe_reading = if untouched && input_written {
                         read_box(rule, ended, None, screen, true, false)
                     } else {
                         reading.clone()
                     };
-                    typist.observe_probe_frame(probe_reading);
+                    typist.observe_probe_frame(
+                        probe_reading,
+                        input_written,
+                        first_hint && menu_composer_redrawn && gate.has_post_wait_composer(),
+                    );
                 }
                 if !watch {
                     return;
@@ -1768,8 +1821,8 @@ impl Actor {
                     &reading,
                     (writes, redrawn, frame_follows_write, frame_closed),
                 );
-                if startup_menu && complete && redrawn {
-                    gate.startup_composer(&reading);
+                if menu_composer_redrawn && (first_hint || reading.unsure) {
+                    gate.menu_composer(&reading);
                 }
                 if !gate.blocks_delivery() && (observes_submission || before_next) {
                     Self::observe_submissions(
@@ -1782,7 +1835,9 @@ impl Actor {
                         before_next,
                     );
                 }
-                if writes == CursorRowWrites::Current {
+                if let Some((reading, _)) = disclosed {
+                    delivery.observe(reading, position, before_edit, typist);
+                } else if input_written {
                     if observes_delivery {
                         let reading = if untouched {
                             read_box(rule, ended, None, screen, true, false)
@@ -1833,7 +1888,8 @@ impl Actor {
     fn complete_delivery_frame(&self) -> bool {
         let reading = self.read_input_box(self.untouched_input);
         self.screen().screen().output_frame_complete()
-            && (self.typist.interaction_after_write() && reading.info.state == InputState::Unknown
+            && (self.typist.interaction_after_write()
+                && self.typist.delivery_frame_state(&reading) == InputState::Unknown
                 || self.typist.accepts_empty_evidence(reading))
     }
 
@@ -2318,20 +2374,23 @@ impl Actor {
             .expect("the screen exists while the actor runs");
         let written = self.terminal.input_through();
         let queued = written + self.terminal.queued() as u64;
-        let modes = Modes {
-            bracketed_paste: screen.screen().bracketed_paste(),
-            application_cursor_keys: screen.screen().application_cursor_keys(),
-            working: self.links.shared.record.lock().unwrap().info.state
-                == ManagedAgentState::Working,
-            reveal_ready: self
+        let published_state = self.links.shared.record.lock().unwrap().info.state;
+        let reveal_eligible = published_state != ManagedAgentState::Working
+            && self
                 .typist
                 .paste_rule()
                 .is_some_and(|rule| rule.tab_to_expand.is_some())
-                && self.submitting.is_empty()
-                && self.held_enter.is_none()
-                && self.held.is_empty()
-                && self.drawn_since(queued).is_some()
-                && self.room() > 0,
+            && self.held_enter.is_none()
+            && self.held.is_empty()
+            && self.drawn_since(queued).is_some()
+            && self.room() > 0;
+        let modes = Modes {
+            bracketed_paste: screen.screen().bracketed_paste(),
+            application_cursor_keys: screen.screen().application_cursor_keys(),
+            working_for_submission: published_state == ManagedAgentState::Working
+                || (published_state == ManagedAgentState::JustDone && self.state.works()),
+            reveal_eligible,
+            reveal_ready: reveal_eligible && self.submitting.is_empty(),
         };
         let probing = self.typist.probing();
         let pasting = self.typist.pasting();
@@ -2400,6 +2459,9 @@ impl Actor {
             }
         }
         let waits_for_frame = self.input_gate.blocks_delivery() || frame_incomplete;
+        let fresh_menu_composer = !frame_incomplete
+            && self.input_gate.waits_for_menu_composer()
+            && self.input_gate.has_post_wait_composer();
         let can_probe = !held_first && !self.person.is_writing(now) && self.probe_frame_ready();
         let writes = if classifying {
             BoxWrites::AwaitingEscape
@@ -2455,15 +2517,20 @@ impl Actor {
             self.delivery_frames.confirm_empty();
         }
         let empty_after_write = self.delivery_frames.confirmed_empty_at;
+        let disclosure_rule = rule.filter(|_| !ended && undrawn.is_none());
         let observe = || {
             let current = if cleanup_frame {
                 read_box(rule, ended, cleanup_undrawn, screen.screen(), false, true)
             } else {
-                read_screen()
+                let live = read_screen();
+                self.delivery_frames
+                    .read_disclosure(disclosure_rule, screen.screen(), &live)
+                    .map_or(live, |(reading, _)| reading)
             };
             InputObservation {
                 after_write: !waits_for_frame
                     && self.delivery_frames.drawn.as_ref() == Some(&current),
+                draft_after_menu: fresh_menu_composer && current.info.state == InputState::Draft,
                 current,
                 native_wait,
                 waits_for_frame,
@@ -3350,6 +3417,18 @@ impl Actor {
             Viewing::Unwatched
         };
         let reading = self.state.read(Instant::now(), viewing);
+        if reading.tools_reason == Some(ToolsReason::NotConnected)
+            && let Some(file) = self.tools_config.take()
+        {
+            log(
+                "warn",
+                &format!(
+                    "#{}: {} names a facade server. Its connection to this managed run was not verified before the startup deadline",
+                    self.id,
+                    file.display(),
+                ),
+            );
+        }
         self.start_rows &= !matches!(
             reading.state,
             ManagedAgentState::Working | ManagedAgentState::JustDone
@@ -3648,6 +3727,7 @@ mod tests {
             deliveries: messages.delivery_handle(),
             observed_loss: false,
             state: StateStart {
+                tools_config: None,
                 file: super::super::state::state_file(folder),
                 kept: Kept::default(),
                 started: Instant::now(),
@@ -3780,6 +3860,7 @@ mod tests {
             deliveries,
             observed_loss: false,
             state: StateStart {
+                tools_config: None,
                 file: super::super::state::state_file(folder),
                 kept: Kept::default(),
                 started: Instant::now(),
@@ -4205,6 +4286,47 @@ mod tests {
 
     fn synchronized(frame: &str) -> String {
         format!("\x1b[?2026h{frame}\x1b[?2026l")
+    }
+
+    #[tokio::test]
+    async fn copilot_restores_the_composer_cursor_after_closing_its_first_frame() {
+        let home = crate::test_folder::TestFolder::new("actor-copilot-restored-cursor");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = test_actor_for(&home, &messages, "copilot").await;
+        actor.untouched_input = true;
+        actor.before_input_box = true;
+        let _settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(15),
+        );
+        let trust = synchronized(
+            "\x1b[?25l\x1b[20;1H│ Do you trust the files in this folder? │\r\n│ ❯ 1. Yes │",
+        );
+        read_output(&mut actor, &mut cli, trust.as_bytes()).await;
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert!(actor.input_gate.blocks_delivery());
+
+        let border = "─".repeat(80);
+        let composer = synchronized(&format!(
+            "\x1b[2J\x1b[21;1H{border}\x1b[22;1H❯ \x1b[23;1H{border}\x1b[24;1H Interactive · Allow All"
+        ));
+        read_output(&mut actor, &mut cli, composer.as_bytes()).await;
+        assert!(
+            actor.input_gate.blocks_delivery(),
+            "the cursor is still hidden"
+        );
+        read_output(&mut actor, &mut cli, b"\x1b[22;3H\x1b[?25").await;
+        assert!(
+            actor.input_gate.blocks_delivery(),
+            "the reveal is incomplete"
+        );
+        read_output(&mut actor, &mut cli, b"h").await;
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        assert!(!actor.input_gate.blocks_delivery());
     }
 
     /// Queues the CLI's frames while the actor only writes, then passes it the person's Enter.
@@ -6265,6 +6387,53 @@ mod tests {
         assert!(actor.terminal.written() > 0);
     }
 
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_already_ready_menu_after_a_split_update_stops_submission() {
+        let home = crate::test_folder::TestFolder::new("actor-split-then-ready-menu");
+        let (mut actor, mut cli, settled) = waiting_for_the_paste_frame(&home).await;
+        expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+        let draft = plain_claude_frame("a message", "");
+        read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+        let rule = actor.typist.paste_rule().unwrap();
+        tokio::time::sleep(facade_rules::settle_time(rule, "a message ")).await;
+        actor.type_next();
+        assert!(actor.delivery_can_issue());
+        let written = actor.terminal.written();
+        let open = format!("\x1b[?2026h{draft}");
+        cli.write_output(open.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(open.len()).await;
+        let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+        assert!(matches!(event, TerminalEvent::Read));
+        actor.take_terminal(event);
+        assert!(!actor.delivery_can_issue());
+        assert_eq!(actor.terminal.written(), written);
+
+        read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+        assert!(actor.delivery_can_issue());
+
+        let menu = synchronized(MENU);
+        cli.write_output(menu.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(menu.len()).await;
+        let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+        if matches!(event, TerminalEvent::DeliveryIssued { .. }) {
+            actor.take_terminal(event);
+            expect_cli_input(&mut cli, b"\r");
+            panic!(
+                "an actual Enter reached the PTY with a complete recognized menu already readable"
+            );
+        }
+        assert!(matches!(event, TerminalEvent::Read));
+        actor.take_terminal(event);
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert!(!actor.delivery_can_issue());
+        assert_eq!(actor.terminal.written(), written);
+        assert!(settled.borrow().is_none());
+    }
+
     #[tokio::test]
     async fn manual_enters_through_a_wait_need_the_restored_draft_then_the_empty_frame() {
         for (restore_draft, keys_after_answer, edit_after_frame, delivered) in [
@@ -7515,6 +7684,245 @@ mod tests {
                 b" ",
                 "consent={consent:?}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn devin_probes_a_fresh_hint_after_the_model_selector_closes() {
+        for hint in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-devin-model-menu-probe");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "devin").await;
+            let _settled = queue_a_message(
+                &mut actor,
+                &messages,
+                Instant::now() + Duration::from_secs(15),
+            );
+            let menu = synchronized(
+                "\x1b[10;1H/ Type to search\x1b[23;1H↑↓ select · opt+p pin · ↵ confirm · opt+↵ this session only · esc cancel\x1b[10;3H",
+            );
+            read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+            actor.type_next();
+            assert_eq!(
+                actor.read_screen_input().info.state,
+                InputState::Interaction
+            );
+            assert_eq!(actor.terminal.queued(), 0);
+
+            let border = "─".repeat(60);
+            let text = if hint {
+                "\x1b[38;2;107;107;107mAsk Devin to build features\x1b[0m"
+            } else {
+                "a draft already in the input"
+            };
+            let row =
+                format!("\x1b[?2026h\x1b[2J\x1b[9;1H{border}\r\n❭ {text}\r\n{border}\x1b[10;3H");
+            read_output(&mut actor, &mut cli, row.as_bytes()).await;
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), 0);
+            read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+            actor.type_next();
+            let keys = read_queued_probe_input(&mut actor, &mut cli).await;
+            assert_eq!(keys, if hint { b" ".as_slice() } else { b"" });
+            assert_eq!(pending_delivery_bytes(&actor), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_draft_after_a_confirmed_menu_exit_keeps_its_delivery_reason() {
+        let border = "─".repeat(60);
+        for confirmed in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-draft-after-devin-menu");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "devin").await;
+            let menu_deadline = Instant::now() + Duration::from_millis(500);
+            let menu_delivery = queue_a_message(&mut actor, &messages, menu_deadline);
+            let menu = synchronized(
+                "\x1b[10;1H/ Type to search\x1b[23;1H↑↓ select · opt+p pin · ↵ confirm · opt+↵ this session only · esc cancel\x1b[10;3H",
+            );
+            read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+            tokio::time::pause();
+            tokio::time::advance(menu_deadline.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            tokio::time::resume();
+            assert!(matches!(
+                menu_delivery.borrow().as_ref(),
+                Some(Settled::Withdrawn(message)) if message.delivery.reason == Some(DeliveryFailure::InputInteraction)
+            ));
+            if confirmed {
+                let hint = synchronized(&format!(
+                    "\x1b[2J\x1b[9;1H{border}\r\n❭ \x1b[38;2;107;107;107mAsk Devin to build features\x1b[0m\r\n{border}\x1b[10;3H"
+                ));
+                read_output(&mut actor, &mut cli, hint.as_bytes()).await;
+                assert!(actor.input_gate.has_post_wait_composer());
+            }
+            let draft = synchronized(&format!(
+                "\x1b[2J\x1b[9;1H{border}\r\n❭ draft from the person\r\n{border}\x1b[10;24H"
+            ));
+            read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+            assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
+            assert!(actor.input_gate.blocks_delivery());
+
+            tokio::time::pause();
+            let deadline = Instant::now() + Duration::from_millis(500);
+            let settled = queue_a_message(&mut actor, &messages, deadline);
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), 0);
+            tokio::time::advance(deadline.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            tokio::time::resume();
+            let reason = if confirmed {
+                DeliveryFailure::InputDraft
+            } else {
+                DeliveryFailure::InputUnknown
+            };
+            assert!(matches!(
+                settled.borrow().as_ref(),
+                Some(Settled::Withdrawn(message)) if message.delivery.reason == Some(reason)
+            ));
+            assert_eq!(actor.terminal.queued(), 0);
+            assert_eq!(pending_delivery_bytes(&actor), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn kiro_can_probe_the_first_redrawn_composer_after_startup_consent() {
+        let home = crate::test_folder::TestFolder::new("actor-kiro-startup-probe");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = test_actor_for(&home, &messages, "kiro-cli").await;
+        actor.untouched_input = true;
+        actor.before_input_box = true;
+        let _settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(15),
+        );
+        let menu = synchronized(
+            "\x1b[?25l\x1b[H ❯ No, exit\r\n   Yes, I accept\r\n  esc to cancel · ↑↓ to navigate · ↵ to select",
+        );
+        read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert_eq!(actor.terminal.queued(), 0);
+
+        let composer = "\x1b[2J\x1b[4;1H› \x1b[7m \x1b[27;38;5;245m";
+        let working = format!("{composer}Kiro is working · Type to steer · Ctrl+S to queue\x1b[0m");
+        read_output(&mut actor, &mut cli, synchronized(&working).as_bytes()).await;
+        actor.type_next();
+        assert_eq!(actor.terminal.queued(), 0);
+
+        let first_hint = format!("\x1b[?2026h{composer}ask a question or describe a task ↵\x1b[0m");
+        read_output(&mut actor, &mut cli, first_hint.as_bytes()).await;
+        actor.type_next();
+        assert_eq!(actor.terminal.queued(), 0);
+        read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+        assert!(actor.read_screen_input().unsure);
+        actor.type_next();
+        assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b" ");
+        assert_eq!(pending_delivery_bytes(&actor), 0);
+    }
+
+    #[tokio::test]
+    async fn kiro_probe_follows_unchanged_startup_redraws_before_its_echo() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Interruption {
+            None,
+            Menu,
+            OpenFrame,
+            Erased,
+        }
+        let hint = "ask a question or describe a task ↵";
+        for (redraws, interruption, erase) in [
+            (&[(11, hint)][..], Interruption::None, true),
+            (&[(8, hint), (11, hint)][..], Interruption::None, true),
+            (&[(4, hint), (11, hint)][..], Interruption::None, true),
+            (&[][..], Interruption::None, false),
+            (
+                &[(8, "Other text"), (11, hint)][..],
+                Interruption::None,
+                false,
+            ),
+            (&[(8, hint), (11, hint)][..], Interruption::Menu, false),
+            (&[(8, hint), (11, hint)][..], Interruption::OpenFrame, false),
+            (&[(8, hint), (11, hint)][..], Interruption::Erased, false),
+        ] {
+            let home = crate::test_folder::TestFolder::new("actor-kiro-moved-probe");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "kiro-cli").await;
+            actor.untouched_input = true;
+            actor.before_input_box = true;
+            let _settled = queue_a_message(
+                &mut actor,
+                &messages,
+                Instant::now() + Duration::from_secs(15),
+            );
+            let menu = synchronized(
+                "\x1b[?25l\x1b[2J\x1b[H ❯ No, exit\r\n   Yes, I accept\r\n  esc to cancel · ↑↓ to navigate · ↵ to select",
+            );
+            read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+            let show_hint = |row, text| {
+                synchronized(&format!(
+                    "\x1b[2J\x1b[{row};1H› \x1b[7m \x1b[27;38;5;245m{text}\x1b[0m"
+                ))
+            };
+            read_output(&mut actor, &mut cli, show_hint(4, hint).as_bytes()).await;
+            actor.type_next();
+            assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b" ");
+            if interruption == Interruption::Menu {
+                read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+                assert_eq!(
+                    actor.read_screen_input().info.state,
+                    InputState::Interaction
+                );
+                assert_eq!(actor.terminal.queued(), 0);
+            }
+            for &(row, text) in redraws {
+                let frame = show_hint(row, text);
+                let frame = if interruption == Interruption::OpenFrame {
+                    frame.strip_suffix("\x1b[?2026l").unwrap()
+                } else {
+                    &frame
+                };
+                read_output(&mut actor, &mut cli, frame.as_bytes()).await;
+                assert_eq!(actor.terminal.queued(), 0);
+                if interruption == Interruption::Erased && row == 8 {
+                    let blank = synchronized("\x1b[8;1H\x1b[2K\x1b[1;1H");
+                    read_output(&mut actor, &mut cli, blank.as_bytes()).await;
+                    assert!(actor.read_screen_input().line.is_none());
+                }
+            }
+            if interruption == Interruption::OpenFrame {
+                actor
+                    .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                    .unwrap();
+                assert_eq!(actor.held.len(), 1);
+            }
+            let echo = synchronized("\x1b[2J\x1b[11;1H›  \x1b[7m \x1b[0m");
+            read_output(&mut actor, &mut cli, echo.as_bytes()).await;
+            tokio::time::pause();
+            for _ in 0..2 {
+                if let Some(wake) = actor.typist_at {
+                    tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                    actor.type_next();
+                }
+            }
+            tokio::time::resume();
+            let input = read_queued_probe_input(&mut actor, &mut cli).await;
+            assert_eq!(
+                input,
+                if erase { b"\x7f".as_slice() } else { b"" },
+                "{redraws:?}, interruption={interruption:?}"
+            );
+            assert_eq!(pending_delivery_bytes(&actor), 0);
+            if interruption == Interruption::OpenFrame {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(2)).await;
+                actor.type_next();
+                tokio::time::resume();
+                assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"x");
+            }
         }
     }
 

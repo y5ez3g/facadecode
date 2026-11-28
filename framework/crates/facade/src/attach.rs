@@ -38,7 +38,7 @@ mod palette;
 
 use mouse::{LocalMouseInput, MouseInput, Take, without_reports};
 pub(crate) use palette::Probe;
-use palette::Replies;
+use palette::{HostColors, Replies};
 
 /// Ctrl-] in plain input, Kitty keyboard encoding, and xterm modifyOtherKeys.
 /// In win32-input-mode, [`is_detach_record`] recognizes a key-down record of its character.
@@ -112,7 +112,7 @@ pub(crate) fn attach(
     mut probe: Probe,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
-    let lease = probe.take_lease();
+    let mut lease = probe.take_lease();
     // A foreground start or resume already used its connection for a call.
     if !matches!(opening, Opening::Attached) && supports_dedicated_watch(&client) {
         drop(client);
@@ -159,12 +159,16 @@ pub(crate) fn attach(
     ));
     input.lock().agent_name.clone_from(&snapshot.name);
     let screen = ScreenWatch { client, watched };
+    if lease.is_none() && matches!(opening, Opening::Attached) && crate::asks_colors() {
+        probe = Probe::read_named()?;
+        lease = probe.take_lease();
+    }
     let lease = match lease {
         Some(lease) => lease,
         None => ConsoleLease::acquire()?,
     };
     write_console_warning(format_args!("{}", opening_line(&opening, &shown)));
-    let end = if lease.promote(&input) {
+    let end = if lease.promote(&input, probe.take_host_colors(), probe.host_grapheme_mode()) {
         follow_agent(screen, &input, &viewer, probe, reconnect)
     } else {
         Ok(AttachEnd::Detached)
@@ -202,18 +206,26 @@ impl ConsoleLease {
             vt,
             enabled_raw,
             input: None,
+            colors: HostColors::default(),
+            color_scheme_reporting: false,
+            original_grapheme_mode: None,
+            grapheme_mode_changed: false,
         });
         Ok(Self)
     }
 
     /// Owns the display before writing the title save, so a partial write still gets handback.
-    fn promote(&self, input: &Arc<AgentInput>) -> bool {
+    fn promote(
+        &self,
+        input: &Arc<AgentInput>,
+        colors: HostColors,
+        grapheme_mode: Option<bool>,
+    ) -> bool {
         let mut terminal = lock_terminal();
-        terminal
-            .console
-            .as_mut()
-            .expect("active console lease")
-            .input = Some(input.clone());
+        let console = terminal.console.as_mut().expect("active console lease");
+        console.colors = colors;
+        console.original_grapheme_mode = grapheme_mode;
+        console.input = Some(input.clone());
         terminal.present(input, |_| write_terminal(SAVE_HOST_TITLE))
     }
 }
@@ -230,6 +242,41 @@ struct ConsoleModes {
     enabled_raw: bool,
     /// Present once Attach takes over the display.
     input: Option<Arc<AgentInput>>,
+    colors: HostColors,
+    /// The CLI left color scheme notifications enabled in the host terminal.
+    color_scheme_reporting: bool,
+    original_grapheme_mode: Option<bool>,
+    grapheme_mode_changed: bool,
+}
+
+impl ConsoleModes {
+    fn forward_output(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.colors.observe_output(bytes);
+        let mut reporting = self.color_scheme_reporting;
+        for (params, end) in escapes(bytes).filter_map(csi) {
+            let Some(modes) = private_modes(params, end) else {
+                continue;
+            };
+            for mode in modes {
+                match mode {
+                    b"2031" => {
+                        reporting = end == b'h';
+                        // A partial write can enable reporting before its reset reaches the host.
+                        self.color_scheme_reporting |= reporting;
+                    }
+                    b"2027" => {
+                        self.grapheme_mode_changed |= self
+                            .original_grapheme_mode
+                            .is_some_and(|initial| initial != (end == b'h'));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        write_frame(bytes)?;
+        self.color_scheme_reporting = reporting;
+        Ok(())
+    }
 }
 
 impl Drop for ConsoleModes {
@@ -791,6 +838,7 @@ fn read_keys(
     let mut mouse = LocalMouseInput::default();
     let mut copy_key = None;
     let mut initial = (!keys.is_empty()).then_some(keys);
+    let cursor_input = host_tells_the_wheel().then(desktop::CursorInput::new);
     if let Some(mut console) = reader.or_else(|| ConsoleReader::new().ok()) {
         loop {
             let first = initial.take();
@@ -833,21 +881,17 @@ fn read_keys(
                     Ok(Some(ConsoleRead::Keys(0))) | Err(_) => break,
                 },
             };
-            // Before anything can wait: a key can be up again soon.
-            let arrows = if host_tells_the_wheel() {
-                desktop::arrows()
-            } else {
-                desktop::Arrows::default()
-            };
             if keys.is_empty() {
                 continue;
             }
+            // Sample the input before taking the display lock.
+            let cursor_sample = cursor_input.as_ref().map(desktop::CursorInput::sample);
             let detach_at = detach_position(&keys);
             // Queue keys before Ctrl-] while the attachment still owns the terminal.
             if let Some(mut terminal) = attached_terminal() {
                 let keys = &keys[..detach_at.unwrap_or(keys.len())];
                 terminal.present(input, |terminal| {
-                    terminal.route(input, keys, arrows, &mut mouse, &mut copy_key)
+                    terminal.route(input, keys, cursor_sample, &mut mouse, &mut copy_key)
                 });
             }
             if let Some(at) = detach_at {
@@ -1581,7 +1625,11 @@ impl Display {
         let switches_screen = !self.host_alternate || switches_screen_or_resets(&bytes);
         let held = self.held.is_some();
         if !switches_screen && !held && grid_fits && !shared.uses_viewport() {
-            write_frame(&bytes)?;
+            if let Some(console) = &mut self.console {
+                console.forward_output(&bytes)?;
+            } else {
+                write_frame(&bytes)?;
+            }
             return self.set_mouse(mouse);
         }
 
@@ -1620,7 +1668,7 @@ impl Display {
         &mut self,
         input: &AgentInput,
         keys: &[u8],
-        arrows: desktop::Arrows,
+        cursor_sample: Option<desktop::CursorSample>,
         mouse: &mut LocalMouseInput,
         copy_key: &mut Option<CopyKey>,
     ) -> std::io::Result<()> {
@@ -1630,7 +1678,10 @@ impl Display {
         let take = match self.mouse {
             MouseOwner::Local => Take::Reports,
             MouseOwner::Host if self.wheel_is_cursor_keys() => Take::CursorKeys {
-                down: arrows,
+                sample: cursor_sample.unwrap_or(desktop::CursorSample::Observed {
+                    events: Vec::new(),
+                    held: desktop::Arrows::default(),
+                }),
                 application: self.cli_asks_for_application_cursor_keys(),
             },
             MouseOwner::Cli | MouseOwner::Host => Take::Nothing,
@@ -2274,16 +2325,30 @@ fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> 
         Err(anyhow::Error::new(error).context("could not write to the host terminal"))
     });
     let code = end.as_ref().map_or(1, AttachEnd::code);
-    let Some(input) = terminal
-        .console
-        .as_mut()
-        .and_then(|console| console.input.take())
-    else {
+    let Some(console) = terminal.console.as_mut() else {
+        return code;
+    };
+    let Some(input) = console.input.take() else {
         return code;
     };
     let alternate = std::mem::take(&mut terminal.host_alternate);
     let cli_title_shown = std::mem::take(&mut terminal.cli_title_shown);
-    let _ = write_terminal(&restoration(alternate, cli_title_shown));
+    let mut restoration = restoration(alternate, cli_title_shown);
+    if console.color_scheme_reporting {
+        restoration.extend_from_slice(b"\x1b[?2031l");
+    }
+    if let Some(initial) = console
+        .original_grapheme_mode
+        .filter(|_| console.grapheme_mode_changed)
+    {
+        restoration.extend_from_slice(if initial {
+            b"\x1b[?2027h"
+        } else {
+            b"\x1b[?2027l"
+        });
+    }
+    console.colors.restore(&mut restoration);
+    let _ = write_terminal(&restoration);
     terminal.shared = None;
     terminal.held = None;
     terminal.mouse = MouseOwner::Host;

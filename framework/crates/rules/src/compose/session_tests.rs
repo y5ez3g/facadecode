@@ -83,6 +83,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         plugin: Vec::new(),
         workspace_file: None,
         tools: Tools::NotInjected,
+        tools_config: None,
         uses_run_credential: false,
     };
     assert_eq!(launch, launched);
@@ -340,6 +341,71 @@ fn person_yolo_adds_each_cli_s_work_arguments_and_settings() {
     }
 }
 
+#[test]
+fn cursor_and_qoder_resumes_use_their_run_update_settings() {
+    let session = "019a2b3c-4d5e-4f60-8172-839405a6b7c8";
+    let qoder_options = words(&[
+        "--settings",
+        r#"{"general":{"enableAutoUpdate":true,"preferredEditor":"vim"}}"#,
+    ]);
+    for unattended in [false, true] {
+        for yolo in [None, Some(Path::new(YOLO_FOLDER))] {
+            let policy = LaunchPolicy {
+                unattended,
+                yolo,
+                ..PERSON
+            };
+            let cursor = resume_managed_launch_command(
+                rule("agent"),
+                session,
+                &[],
+                Some(&report()),
+                None,
+                &BTreeMap::new(),
+                policy,
+            )
+            .unwrap();
+            assert!(
+                cursor
+                    .command
+                    .windows(2)
+                    .any(|pair| pair == ["--resume", session])
+            );
+            assert_eq!(
+                cursor
+                    .command
+                    .iter()
+                    .any(|arg| arg == "--disable-auto-update"),
+                unattended
+            );
+            let qoder = resume_managed_launch_command(
+                rule("qoder"),
+                session,
+                &qoder_options,
+                Some(&report()),
+                None,
+                &BTreeMap::new(),
+                policy,
+            )
+            .unwrap();
+            assert!(
+                qoder
+                    .command
+                    .windows(2)
+                    .any(|pair| pair == ["--resume", session])
+            );
+            let (_, settings) = qoder
+                .files
+                .iter()
+                .find(|(name, _)| name == "settings.json")
+                .unwrap();
+            let settings: Value = serde_json::from_str(settings).unwrap();
+            assert_eq!(settings["general"]["enableAutoUpdate"], !unattended);
+            assert_eq!(settings["general"]["preferredEditor"], "vim");
+        }
+    }
+}
+
 /// YOLO's run settings join the person's own: Claude Code's `--settings` of theirs keeps its
 /// sandbox's other settings, its own turned off, and Antigravity's trusted folders are theirs,
 /// from their settings file, and the launch's, with its terminal sandbox off where they turned
@@ -359,6 +425,7 @@ fn yolo_s_run_settings_join_the_person_s_own() {
         &BTreeMap::new(),
         LaunchPolicy {
             origin: LaunchOrigin::Agent,
+            unattended: true,
             yolo: Some(folder),
         },
     );
@@ -388,6 +455,7 @@ fn yolo_s_run_settings_join_the_person_s_own() {
         &home_environment(&home, &[]),
         LaunchPolicy {
             origin: LaunchOrigin::Agent,
+            unattended: true,
             yolo: Some(folder),
         },
     );

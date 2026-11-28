@@ -785,8 +785,12 @@ fn an_explicit_start_refusal_preserves_every_other_pipelined_start() {
         // The executable bit lets resolution reach the keeper. A missing interpreter makes
         // exec fail, while an executable text file without a shebang can run under sh.
         let interpreter = home.project.join("missing-interpreter");
-        std::fs::write(&invalid, format!("#!{}\n", interpreter.display())).unwrap();
-        std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let script = format!("#!{}\n", interpreter.display());
+        write_executable(
+            &invalid,
+            script.as_bytes(),
+            std::fs::Permissions::from_mode(0o700),
+        );
     }
     #[cfg(windows)]
     std::fs::write(&invalid, "not an executable").unwrap();

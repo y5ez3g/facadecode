@@ -5,7 +5,8 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::servers::{CALL_SECONDS, Entry, claude_entry};
+use super::config_files::{MCP_FILE, read_config};
+use super::servers::{CALL_SECONDS, Entry, claude_entry, is_server_program};
 use super::{Hooked, MergedSettings, Server, SessionReport, Wiring};
 use crate::Rule;
 use crate::formats::merge_settings;
@@ -16,6 +17,28 @@ const SERVER_NAME: &str = "facade";
 const TOOL_PREFIX: &str = "mcp__facade_managed_facade_";
 const SETTINGS: &str = "omp-settings.yaml";
 const EXTENSION: &str = "facade-omp.mjs";
+
+/// The diagnostic for a linked reply through Oh My Pi's separate project server.
+pub fn project_guest_reply(cwd: &Path, home: &Path) -> Option<String> {
+    let (file, server) = [".cursor/mcp.json", "mcp.json", MCP_FILE]
+        .into_iter()
+        .find_map(|name| {
+            let file = cwd.join(name);
+            let config = read_config(&file)?;
+            Some((file, config["mcpServers"].get(SERVER_NAME)?.clone()))
+        })?;
+    (server["enabled"] != false
+        && is_server_program(server["command"].as_str())
+        && server["env"]["FACADE_HOME"]
+            .as_str()
+            .is_some_and(|value| Path::new(value) == home))
+    .then(|| {
+        format!(
+            "{} names a facade server. Oh My Pi's project relay replies as a Guest. Use {TOOL_PREFIX}send_message for the managed inbox",
+            file.display()
+        )
+    })
+}
 
 pub(super) fn tools(server: &Server<'_>, entry: &Entry<'_>) -> Wiring {
     let manifest = json!({
@@ -57,10 +80,15 @@ pub(super) fn settings(
     words: &[String],
     folder: &Path,
 ) -> MergedSettings {
-    // Retain the person's overlays in order and append the overlay for managed tool approvals.
-    let mut settings = json!({});
+    // Host MCP inside the run's OMP process so it owns its relays and their lifetime.
+    // Retain the person's overlays in order and put the run's overlay last.
+    let mut settings = json!({ "mcp": { "shared": false } });
     if let Some(additions) = &wiring.settings {
         merge_settings(&mut settings, additions);
+    }
+    if wiring.unattended {
+        settings["startup"]["checkUpdate"] = json!(false);
+        settings["update"]["auto"] = json!(false);
     }
     let mut args = Vec::new();
     let mut rest = Vec::new();

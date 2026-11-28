@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
@@ -23,10 +23,9 @@ use anyhow::{Context, bail, ensure};
 #[cfg(unix)]
 use std::fs::{OpenOptions, Permissions};
 #[cfg(unix)]
-use std::io::Read;
-#[cfg(unix)]
 use std::os::unix::fs::{FileExt, OpenOptionsExt, PermissionsExt, symlink};
 
+mod legacy;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
@@ -128,6 +127,30 @@ pub fn direct_command(program: &Path, env: &BTreeMap<String, String>, cwd: &Path
     }
     #[cfg(windows)]
     windows::direct_command(program, env, cwd)
+}
+
+/// Whether the resolved file has a native executable header, including a universal Mach-O.
+pub fn has_native_executable_header(path: &Path) -> bool {
+    let mut header = [0; 4];
+    if File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_err()
+    {
+        return false;
+    }
+    if cfg!(windows) {
+        return header.starts_with(b"MZ");
+    }
+    matches!(
+        &header,
+        b"\x7fELF"
+            | b"\xcf\xfa\xed\xfe"
+            | b"\xfe\xed\xfa\xcf"
+            | b"\xca\xfe\xba\xbe"
+            | b"\xbe\xba\xfe\xca"
+            | b"\xca\xfe\xba\xbf"
+            | b"\xbf\xba\xfe\xca"
+    )
 }
 
 /// Shows the final program and arguments in the launch platform's command-line syntax.
@@ -259,6 +282,22 @@ pub fn select_running() -> anyhow::Result<PathBuf> {
             launcher.display()
         )
     })
+}
+
+pub struct LegacyUpgrade {
+    pub bin: PathBuf,
+    pub status: LegacyStatus,
+}
+
+pub enum LegacyStatus {
+    Migrated,
+    Active(Vec<String>),
+    Deferred(String),
+}
+
+/// Keeps the pre-rename launcher paths working after a successful install or upgrade.
+pub fn repair_legacy_launchers() -> anyhow::Result<Option<LegacyUpgrade>> {
+    legacy::repair(&Bin::here()?)
 }
 
 /// Selects a sleeping home's programs. None means a live service must admit the replacement.
@@ -482,14 +521,7 @@ pub fn point_launchers_at(build: &str, running: &[String]) -> anyhow::Result<()>
 /// another home that supplied this shell's PATH.
 pub fn run_in_selected_home() -> anyhow::Result<Option<i32>> {
     let program = crate::this_program()?;
-    let Some(folder) = program.parent() else {
-        return Ok(None);
-    };
-    let installed_bin = [Some(folder), folder.parent()]
-        .into_iter()
-        .flatten()
-        .find(|folder| folder.ends_with(Path::new("framework").join("bin")));
-    let Some(installed_bin) = installed_bin else {
+    let Some(installed_bin) = crate::paths::installed_bin(&program) else {
         return Ok(None);
     };
     let bin = Bin::here()?;

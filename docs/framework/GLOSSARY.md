@@ -120,7 +120,7 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | query, reply | A terminal's question, such as a cursor position request or a color query (OSC 4, 10, 11 and 12), and the terminal's answer to it | answer (for this) |
 | terminal colors | The foreground, background and cursor colors and the ANSI palette that the agent's screen replies to color queries with. VS Code supplies the first three when attached. Shell supplies those the terminal app reports before a start or resume | theme, palette (for the whole) |
 | ANSI palette | The terminal's colors 0 to 15, which OSC 4 queries | palette (alone) |
-| launch colors | The terminal colors Shell reads from the terminal app before a start or resume, `LaunchColors` | — |
+| launch colors | The terminal colors passed to a run as `LaunchColors`. Shell reads them from the terminal app before a start or resume. A managed MCP start samples the current terminal colors from its caller's screen | — |
 | launch context | The private variable that carries the launch colors to the daemon, which takes it off the environment | — |
 | client | A program connected to the daemon, such as a `facade` command, the relay or the VS Code extension | — |
 | viewer | A client showing an agent's screen | subscriber, watcher |
@@ -188,11 +188,12 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | YOLO | A machine setting that defaults to on. A managed agent reads it at start or resume and keeps it for that run. A Guest reads it when it joins and keeps it for that connection | — |
 
 YOLO on lets the Orchestrator bypass a CLI's permissions and sandbox where supported. With YOLO off, the CLI applies its
-own permissions and sandbox. For a start requested by an agent, the target Facade home's YOLO setting can authorize the
-Orchestrator to answer the native workspace trust question. When that question appears on a start or resume from Shell
-or VS Code, the person answers it. Both modes waive Facade tool confirmations for every CLI. Questions a CLI asks the
-person remain available in both modes. For a Guest, YOLO determines reach. Shell and VS Code have full reach for the
-actions they offer.
+own permissions and sandbox. MCP `start_agent` and Shell `start -d` and `resume -d` are unattended launches. The destination
+Facade home's YOLO setting can authorize the Orchestrator to answer their native startup trust questions. For a foreground
+Shell launch or a VS Code launch, the person answers those questions. Facade turns off updates where the CLI offers a
+per-run control for an unattended launch, in either YOLO mode. The CLI handles updates in attended launches. Both YOLO
+modes waive Facade tool confirmations for every CLI. Questions a CLI asks the person remain available in both modes.
+For a Guest, YOLO determines reach. Shell and VS Code have full reach for the actions they offer.
 
 ## Wiring and hooks
 

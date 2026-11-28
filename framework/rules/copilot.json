@@ -2,6 +2,7 @@
 	"cli": "copilot",
 	"display_name": "GitHub Copilot CLI",
 	"program": "copilot",
+	"launch": { "agent_env": { "COPILOT_AUTO_UPDATE": "false" } },
 	"arguments": {
 		"reserved": ["-h", "--help", "-v", "--version", "--print-debug-info", "--collect-debug-logs", "-p", "--prompt", "-i", "--interactive", "--attachment", "--assisted-approval", "--trust-folder", "--acp", "--server", "--headless", "--ahp", "--environment", "--remote", "--cloud", "--connect", "-r", "--resume", "--continue", "--session-id", "--new-session-id", "-w", "--worktree", "-C", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--yolo"],
 		"clusters": ["-C", "-i", "-n", "-p", "-r", "-w"]
@@ -17,6 +18,7 @@
 		"rail": {
 			"fallback_prompt": "❯ ",
 			"footer": "^ *(?:← open sidebar · )?Interactive · (?:Manual Approval|Assisted Permissions|Allow All)(?: · | {2,}| *$)",
+			"working_footer": "^ *[●○◉] Working(?: · [0-9]+ B)? ctrl\\+c interrupt(?: |$)",
 			"live_notice": {
 				"text": "Please use /login to sign in to use Copilot",
 				"wait_kind": "auth",
@@ -32,6 +34,9 @@
 		"menus": [{
 			"selected": "^│ Do you trust the files in this folder\\? +│ *$",
 			"hint": { "pattern": "^│ ❯ (?:1\\. Yes|2\\. Yes, and remember this folder for future sessions|3\\. No \\(Esc\\)) +│ *$", "within": 4 }
+		}, {
+			"selected": "^ Session only\\. Copilot Fusion chooses a model;",
+			"hint": { "pattern": " ctrl\\+x → m manage · enter to select · esc to cancel$", "within": 15 }
 		}]
 	},
 	"paste": {
@@ -39,5 +44,15 @@
 		"placeholders": [{ "pattern": "^\\[Paste #\\d+ - (\\d+) lines\\]$", "count": "lines", "spaced": true }]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume=${session_id}"], "resume_requires_saved_session": true },
-	"yolo": { "work": { "args": ["--allow-all"] } }
+	"mcp": { "native_relay_chain": [] },
+	"yolo": {
+		"work": { "args": ["--allow-all"] },
+		"question": {
+			"shown": "^│ Do you trust the files in this folder\\? +│$",
+			"answer": "^│ ❯ 1\\. Yes +│$",
+			"selected": "^│ ❯ 1\\. Yes +│$",
+			"keys": [],
+			"confirm": "Enter"
+		}
+	}
 }

@@ -44,7 +44,9 @@ use keeper_link::{KeeperLink, RecordedExit};
 use preparation::Preparation;
 
 pub(crate) use keeper_link::{KeeperOnly, StartReservation};
-pub(crate) use preparation::{FirstRead, PluginHold, RunFiles, restore_launch_environment};
+pub(crate) use preparation::{
+    FirstRead, PluginHold, RunFiles, clean_inherited, restore_launch_environment,
+};
 
 /// Where a run's exit goes: set up by the daemon at launch, it hands the exit to the agent's actor.
 /// Called with no lock held.
@@ -119,6 +121,8 @@ pub(crate) struct PreparedRun {
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,
     pub(crate) tools: ToolsGiven,
+    /// Where the CLI reads an existing server it uses for the run.
+    pub(crate) tools_config: Option<PathBuf>,
     /// Facade's plugin in the folder the CLI starts in, held until the agent is listed.
     pub(crate) plugin: Option<PluginHold>,
     /// The run's folder and what goes in it.
@@ -162,10 +166,11 @@ pub(crate) struct RunCredentialRecord {
     pub(crate) process: ProcessIdentity,
 }
 
-/// The installed run named by a private relay credential.
+/// The installed run identified by a relay.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct RunIdentity {
     pub(crate) agent_id: String,
-    pub(crate) pid: u32,
+    pub(crate) process: ProcessIdentity,
     pub(crate) run: u64,
 }
 

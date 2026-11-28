@@ -430,14 +430,18 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
     );
 }
 
-/// A CLI at work redraws frame after frame, and a frame reaches Facade in pieces. Messages go in one
-/// after the other all the same. The test CLI redraws whenever it reads something; the question in
-/// its name, which its terminal answers, has it redraw without a pause.
+/// A CLI redraws frame after frame while messages go in. Each draw queries its terminal's device
+/// attributes, and each reply triggers the next redraw. The redraw interval is shorter than the
+/// draft's settle time.
 #[test]
 fn messages_go_into_a_cli_that_redraws_without_a_pause() {
+    const ATTRIBUTES_REPLY: &[u8] = b"\x1b[?6c";
+    const PASTE_END: &[u8] = b"\x1b[201~";
+
     for sync in ["0", "1"] {
         let home = TestHome::new("busyredraw");
         let keys = home.folder().join("keys");
+        let key_times = home.folder().join("key-times");
         std::fs::write(&keys, []).unwrap();
         let worker = home.start_fake_with(
             "worker",
@@ -445,11 +449,15 @@ fn messages_go_into_a_cli_that_redraws_without_a_pause() {
                 ("FAKECLI_NAME", "worker\u{1b}[c"),
                 ("FAKECLI_SYNC", sync),
                 ("FAKECLI_KEYS", keys.to_str().unwrap()),
+                ("FAKECLI_KEYLOG", key_times.to_str().unwrap()),
+                ("FAKECLI_DRAW_INTERVAL_MS", "8"),
             ],
         );
         let answers = || {
             let read = std::fs::read(&keys).unwrap();
-            read.windows(3).filter(|bytes| bytes == b"\x1b[?").count()
+            read.windows(ATTRIBUTES_REPLY.len())
+                .filter(|&bytes| bytes == ATTRIBUTES_REPLY)
+                .count()
         };
         let drawn = answers();
         let sends: Vec<Sending> = (1..=5)
@@ -472,6 +480,26 @@ fn messages_go_into_a_cli_that_redraws_without_a_pause() {
         let expected: Vec<String> = (1..=5).map(|number| format!("{number}\nof five")).collect();
         let pasted: Vec<_> = expected.iter().map(|text| format!("{text} ")).collect();
         assert_eq!(texts, pasted, "sync {sync}: {submitted:?}");
+        let wire = std::fs::read(keys).unwrap();
+        let mut input = wire.as_slice();
+        for _ in 0..5 {
+            let paste_end = input
+                .windows(PASTE_END.len())
+                .position(|bytes| bytes == PASTE_END)
+                .expect("bracketed paste");
+            let after_paste = &input[paste_end + PASTE_END.len()..];
+            let enter = after_paste
+                .iter()
+                .position(|&key| key == b'\r')
+                .expect("submit");
+            assert!(
+                after_paste[..enter]
+                    .windows(ATTRIBUTES_REPLY.len())
+                    .any(|bytes| bytes == ATTRIBUTES_REPLY),
+                "sync {sync}: expected a redraw after paste and before Enter"
+            );
+            input = &after_paste[enter + 1..];
+        }
     }
 }
 
@@ -965,10 +993,13 @@ fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
 
     let request = "请检查构建\n\n  Keep the indentation.";
     let shell = send_in_background(&home, &["worker", request, "-r"]);
-    // The fake CLI records Enter before the daemon sees the confirming frame and saves delivery.
+    // Wait for the terminal submission and the inbox entry before sending a linked reply.
     let mut inbox = Vec::new();
     assert!(
         wait_until(secs(10), || {
+            if home.submitted_messages().is_empty() {
+                return false;
+            }
             inbox = read_messages(&mut worker_tools, json!({"last": 1}));
             !inbox.is_empty()
         }),
@@ -1733,6 +1764,115 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
         home.submitted_messages(),
         ["📨 Message m2 from command line\nnext "],
         "the read message is never typed"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the debug hold on message submission"
+)]
+fn a_confirmed_erase_after_daemon_restart_withdraws_the_original_failed_send() {
+    let home = TestHome::new("restart-late-withdrawal");
+    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
+    home.fault("hold-message-enter", "");
+    let keys = home.folder().join("keys");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let text = "a full paste that expires before submission";
+    let request = "withdraw-after-restart";
+    let send = begin_send(&home, "worker", text, Some(request));
+    let store = rusqlite::Connection::open_with_flags(
+        home.path.join("framework/facade.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let has_observed_draft = || {
+        store
+            .query_row(
+                "SELECT length(paste_draft) = 32 FROM messages \
+                 WHERE number = 1 AND paste = 1 AND status = 'pending' AND paste_draft IS NOT NULL",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false)
+    };
+    assert!(wait_until(LOADED_TIMEOUT, has_observed_draft));
+    let screen = home.screen(&worker.address);
+    assert!(screen.contains("[Pasted text #1 +1 lines]"), "{screen}");
+    let pasted = std::fs::read(&keys).unwrap();
+    assert!(
+        pasted
+            .windows(text.len())
+            .any(|bytes| bytes == text.as_bytes())
+    );
+    assert!(pasted.ends_with(b"\x1b[201~"));
+
+    // The CLI retains the draft and its terminal takes the erase. Holding the CLI makes the
+    // sender receive its failure before any empty frame can confirm the erase.
+    pause_process(worker.pid);
+    let original = send.receipt();
+    let cleanup_written = store
+        .query_row(
+            "SELECT substr(paste_draft, 33) FROM messages WHERE number = 1 AND paste = 1 \
+             AND status = 'failure' AND reason = 'submission_unconfirmed' AND text_written = 'full' \
+             AND enter_written = 0 AND withdrawn = 0 AND text = ?1 AND length(paste_draft) = 37",
+            [text],
+            |row| row.get::<_, Vec<u8>>(0),
+        );
+    let old = home.kill_daemon();
+    let replacement = home.wait_for_daemon_after(old, LOADED_TIMEOUT);
+    resume_process(worker.pid);
+    replacement.expect("the keeper starts a replacement for the same CLI");
+    let cleanup_written =
+        cleanup_written.expect("a durable full/zero-key failure with cleanup progress");
+    assert_eq!(cleanup_written[0], 1, "the write is acknowledged");
+    let erase_count = u32::from_le_bytes(cleanup_written[1..].try_into().unwrap()) as usize;
+    assert!(erase_count > 0);
+    assert_eq!(original["id"], receipt_id(&home, &worker.id, "m1"));
+    assert_eq!(
+        delivery_of(&original),
+        (
+            json!("failure"),
+            json!("submission_unconfirmed"),
+            json!("full"),
+            Value::Null,
+        )
+    );
+    assert_eq!(original["message"]["delivery"]["enter_written"], false);
+
+    assert!(wait_until(LOADED_TIMEOUT, || store
+        .query_row(
+            "SELECT paste_draft IS NULL FROM messages WHERE number = 1 AND paste = 1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()));
+    for _ in 0..2 {
+        let retry = repeat_send(&home, "worker", text, request);
+        assert_eq!(retry["id"], original["id"], "{retry}");
+        assert_eq!(
+            retry["message"]["delivery"], original["message"]["delivery"],
+            "{retry}"
+        );
+        assert_eq!(retry["withdrawn"], true, "{retry}");
+        assert_eq!(retry["message"]["text"], "", "{retry}");
+    }
+    assert!(kept(&home, 1).is_none());
+    assert!(home.submitted_messages().is_empty());
+    assert_eq!(
+        &std::fs::read(&keys).unwrap()[pasted.len()..],
+        vec![0x7f; erase_count]
+    );
+
+    std::fs::remove_file(home.path.join("framework/hold-message-enter")).unwrap();
+    assert_eq!(
+        home.run_facade_ok(&["send", "worker", "next message", "-w"])
+            .trim(),
+        delivered(&home, &worker.id, "m2")
+    );
+    assert_eq!(
+        home.submitted_messages(),
+        ["📨 Message m2 from command line\nnext message "],
     );
 }
 

@@ -51,7 +51,7 @@ use alacritty_terminal::term::TermMode;
 
 use kept_modes::{KeptModes, TabStops};
 use scrollback::Scrollback;
-use sequences::{Mark, TitleNegotiation};
+use sequences::{CursorRestore, Mark, TitleNegotiation};
 use terminal::{Size, Terminal};
 use units::Splitter;
 
@@ -132,6 +132,8 @@ pub struct Screen {
     deferred_status_title: bool,
     earlier_frame: bool,
     sync_ended_between_reads: bool,
+    cursor_restore: CursorRestore,
+    awaiting_cursor_restore: bool,
     splitter: Splitter,
     modes: KeptModes,
     tab_stops: TabStops,
@@ -154,6 +156,8 @@ impl Screen {
             deferred_status_title: false,
             earlier_frame: false,
             sync_ended_between_reads: false,
+            cursor_restore: CursorRestore::default(),
+            awaiting_cursor_restore: false,
             splitter: Splitter::default(),
             modes: KeptModes::default(),
             paint_waits_for_frame: false,
@@ -249,6 +253,9 @@ impl Screen {
         mut observe: Option<&mut InputObserver<'_>>,
     ) -> ParsedOutput {
         self.terminal.reset_damage();
+        if observe.is_none() {
+            self.discard_cursor_restore();
+        }
         if std::mem::take(&mut self.sync_ended_between_reads) {
             self.terminal.mark_input_boundary();
         }
@@ -263,6 +270,7 @@ impl Screen {
             &mut self.title_negotiation,
             self.status_glyph.as_deref(),
             observe.is_some() || self.paint_waits_for_frame,
+            &mut self.cursor_restore,
         );
         let mut earlier_through = if earlier_sync {
             filtered.sync_ended_at
@@ -278,8 +286,8 @@ impl Screen {
         // alacritty parses up to each mark, so that the screen sees its state right there.
         for (at, start, mark) in filtered.marks {
             let on_alternate = self.on_alternate_screen();
-            let begins_update =
-                mark == Mark::BeginSync && self.synchronized_update_deadline().is_none();
+            let sync_open = self.synchronized_update_deadline().is_some();
+            let begins_update = mark == Mark::BeginSync && !sync_open;
             self.parse_output(bytes, parsed_to, at, &mut earlier_through, &mut observe);
             parsed_to = at;
             if (begins_update
@@ -312,9 +320,24 @@ impl Screen {
                     {
                         new_frame |= self.observe_frame(observe, self.earlier_frame);
                         self.terminal.reset_damage();
-                        self.terminal.mark_input_boundary();
+                        self.awaiting_cursor_restore = sync_open
+                            && !self.terminal.has(TermMode::SHOW_CURSOR)
+                            && self.terminal.cells_written_since_input_boundary();
+                        if !self.awaiting_cursor_restore {
+                            self.terminal.mark_input_boundary();
+                        }
                     }
                 }
+                Mark::CursorRestored => {
+                    if self.awaiting_cursor_restore
+                        && self.terminal.has(TermMode::SHOW_CURSOR)
+                        && let Some(observe) = &mut observe
+                    {
+                        new_frame |= self.observe_frame(observe, self.earlier_frame);
+                    }
+                    self.finish_cursor_restore();
+                }
+                Mark::DiscardCursorRestore => self.finish_cursor_restore(),
                 Mark::SwitchScreen => {}
                 Mark::Reset => {
                     self.tab_stops = TabStops::new(self.size().cols);
@@ -362,6 +385,7 @@ impl Screen {
         if let Some(observe) = observe
             && !self.is_drawing()
             && !self.has_unfinished_unit()
+            && !self.awaiting_cursor_restore
         {
             self.observe_frame(observe, self.earlier_frame);
         }
@@ -381,8 +405,20 @@ impl Screen {
 
     /// The pending frame's bytes precede the input whose response the caller is observing.
     pub fn mark_pending_frame_earlier(&mut self) {
+        self.discard_cursor_restore();
         self.earlier_frame = self.is_drawing() || self.has_unfinished_unit();
         if !self.earlier_frame {
+            self.terminal.mark_input_boundary();
+        }
+    }
+
+    fn discard_cursor_restore(&mut self) {
+        self.cursor_restore = CursorRestore::default();
+        self.finish_cursor_restore();
+    }
+
+    fn finish_cursor_restore(&mut self) {
+        if std::mem::take(&mut self.awaiting_cursor_restore) {
             self.terminal.mark_input_boundary();
         }
     }
@@ -454,6 +490,7 @@ impl Screen {
     /// Ends an open synchronized update, and gives what the output it held back produced.
     pub fn end_synchronized_update(&mut self) -> ParsedOutput {
         self.terminal.reset_damage();
+        self.discard_cursor_restore();
         self.sync_ended_between_reads = true;
         let on_alternate = self.on_alternate_screen();
         if self.synchronized_update_deadline().is_some() {

@@ -95,6 +95,11 @@ impl Splitter {
         self.state != State::Between
     }
 
+    /// The entire byte interval is still held as an Escape or CSI prefix.
+    pub(crate) fn holds_escape_prefix(&self, bytes: usize) -> bool {
+        matches!(self.state, State::Escape | State::Csi) && self.held.len() == bytes
+    }
+
     fn take(&mut self, byte: u8, each: &mut dyn FnMut(Piece<'_>)) {
         let in_sequence = matches!(
             self.state,

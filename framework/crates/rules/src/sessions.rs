@@ -16,7 +16,7 @@
 mod history;
 mod kiro_settings;
 
-pub use history::{SavedSession, list_sessions, session_for_id};
+pub use history::{SavedSession, list_sessions, live_mcp_session_matches, session_for_id};
 pub(crate) use history::{kiro_profile, qoder_config_dir};
 pub(crate) use kiro_settings::kiro_config_root;
 
@@ -160,7 +160,7 @@ pub fn session_evidence(
             .session_env_key
             .as_deref()
             .and_then(|key| env_var(relay_env, key)),
-        "agy" if is_uuid(recorded) => metadata(),
+        "agy" | "codex" if is_uuid(recorded) => metadata(),
         "opencode" if recorded.starts_with("ses_") => metadata(),
         _ => None,
     };
@@ -471,6 +471,17 @@ mod tests {
 
     fn saved(id: &str) -> Option<Reported> {
         Some(Reported::saved(id))
+    }
+
+    #[test]
+    fn codex_native_mcp_evidence_names_the_recorded_session() {
+        let rule = crate::find("codex").unwrap().unwrap();
+        let env = BTreeMap::from([("CODEX_SESSION_ID".into(), ID.into())]);
+        let matching = serde_json::json!({"sessionId": ID});
+        let other = serde_json::json!({"sessionId": "96da4482-2bae-4a45-b193-a5664c19826a"});
+        assert!(session_evidence(rule, ID, &env, Some(&matching)));
+        assert!(!session_evidence(rule, ID, &env, Some(&other)));
+        assert!(!session_evidence(rule, ID, &env, None));
     }
 
     #[test]

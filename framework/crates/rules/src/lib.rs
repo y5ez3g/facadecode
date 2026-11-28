@@ -37,7 +37,7 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, PasteDrawing, ProbeVerdict, canonical_text,
+    BoxReading, InputLine, LineCell, PasteDisclosure, PasteDrawing, ProbeVerdict, canonical_text,
     could_be_paste_prefix, draft_backspace_count, is_full_draft, is_legacy_split_paste,
     is_own_draft, is_own_paste_tail, is_own_recovered_draft, is_paste_placeholder, is_same_draft,
     read_box, read_box_after_paint, read_box_for_screen, read_box_for_typing, read_box_with_redraw,
@@ -46,16 +46,16 @@ pub use input::{
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
-    is_session_variable, list_sessions, parse_session_id, read_session_file, run_folder,
-    session_evidence, session_for_id, session_from_hook, session_from_prompt, session_from_title,
-    session_variable, write_session_file,
+    is_session_variable, list_sessions, live_mcp_session_matches, parse_session_id,
+    read_session_file, run_folder, session_evidence, session_for_id, session_from_hook,
+    session_from_prompt, session_from_title, session_variable, write_session_file,
 };
 pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
-    guest_entry_serves_run, hook, integration, plugin_files, plugin_version,
-    restore_config_environment, runs_start_guest_entry, session_ends_with_process,
-    uses_folder_plugin,
+    guest_entry_serves_run, hook, integration, managed_cli_for_project_guest, plugin_files,
+    plugin_version, project_guest_reply, restore_config_environment, runs_start_guest_entry,
+    session_ends_with_process, uses_folder_plugin,
 };
 pub use wrappers::direct_command;
 
@@ -148,9 +148,16 @@ pub struct Rule {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpRule {
+    /// The children from the managed process to the relay's parent, in order. An empty
+    /// chain means the managed process starts the relay itself.
+    #[serde(default)]
+    pub native_relay_chain: Option<Vec<NativeRelayHost>>,
     /// The CLI initializes its managed relay at startup and lists tools on its first turn.
     #[serde(default)]
     pub deferred_tool_list: bool,
+    /// The CLI can replace its first MCP catalog connection while opening the native session.
+    #[serde(default)]
+    pub reconnects_on_startup: bool,
     /// The `_meta` key in which a tool call names its session, for a CLI whose one MCP server
     /// serves many sessions. A CLI that starts an MCP server for each session names it in the
     /// server's environment instead.
@@ -162,6 +169,15 @@ pub struct McpRule {
     /// The CLI gets a managed run's instructions from its hook or extension.
     #[serde(default)]
     pub managed_instructions_from_hook: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeRelayHost {
+    /// The helper runs the same executable as the managed process.
+    ManagedExecutable,
+    /// The helper runs this executable name, as read from its loaded image.
+    Executable(String),
 }
 
 /// What a run's start types to ready the CLI's tools: `text` once the input first reads empty,
@@ -338,7 +354,10 @@ pub struct CommandLineRule {
     /// Arguments right after the program.
     #[serde(default)]
     pub args: Vec<String>,
-    /// The nonpersistent updater switches for agent starts.
+    /// Literal overrides for an unattended run, after the other launch arguments.
+    #[serde(default)]
+    pub unattended_args: Vec<String>,
+    /// The nonpersistent updater switches for unattended starts and resumes.
     #[serde(default)]
     pub agent_env: BTreeMap<String, String>,
 }
@@ -517,6 +536,8 @@ pub(crate) struct EditorBand {
 pub(crate) struct EditorRail {
     pub(crate) fallback_prompt: String,
     pub(crate) footer: Pattern,
+    #[serde(default)]
+    pub(crate) working_footer: Option<Pattern>,
     #[serde(default)]
     pub(crate) live_notice: Option<EditorLiveNotice>,
 }
@@ -717,6 +738,12 @@ pub struct ModePlaceholder {
 #[serde(deny_unknown_fields)]
 pub struct Menu {
     pub selected: MenuLinePattern,
+    /// The reason this menu needs the person, when the rule recognizes it.
+    #[serde(default)]
+    pub(crate) wait_kind: Option<WaitKind>,
+    /// A pane below the prompt can still take input while that prompt shows its cursor.
+    #[serde(default)]
+    pub below_prompt: bool,
     /// The anchor's first logical line never matches this.
     #[serde(default)]
     pub not_selected: Option<Pattern>,
@@ -730,8 +757,9 @@ pub struct Menu {
 #[serde(deny_unknown_fields)]
 pub struct Hint {
     pub pattern: MenuLinePattern,
-    /// How many logical lines after the anchor may start the hint.
-    pub within: usize,
+    /// How many logical lines after the anchor may start the hint. None uses the visible screen.
+    #[serde(default)]
+    pub within: Option<usize>,
 }
 
 /// Match a terminal's logical line, or exact text a CLI lays out on successive lines itself.
@@ -825,7 +853,13 @@ impl Rule {
                 "program {program:?} must be an executable's file name"
             ));
         }
-        match self.launch.args.iter().find(|arg| !is_literal(arg)) {
+        match self
+            .launch
+            .args
+            .iter()
+            .chain(&self.launch.unattended_args)
+            .find(|arg| !is_literal(arg))
+        {
             Some(arg) => Err(format!(
                 "launch argument {arg:?} must be literal text without NUL"
             )),
@@ -995,9 +1029,13 @@ impl InputRule {
                 }
             }
         }
-        let hints = self.menus().iter().filter_map(|menu| menu.hint.as_ref());
-        if hints.into_iter().any(|hint| hint.within == 0) {
-            return Err("a menu hint's within must be positive".into());
+        for menu in self.menus() {
+            if menu.hint.as_ref().and_then(|hint| hint.within) == Some(0) {
+                return Err("a menu hint's within must be positive".into());
+            }
+            if menu.wait_kind == Some(WaitKind::Unrecognized) {
+                return Err("a menu needs a recognized wait kind".into());
+            }
         }
         Ok(())
     }
@@ -1803,6 +1841,11 @@ mod tests {
     /// session and which managed runs get their instructions through a hook or extension.
     #[test]
     fn each_cli_s_rule_says_what_its_mcp_client_does() {
+        let opencode = find("opencode").unwrap().unwrap();
+        assert!(matches!(
+            opencode.mcp.native_relay_chain.as_deref(),
+            Some([NativeRelayHost::ManagedExecutable])
+        ));
         assert_eq!(
             session_meta_keys().collect::<Vec<_>>(),
             [

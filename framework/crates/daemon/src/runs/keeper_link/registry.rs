@@ -178,7 +178,7 @@ impl RunRegistry {
             } else if run.installed {
                 CredentialState::Installed(RunIdentity {
                     agent_id: id.clone(),
-                    pid: run.identity.pid,
+                    process: run.identity.clone(),
                     run: run.number,
                 })
             } else {

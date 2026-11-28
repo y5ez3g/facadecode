@@ -7,6 +7,8 @@ mod routes;
 mod saved;
 mod session;
 mod ssh;
+#[cfg(test)]
+mod tests;
 mod topology;
 mod wake;
 mod wire;
@@ -584,6 +586,7 @@ impl Network {
                 origin,
                 peer: peer.clone(),
                 table,
+                recheck: None,
             },
         );
         Ok((
@@ -745,6 +748,10 @@ impl Registered {
             saved.opened(self.id, &link.remote);
         } else if let Some(saved) = state.saved.get_mut(&link.remote.machine_id) {
             saved.seen(&link.remote);
+        }
+        for id in state.equivalent_foreground_links(&link) {
+            self.network
+                .recheck_foreground_link(&mut state, id, self.id);
         }
         state.clear_sleeping(&link.remote.machine_id);
         let events = &self.network.0.events;

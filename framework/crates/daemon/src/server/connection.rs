@@ -155,7 +155,7 @@ struct MachineHandoff<M> {
 
 /// Serves the socket and cleans up the tasks it started.
 pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> anyhow::Result<()> {
-    let Some(work) = service.work() else {
+    let Some(mut work) = service.work() else {
         return Ok(());
     };
     let peer_pid = socket.peer_pid();
@@ -185,7 +185,7 @@ pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> 
         teller: None,
     };
     let mut reader = BufReader::new(read);
-    let served = connection.read_requests(&mut reader).await;
+    let served = connection.read_requests(&mut reader, &mut work).await;
     // A reader can finish while the writer still needs the Shell cutoff.
     let shell_attach = connection.shell_attach.take();
     connection.clean_up(!matches!(&served, Ok(Some(_)))).await;
@@ -208,6 +208,7 @@ impl<S: Service> Connection<S> {
     async fn read_requests(
         &mut self,
         reader: &mut Reader,
+        work: &mut S::Work,
     ) -> anyhow::Result<Option<MachineHandoff<S::Machine>>> {
         let hello_by = tokio::time::Instant::now() + HELLO_TIMEOUT;
         let mut line = Vec::new();
@@ -247,7 +248,7 @@ impl<S: Service> Connection<S> {
                 Next::End => return Ok(None),
                 Next::Machine(handoff) => return Ok(Some(handoff)),
                 Next::Relay(id, params) => {
-                    super::relay::serve(self, reader, id, params).await?;
+                    super::relay::serve(self, reader, id, params, work).await?;
                     return Ok(None);
                 }
             }

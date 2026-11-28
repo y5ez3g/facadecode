@@ -20,6 +20,199 @@ fn type_draft(home: &TestHome, agent: &str, draft: &str) {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_native_relay_binds_only_to_the_cli_that_is_its_exact_parent() {
+    let home = TestHome::new("mcp-native-parent");
+    let relay = &test_binaries().mcp;
+    let native = install_script(
+        home.folder(),
+        "qoder-fixture",
+        r#"#!/bin/sh
+set -eu
+test -n "$FACADE_AGENT"
+probe() {
+    name=$1
+    request="$QA_PROBE/$name.in"
+    response="$QA_PROBE/$name.out"
+    mkfifo "$request" "$response"
+    "$QA_RELAY" <"$request" >"$response" &
+    child=$!
+    exec 3>"$request" 4<"$response"
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"qoder-fixture","version":"1"}}}' >&3
+    IFS= read -r initialized <&4
+    printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&3
+    printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' >&3
+    IFS= read -r catalog <&4
+    printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}' >&3
+    IFS= read -r result <&4
+    printf '%s\n' "$result" >"$QA_PROBE/$name.tmp"
+    mv "$QA_PROBE/$name.tmp" "$QA_PROBE/$name.json"
+    if [ "$name" = nested ]; then
+        exec 3>&- 4<&-
+        wait "$child"
+    fi
+}
+if [ "${1:-}" = --nested-probe ]; then
+    probe nested
+    exit
+fi
+probe native
+"$0" --nested-probe 3>&- 4<&-
+sleep 60
+"#,
+    );
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({"yolo":true,"clis":{"qoder":{"type":"qoder","program":native}}}).to_string(),
+    )
+    .unwrap();
+    let source = json!({"mcpServers": {
+        "facade": {"command":relay},
+        "other": {"command":"unrelated-server"}
+    }});
+    let config = home.project.join(".mcp.json");
+    std::fs::write(&config, source.to_string()).unwrap();
+    let started = home
+        .command(&test_binaries().facade)
+        .env("QA_PROBE", home.folder())
+        .env("QA_RELAY", relay)
+        .args(["start", "-d", "--name", "native-run", "qoder"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+
+    let read = |name| {
+        let output = home.folder().join(format!("{name}.json"));
+        assert!(wait_until(LOADED_TIMEOUT, || output.is_file()), "{name}");
+        let frame: Value =
+            facade_scenarios::serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let result = frame["result"]["structuredContent"].clone();
+        assert_eq!(result["status"], "success", "{result}");
+        result
+    };
+    let native = read("native");
+    let nested = read("nested");
+    let kinds = |result: &Value| {
+        let mut kinds = result["data"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["type"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        kinds.sort();
+        kinds
+    };
+    assert_eq!(kinds(&native), ["managed"]);
+    assert_eq!(kinds(&nested), ["guest", "managed"]);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .agent_from_watch("native-run")
+        .is_some_and(|agent| agent["tools_state"] == "available")));
+    assert_eq!(std::fs::read_to_string(config).unwrap(), source.to_string());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_native_relay_waits_for_session_evidence_and_the_catalog_can_establish_its_run() {
+    let home = TestHome::new("mcp-native-session");
+    let relay = &test_binaries().mcp;
+    let native = install_script(
+        home.folder(),
+        "codex-fixture",
+        r#"#!/bin/sh
+set -eu
+test -n "$FACADE_AGENT"
+mkfifo "$QA_PROBE/input" "$QA_PROBE/output"
+"$QA_RELAY" <"$QA_PROBE/input" >"$QA_PROBE/output" &
+exec 3>"$QA_PROBE/input" 4<"$QA_PROBE/output"
+request() {
+    printf '%s\n' "$2" >&3
+    IFS= read -r response <&4
+    printf '%s\n' "$response" >"$QA_PROBE/$1.tmp"
+    mv "$QA_PROBE/$1.tmp" "$QA_PROBE/$1.json"
+}
+request initial '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"codex-fixture","version":"1"}}}'
+request awaiting '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}'
+while [ ! -f "$QA_PROBE/session-ready" ]; do sleep 0.05; done
+request catalog "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"sessionId\":\"$QA_SESSION\"}}}"
+while [ ! -f "$QA_PROBE/catalog-checked" ]; do sleep 0.05; done
+request mismatch '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}'
+request proven "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"list_agents\",\"arguments\":{},\"_meta\":{\"sessionId\":\"$QA_SESSION\"}}}"
+sleep 60
+"#,
+    );
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({"yolo":true,"clis":{"codex":{"type":"codex","program":native}}}).to_string(),
+    )
+    .unwrap();
+    let session = "a1a1a1a1-b2b2-4333-8444-c5c5c5c5c5c5";
+    let started = home
+        .command(&test_binaries().facade)
+        .env("QA_PROBE", home.folder())
+        .env("QA_RELAY", relay)
+        .env("QA_SESSION", session)
+        .args(["start", "-d", "--name", "native-session", "codex"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    let read = |name| {
+        let output = home.folder().join(format!("{name}.json"));
+        assert!(wait_until(LOADED_TIMEOUT, || output.is_file()), "{name}");
+        facade_scenarios::serde_json::from_slice::<Value>(&std::fs::read(output).unwrap()).unwrap()
+    };
+    assert!(read("initial")["result"]["serverInfo"].is_object());
+    assert_eq!(
+        read("awaiting")["result"]["structuredContent"]["reason"],
+        "refused"
+    );
+
+    let report = std::fs::read_dir(home.path.join("framework/runs/a1"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("session");
+    let mut hook = home
+        .command(&test_binaries().facade)
+        .args(["hook", "session-start"])
+        .arg(report)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        hook.stdin.take().unwrap(),
+        "{}",
+        json!({"hook_event_name":"SessionStart","session_id":session})
+    )
+    .unwrap();
+    assert!(hook.wait().unwrap().success());
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .run_facade_ok(&["status", "native-session"])
+        .contains(session)));
+    std::fs::write(home.folder().join("session-ready"), "").unwrap();
+
+    assert!(read("catalog")["result"]["tools"].is_array());
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .agent_from_watch("native-session")
+        .is_some_and(|agent| agent["tools_state"] == "available")));
+    std::fs::write(home.folder().join("catalog-checked"), "").unwrap();
+
+    assert_eq!(
+        read("mismatch")["result"]["structuredContent"]["reason"],
+        "refused"
+    );
+    let proved = read("proven");
+    let agents = proved["result"]["structuredContent"]["data"]["agents"]
+        .as_array()
+        .unwrap();
+    assert_eq!(agents.len(), 1, "{proved}");
+    assert_eq!(agents[0]["type"], "managed");
+}
+
 #[test]
 fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
     let home = TestHome::new("mcpwait");
@@ -43,6 +236,30 @@ fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
         assert!(refused["data"].get("id").is_none(), "{refused}");
         assert!(refused["data"].get("next").is_none(), "{refused}");
     }
+    for options in [
+        json!({}),
+        json!({ "timeout_seconds": 0 }),
+        json!({ "timeout_seconds": 1 }),
+    ] {
+        let mut send = json!({
+            "to": recipient.address, "text": "refuse this result wait", "wait_for": "result",
+        });
+        send.as_object_mut()
+            .unwrap()
+            .extend(options.as_object().unwrap().clone());
+        let refused = sender_mcp.call("send_message", send);
+        assert_eq!(refused["status"], "failure", "{refused}");
+        assert_eq!(refused["reason"], "unsupported", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .unwrap()
+                .contains("receive the reply in your terminal"),
+            "{refused}"
+        );
+        assert!(refused["data"].get("id").is_none(), "{refused}");
+    }
+    assert!(home.submitted_messages().is_empty());
     let removed = recipient_mcp.call("read_messages", json!({ "wait": true }));
     assert_eq!(removed["status"], "failure", "{removed}");
     assert_eq!(removed["reason"], "invalid_argument", "{removed}");
@@ -63,7 +280,6 @@ fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
         ("omitted", json!({})),
         ("zero", json!({ "timeout_seconds": 0 })),
         ("delivery alone", json!({ "wait_for": "delivery" })),
-        ("result alone", json!({ "wait_for": "result" })),
     ]
     .into_iter()
     .map(|(text, options)| {
@@ -101,15 +317,49 @@ fn a_matching_read_finds_a_reply_already_typed_into_a_managed_terminal() {
     let bob = home.start_named_fake("bob", &[]);
     let mut ada_mcp = McpTestClient::open_configured(&home, &ada.id);
     let mut bob_mcp = McpTestClient::open_configured(&home, &bob.id);
-    let sent = ada_mcp.call(
+    let request = "Please answer in a linked reply";
+    let refused = ada_mcp.call(
         "send_message",
         json!({
-            "to": bob.address, "text": "Please answer in a linked reply",
-            "wait_for": "delivery", "timeout_seconds": 30,
+            "to": bob.address, "text": request, "wait_for": "result", "timeout_seconds": 30,
         }),
     );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM send_routes", [], |row| row
+            .get::<_, u32>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM messages WHERE text = ?1",
+            [request],
+            |row| { row.get::<_, u32>(0) }
+        )
+        .unwrap(),
+        0
+    );
+    assert!(home.submitted_messages().is_empty());
+
+    let sent = ada_mcp.call(
+        "send_message",
+        json!({ "to": bob.address, "text": request }),
+    );
     assert_eq!(sent["status"], "success", "{sent}");
-    assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "waiting_in_inbox", "{sent}");
+    let pasted_request = format!("{request} ");
+    assert!(
+        wait_until(secs(10), || home
+            .submitted_messages()
+            .iter()
+            .filter(|message| message.lines().skip(1).eq([pasted_request.as_str()]))
+            .count()
+            == 1),
+        "the request did not reach the fake terminal once"
+    );
     let original = sent["data"]["id"].as_str().expect("full send ID");
     let (inbox_id, _) = original.split_once('@').unwrap();
     let text = "The linked reply is ready";

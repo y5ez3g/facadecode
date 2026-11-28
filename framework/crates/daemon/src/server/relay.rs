@@ -21,12 +21,14 @@ pub(super) async fn serve<S: Service>(
     reader: &mut Reader,
     id: u64,
     params: Value,
+    work: &mut S::Work,
 ) -> anyhow::Result<()> {
     let accepted = connection.service.relay(params, connection.peer_pid).await;
     let RelayHandshake {
         answer,
         lines,
         link,
+        run_ended,
     } = match accepted {
         Ok(accepted) => accepted,
         Err(error) => {
@@ -37,7 +39,17 @@ pub(super) async fn serve<S: Service>(
     connection.outbox.answer(Some(id), Ok(answer)).await;
     let teller = tokio::spawn(tell_closing(connection.outbox.clone(), link.clone()));
     let mut calls = JoinSet::new();
-    let read = carry(&connection.outbox, reader, &lines, &link, &mut calls).await;
+    let read = {
+        let carrying = carry(&connection.outbox, reader, &lines, &link, &mut calls);
+        tokio::pin!(carrying);
+        tokio::select! {
+            read = &mut carrying => read,
+            () = run_ended => {
+                connection.service.relay_run_ended(work);
+                carrying.await
+            }
+        }
+    };
     let closing_answered = matches!(read, Ok(true));
     if closing_answered {
         lines.settle_cancelled().await;

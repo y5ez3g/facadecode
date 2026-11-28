@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -36,6 +37,8 @@ mod windows;
 pub use super::io_thread::WaitPacket;
 #[cfg(windows)]
 use windows as os;
+#[cfg(windows)]
+pub(crate) use windows::terminate;
 #[cfg(windows)]
 pub use windows::{birth, monotonic_now, presence};
 
@@ -154,6 +157,11 @@ pub fn snapshot(pid: u32) -> io::Result<Option<ProcessSnapshot>> {
 #[cfg(unix)]
 pub fn birth(pid: u32) -> io::Result<Option<String>> {
     snapshot(pid).map(|found| found.map(|found| found.birth))
+}
+
+/// The wall-clock start of the process identified by this birth value.
+pub fn started_at(identity: &ProcessIdentity) -> io::Result<Option<SystemTime>> {
+    Ok(while_same(identity, || Ok(os::started_at(&identity.birth)))?.flatten())
 }
 
 /// This process's identity.
@@ -442,21 +450,12 @@ pub fn signal_group(
     };
     match refused {
         Errno::ESRCH => Ok(GroupSignal::Ended),
-        // macOS refuses a group whose one process is its leader still exiting, its cleanup held by
-        // terminal output nobody read.
-        Errno::EPERM if leader_exiting_alone(group, leader)? => Ok(GroupSignal::Ended),
+        // macOS can refuse a group whose members have already exited.
+        Errno::EPERM if os::group_has_no_signal_recipient(group, leader).unwrap_or(false) => {
+            Ok(GroupSignal::Ended)
+        }
         refused => Err(refused.into()),
     }
-}
-
-/// Whether `leader` is exiting and is the one process left in `group`.
-#[cfg(unix)]
-fn leader_exiting_alone(group: i32, leader: &ProcessIdentity) -> io::Result<bool> {
-    if !os::leader_exiting(group, leader)? {
-        return Ok(false);
-    }
-    let members = group_members(group)?;
-    Ok(members.iter().all(|member| member == leader))
 }
 
 /// Logs, as `service`, what came of signalling the group of run `run`. A caller that keeps trying
@@ -491,6 +490,40 @@ pub fn log_group_signal(
 /// The parent of process `pid`; None where no process has that ID.
 pub fn parent(pid: u32) -> io::Result<Option<u32>> {
     os::parent(pid)
+}
+
+/// The live parent of this exact child. An ended or reparented child proves no link.
+pub fn parent_identity(child: &ProcessIdentity) -> io::Result<Option<ProcessIdentity>> {
+    let observed = while_same(child, || {
+        let Some(pid) = parent(child.pid)?.filter(|&pid| pid > 1 && pid != child.pid) else {
+            return Ok(None);
+        };
+        let Some(birth) = birth(pid)? else {
+            return Ok(None);
+        };
+        let parent_process = ProcessIdentity { pid, birth };
+        #[cfg(windows)]
+        // Windows retains the original parent PID even if it has since been reused.
+        if parent_process
+            .birth
+            .parse::<u64>()
+            .ok()
+            .zip(child.birth.parse::<u64>().ok())
+            .is_none_or(|(parent, child)| parent >= child)
+        {
+            return Ok(None);
+        }
+        Ok((presence(child)? == Presence::Running
+            && presence(&parent_process)? == Presence::Running
+            && parent(child.pid)? == Some(pid))
+        .then_some(parent_process))
+    })?;
+    Ok(observed.flatten())
+}
+
+/// The kernel's executable path for the identified process.
+pub fn executable(identity: &ProcessIdentity) -> io::Result<Option<PathBuf>> {
+    Ok(while_same(identity, || os::executable(identity.pid))?.flatten())
 }
 
 /// The name the system lists process `pid` under; None where no process has that ID.
@@ -670,6 +703,7 @@ impl ProcessObservation {
 mod os {
     use std::io;
     use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+    use std::path::PathBuf;
     use std::sync::OnceLock;
     use std::time::{Duration, SystemTime};
 
@@ -759,6 +793,14 @@ mod os {
         from_stat(pid, |stat| stat.parent())
     }
 
+    pub(super) fn executable(pid: u32) -> io::Result<Option<PathBuf>> {
+        match std::fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(path) => Ok(Some(path)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// `/proc/<pid>/comm`, the name the process runs under.
     pub(super) fn name(pid: u32) -> io::Result<Option<String>> {
         let comm = read(pid, "comm")?;
@@ -783,18 +825,47 @@ mod os {
         Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
     }
 
+    pub(super) fn started_at(birth: &str) -> Option<SystemTime> {
+        let ticks: u64 = birth.parse().ok()?;
+        // SAFETY: sysconf takes a configuration name and does not use pointers.
+        let frequency = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        let frequency = u64::try_from(frequency).ok().filter(|&rate| rate > 0)?;
+        let start = Duration::from_secs(ticks / frequency)
+            + Duration::from_nanos(ticks % frequency * 1_000_000_000 / frequency);
+        // /proc/stat reports boot time only to the second. The boot clock preserves the
+        // resolution of the process's start ticks and includes time spent suspended.
+        let mut clock = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let now = SystemTime::now();
+        // SAFETY: clock is writable for one timespec and CLOCK_BOOTTIME is a Linux clock.
+        if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut clock) } != 0 {
+            return None;
+        }
+        let uptime = Duration::new(
+            clock.tv_sec.try_into().ok()?,
+            clock.tv_nsec.try_into().ok()?,
+        );
+        now.checked_sub(uptime.checked_sub(start)?)
+    }
+
     pub(super) fn group_members(group: i32) -> io::Result<Vec<ProcessIdentity>> {
         let listing = std::fs::read_dir("/proc")?.flatten();
         let pids = listing.filter_map(|entry| entry.file_name().to_str()?.parse().ok());
         Ok(identities_in(group, pids))
     }
 
-    /// Whether `leader` still leads `group` and has exited all through.
-    pub(super) fn leader_exiting(group: i32, leader: &ProcessIdentity) -> io::Result<bool> {
+    /// Whether the exited leader is the only process left in its group.
+    pub(super) fn group_has_no_signal_recipient(
+        group: i32,
+        leader: &ProcessIdentity,
+    ) -> io::Result<bool> {
         let found = snapshot(leader.pid)?;
-        Ok(found.is_some_and(|found| {
+        let exited = found.is_some_and(|found| {
             found.birth == leader.birth && found.group == group && found.exited == Some(true)
-        }))
+        });
+        Ok(exited && group_members(group)?.iter().all(|member| member == leader))
     }
 
     pub(super) fn watch(identity: &ProcessIdentity) -> io::Result<Watch> {
@@ -887,6 +958,7 @@ mod os {
 mod os {
     use std::io;
     use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+    use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
     use nix::sys::signal::Signal;
@@ -1008,8 +1080,43 @@ mod os {
         Ok(checked(pid)?.map(|record| record.snapshot()))
     }
 
+    pub(super) fn started_at(birth: &str) -> Option<SystemTime> {
+        let (seconds, micros) = birth.split_once('.')?;
+        let micros = micros.parse::<u32>().ok()?;
+        if micros >= 1_000_000 {
+            return None;
+        }
+        SystemTime::UNIX_EPOCH.checked_add(Duration::new(seconds.parse().ok()?, micros * 1_000))
+    }
+
     pub(super) fn parent(pid: u32) -> io::Result<Option<u32>> {
         Ok(checked(pid)?.map(|record| record.i32_at(PARENT_AT) as u32))
+    }
+
+    pub(super) fn executable(pid: u32) -> io::Result<Option<PathBuf>> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut buffer = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: proc_pidpath writes at most the supplied size to the buffer.
+        let written = unsafe {
+            libc::proc_pidpath(
+                pid as libc::c_int,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+            )
+        };
+        if written <= 0 {
+            let error = io::Error::last_os_error();
+            return match Record::read(pid)? {
+                None => Ok(None),
+                Some(_) => Err(error),
+            };
+        }
+        let path = buffer[..written as usize]
+            .split(|&byte| byte == 0)
+            .next()
+            .unwrap_or_default();
+        Ok(Some(PathBuf::from(std::ffi::OsStr::from_bytes(path))))
     }
 
     /// The name `proc_name` gives the process.
@@ -1068,6 +1175,10 @@ mod os {
     }
 
     pub(super) fn group_members(group: i32) -> io::Result<Vec<ProcessIdentity>> {
+        Ok(identities_in(group, group_pids(group)?.into_iter()))
+    }
+
+    fn group_pids(group: i32) -> io::Result<Vec<u32>> {
         let mut pids: Vec<libc::pid_t> = vec![0; 256];
         let listed = loop {
             let size = (pids.len() * size_of::<libc::pid_t>()) as libc::c_int;
@@ -1082,14 +1193,41 @@ mod os {
             }
             pids.resize(pids.len() * 2, 0);
         };
-        let positive = pids[..listed].iter().filter(|&&pid| pid > 0);
-        Ok(identities_in(group, positive.map(|&pid| pid as u32)))
+        pids.truncate(listed);
+        Ok(pids
+            .into_iter()
+            .filter(|&pid| pid > 0)
+            .map(|pid| pid as u32)
+            .collect())
+    }
+
+    /// Confirms the kernel listed the original leader and the other members have exited.
+    pub(super) fn group_has_no_signal_recipient(
+        group: i32,
+        leader: &ProcessIdentity,
+    ) -> io::Result<bool> {
+        if !leader_exiting(group, leader)? {
+            return Ok(false);
+        }
+        let pids = group_pids(group)?;
+        // An empty list can also mean macOS refused the query.
+        if !pids.contains(&leader.pid) {
+            return Ok(false);
+        }
+        for pid in pids.into_iter().filter(|&pid| pid != leader.pid) {
+            if let Some(member) = snapshot(pid)?
+                && (member.group != group || member.exited != Some(true))
+            {
+                return Ok(false);
+            }
+        }
+        leader_exiting(group, leader)
     }
 
     /// Whether `leader` still leads `group` and is exiting. Asked only after a group signal got
-    /// EPERM, together with whether it is the group's one process: its exit may wait for PTY output
-    /// nobody read, which closing a removed run's master lets go. XNU sets `P_WEXIT` before every
-    /// thread has ended, so presence and exits never take this flag as proof of an exit.
+    /// EPERM. Its exit may wait for PTY output nobody read, which closing a removed run's master
+    /// lets go. XNU sets `P_WEXIT` before every thread has ended, so presence and exits require
+    /// their own evidence.
     pub(super) fn leader_exiting(group: i32, leader: &ProcessIdentity) -> io::Result<bool> {
         let Some(record) = checked(leader.pid)? else {
             return Ok(false);
@@ -1288,16 +1426,14 @@ mod tests {
     #[test]
     fn a_process_is_identified_by_its_birth_and_a_reused_identity_reads_as_ended() {
         let me = own_identity().unwrap();
+        let other = ProcessIdentity {
+            birth: format!("{}0", me.birth),
+            ..me.clone()
+        };
         assert_eq!(presence(&me).unwrap(), Presence::Running);
-        assert_eq!(
-            presence(&ProcessIdentity {
-                birth: format!("{}0", me.birth),
-                ..me.clone()
-            })
-            .unwrap(),
-            Presence::Ended,
-            "another birth is another process"
-        );
+        assert_eq!(presence(&other).unwrap(), Presence::Ended);
+        assert!(started_at(&me).unwrap().unwrap() <= SystemTime::now());
+        assert_eq!(started_at(&other).unwrap(), None);
         let home = TestFolder::new("observed-child");
         let mut child = std::process::Command::new("/bin/sleep")
             .arg("60")
@@ -1666,14 +1802,26 @@ mod tests {
     fn a_zombie_only_group_has_ended_when_macos_refuses_its_signal() {
         use std::os::unix::process::CommandExt;
         let home = TestFolder::new("zombie-group");
-        let mut child = std::process::Command::new("/usr/bin/true")
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("10")
             .env("FACADE_HOME", &home)
             .process_group(0)
             .spawn()
             .unwrap();
         let pid = child.id();
+        let group = pid as i32;
+        let mut member = std::process::Command::new("/usr/bin/true")
+            .env("FACADE_HOME", &home)
+            .process_group(group)
+            .spawn()
+            .unwrap();
+        let pids = [pid, member.id()];
+        nix::sys::signal::killpg(Pid::from_raw(group), Signal::SIGHUP).unwrap();
         let until = Instant::now() + Duration::from_secs(5);
-        while peek_child_exit(pid as i32).is_none() {
+        while pids
+            .iter()
+            .any(|pid| peek_child_exit(*pid as i32).is_none())
+        {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1681,9 +1829,12 @@ mod tests {
             pid,
             birth: birth(pid).unwrap().unwrap(),
         };
-        let outcome = signal_group(pid as i32, &identity, Signal::SIGKILL);
+        let whole_group = signal_group(group, &identity, Signal::SIGKILL);
+        member.wait().unwrap();
+        let leader_only = signal_group(group, &identity, Signal::SIGKILL);
         child.wait().unwrap();
-        assert_eq!(outcome.unwrap(), GroupSignal::Ended);
+        assert_eq!(whole_group.unwrap(), GroupSignal::Ended);
+        assert_eq!(leader_only.unwrap(), GroupSignal::Ended);
     }
 
     /// A process's ancestors run from its parent up: a shell's background child has the shell, then

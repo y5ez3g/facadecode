@@ -27,6 +27,8 @@ or `~/.facade` by default, and put that home's `framework/bin` on PATH. Open a n
 `facade --version` and `facade status` to confirm the executable and Facade home. If a program uses the same name,
 invoke the home launcher by its full path.
 
+Installed `facade` and `facade-mcp` use their own Facade home by default. Set `FACADE_HOME` to select another.
+
 The installer, the extension and `facade upgrade` select a build by numeric version and then source commit time.
 A build with a higher rank can replace the selected build. Equal or lower ranks keep the selected version.
 
@@ -69,6 +71,8 @@ Start the built-in adapters with their native command names, including `facade s
 and `facade start copilot` for GitHub Copilot CLI. Kiro uses its V3 terminal.
 A Kiro session saved with a native profile retains that profile's tools when resumed. Facade's
 managed relay and session-start hook use a Facade profile.
+
+In a Facade-managed OMP run, MCP servers run inside the OMP process and are managed through `/mcp`, outside the shared worker's `omp ps --all` view.
 
 - `facade start [OPTIONS] <CLI> [CLI_ARGS]...` starts a built-in or configured CLI. Put `--name`, `--machine`,
   `--workdir`, `--worktree` and `-d` before the CLI name. Arguments after that name go to the CLI, including its own
@@ -115,7 +119,8 @@ wake it when needed.
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
   the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
   screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
-  and prints one receipt.
+  and prints one receipt. It restores the terminal app's measured foreground, background and cursor colors when the
+  attached CLI changed them.
 - In every terminal app, a CLI that tracks the mouse gets the wheel, clicks and drags as when it runs alone, so its own
   selection and copying work where it has them. To select with the terminal app, hold its own selection key, such as Fn
   in macOS Terminal.
@@ -138,6 +143,8 @@ wake it when needed.
   the foreground and with `-d`. The agent's screen answers the CLI's color queries with them from its first output, so
   a CLI picks the theme it picks when run alone. A terminal app answers within milliseconds. Facade waits up to one
   second for one that does not say it has finished. The CLI chooses its own theme for a color without an answer.
+- An agent started by a managed agent through MCP `start_agent` inherits the caller's terminal colors, including
+  across machines and through every generation. An agent started by a Guest uses the CLI's default theme.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
@@ -162,6 +169,7 @@ To answer a message, use the sender address in `to` and the message number in `r
 shows `from command line (#c17@devbox)`. The original recipient can send one linked reply while the command waits.
 
 For a managed agent, the Orchestrator waits for an empty input box and checks the pasted draft before submitting it.
+An active turn shows Working while any unseen completion is retained. Just done can show again when work ends.
 Codex queues an ordinary message with Tab while Working. Idle delivery, startup prompts and recovered in-flight
 drafts use Enter. A Guest takes messages with `read_messages`. Background delivery has a 30-second deadline.
 When Shell explicitly waits,
@@ -187,12 +195,15 @@ this is the configuration when using `facade-mcp` on PATH.
 {"mcpServers": {"facade": {"command": "facade-mcp"}}}
 ```
 
-Pass `FACADE_HOME` in that server's environment to use a different home. For both message tools, `timeout_seconds`
+The launcher selects its installation's home. Pass `FACADE_HOME` in the server's environment to override it.
+For both message tools, `timeout_seconds`
 defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
 or `result`. After `reply_timeout`, use the original full message address in `read_messages`' `reply_to` filter.
 A managed agent with terminal message delivery can read immediately or end its turn to receive messages in its input.
 A positive read timeout for that agent is refused before touching its inbox. Read pages with `after` or `last`.
-Tool results carry complete message text inline.
+For that agent, `send_message` refuses `wait_for: "result"` before saving the request. It can send without waiting
+and receive the reply in its terminal. Guests and managed runs without terminal message delivery can wait for a
+linked reply inline. Tool results carry complete message text.
 Managed agents receive replies and background failures in their terminals. A terminal notice begins with `🔔`.
 Its record number is available in the inbox. `start_agent` returns the agent's address, name, folder and machine ID.
 A first prompt's failure and its startup problem share one notice in the live caller's inbox.
@@ -210,7 +221,10 @@ runs get their managed instructions from their run hook or extension.
 settings at start or resume. A Guest reads YOLO from its machine's settings and appears in `list` at its first MCP
 tool call. With YOLO on, an agent can reach any agent the Orchestrator can reach. With YOLO off, it can act within
 its creation tree. Shell and VS Code have full reach for the actions they offer. Each CLI's rules describe how it
-handles tool approval, trust and sandbox settings. See the [product description](../PRODUCT.md) and
+handles tool approval, trust and sandbox settings. MCP `start_agent` and Shell `start -d` and `resume -d` are
+unattended. With YOLO on, Facade handles their supported startup trust questions. For unattended launches, it turns
+off updates where the CLI offers a per-run control. The person handles native trust and updates in foreground
+Shell and VS Code launches. See the [product description](../PRODUCT.md) and
 [configuration](../extension/features/CONFIGURATION.md).
 
 ## Folders and machines

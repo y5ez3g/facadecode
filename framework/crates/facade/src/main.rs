@@ -88,6 +88,9 @@ impl fmt::Display for ExitText<'_> {
 
 fn main() {
     facade_base::take_test_build();
+    if std::env::var_os("FACADE_HOME").is_none_or(|home| home.is_empty()) {
+        select_home(facade_base::paths::installed_facade_home());
+    }
     let arguments = match cli::parse() {
         Ok(arguments) => arguments,
         Err(ParseError::Usage(message)) => {
@@ -359,15 +362,17 @@ fn local_machine_name() -> String {
 struct LaunchConsole {
     size: (u16, u16),
     colors: LaunchColors,
+    unattended: bool,
     /// The console a launch in the foreground keeps for its view.
     view: Option<attach::Probe>,
 }
 
 impl LaunchConsole {
-    fn without_terminal() -> Self {
+    fn without_terminal(unattended: bool) -> Self {
         Self {
             size: DEFAULT_TERMINAL_SIZE,
             colors: LaunchColors::default(),
+            unattended,
             view: None,
         }
     }
@@ -400,19 +405,20 @@ fn read_screen_tip(agent: &str) -> String {
 /// from there. A launch without a terminal takes the defaults.
 fn launch_console(detach: bool) -> anyhow::Result<LaunchConsole> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Ok(LaunchConsole::without_terminal());
+        return Ok(LaunchConsole::without_terminal(detach));
     }
     let size = attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE);
     if detach && !asks_colors() {
         return Ok(LaunchConsole {
             size,
-            ..LaunchConsole::without_terminal()
+            ..LaunchConsole::without_terminal(true)
         });
     }
     if detach {
         return Ok(LaunchConsole {
             size,
             colors: attach::Probe::read_colors()?,
+            unattended: true,
             view: None,
         });
     }
@@ -420,12 +426,13 @@ fn launch_console(detach: bool) -> anyhow::Result<LaunchConsole> {
     Ok(LaunchConsole {
         size,
         colors: probe.colors,
+        unattended: false,
         view: Some(probe),
     })
 }
 
-/// Whether a launch in the background can ask the terminal for its colors: a shell's background job
-/// may not read it, and a terminal without escape sequences would print the question.
+/// Whether Shell can ask the terminal for its colors: a shell's background job may not read it,
+/// and a terminal without escape sequences would print the question.
 fn asks_colors() -> bool {
     facade_base::console::owns_input()
         && std::env::var("TERM").map_or(cfg!(windows), |term| term != "dumb")
@@ -451,7 +458,12 @@ fn missing_cli(options: StartOptions) -> i32 {
     let error = connect_or_start()
         .ok()
         .and_then(|mut client| {
-            commands::start(&mut client, options, &LaunchConsole::without_terminal()).err()
+            commands::start(
+                &mut client,
+                options,
+                &LaunchConsole::without_terminal(false),
+            )
+            .err()
         })
         .unwrap_or_else(|| {
             errors::Problem::MissingCli {
@@ -471,10 +483,10 @@ fn scope(local: bool, machine: Option<String>) -> Scope {
     }
 }
 
-fn select_machine_home(home: Option<PathBuf>) {
+fn select_home(home: Option<PathBuf>) {
     if let Some(home) = home {
-        // SAFETY: hidden SSH commands select the home before opening a socket or starting threads.
-        // Any service started below inherits this home.
+        // SAFETY: startup and the hidden SSH commands select the home before starting threads.
+        // The services they start inherit the selected home.
         unsafe { std::env::set_var("FACADE_HOME", home) };
     }
 }
@@ -499,8 +511,18 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Daemon { takeover: true, .. } => daemon_client::takeover(),
         Command::Daemon {
             install_only: true, ..
-        } => facade_base::programs::select_running().map(|_| 0),
-        Command::Daemon { detach: true, .. } => daemon_client::detach(),
+        } => daemon_client::install_only(),
+        Command::Daemon { detach: true, .. } => {
+            let installed_relay =
+                std::env::var_os("FACADE_STARTUP_SELECT_HOME").is_some_and(|value| value == "1");
+            if installed_relay {
+                let home = facade_base::paths::facade_home()?;
+                select_home(facade_base::paths::active_installation_home(&home));
+                // SAFETY: detecting the launcher home precedes starting any service.
+                unsafe { std::env::remove_var("FACADE_STARTUP_SELECT_HOME") };
+            }
+            daemon_client::detach(installed_relay)
+        }
         Command::Daemon {
             await_startup: Some(words),
             ..
@@ -513,7 +535,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             action,
             &connect_or_start,
             &daemon_client::machine_socket,
-            &select_machine_home,
+            &select_home,
         ),
         Command::Start { options, .. } if options.cli_and_args.is_empty() => {
             Ok(missing_cli(options))

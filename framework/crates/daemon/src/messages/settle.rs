@@ -118,8 +118,8 @@ impl Deliveries {
 
     /// Ends the open deliveries among `numbers` as `outcome` says, `open` held: writes them and the
     /// results they owe in one transaction, tells their sends, and withdraws those the outcome
-    /// takes back. A confirmed erase can also make a settled notice readable. Returns false
-    /// if a required store commit failed and its proof must be kept.
+    /// takes back. A confirmed erase can also make a settled notice readable or withdraw a
+    /// settled message. Returns false if a required store commit failed and its proof must be kept.
     pub(super) fn settle_open(
         &self,
         open: &mut OpenMap,
@@ -173,8 +173,22 @@ impl Deliveries {
         }
         let recorded = blocking_in_place(|| {
             if cleaned_paste {
-                self.table
-                    .settle_cleaned_paste(&writes, &results, &withdrawals, numbers)
+                // An unissued reservation also withdraws. Only a confirmed erase can retire a
+                // settled message. Its receipt supplies the earlier daemon's write facts.
+                let confirmed_erase = matches!(
+                    outcome,
+                    Outcome::Withdrawn {
+                        text_written: TextWritten::Full,
+                        ..
+                    }
+                );
+                self.table.settle_cleaned_paste(
+                    &writes,
+                    &results,
+                    &withdrawals,
+                    numbers,
+                    confirmed_erase,
+                )
             } else if withdrawals.is_empty() {
                 self.table.settle_messages(&writes, &results)
             } else {
@@ -251,6 +265,9 @@ impl Deliveries {
         for mut notice in written.cleaned_notices {
             self.identify(&mut notice);
             self.updated(&notice);
+        }
+        for to in written.late_withdrawals {
+            self.removed(to);
         }
         self.hand_on(open, results, &written.results, &due);
         true

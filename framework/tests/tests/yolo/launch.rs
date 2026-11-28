@@ -10,15 +10,17 @@ use facade_scenarios::*;
 
 use super::{real, record, settings};
 
-const CLIS: [&str; 11] = [
+const CLIS: [&str; 12] = [
     "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
-    "omp",
+    "omp", "copilot",
 ];
-const UPDATER_KEYS: [&str; 4] = [
+const UPDATER_KEYS: [&str; 6] = [
     "DISABLE_AUTOUPDATER",
     "AGY_CLI_DISABLE_AUTO_UPDATE",
     "MUSE_NO_AUTO_UPDATE",
     "OPENCODE_DISABLE_AUTOUPDATE",
+    "KIRO_NO_AUTO_UPDATE",
+    "COPILOT_AUTO_UPDATE",
 ];
 const UPDATE: &str = "check_for_update_on_startup";
 const SESSION: &str = "2f6c0f0e-6a87-4b3d-9d1e-5f0b1e2c3d4a";
@@ -119,8 +121,15 @@ fn overrides(args: &[String]) -> Vec<(&str, &str)> {
     result
 }
 
-fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bool, yolo: bool) {
-    let startup = agent && yolo;
+fn check_cli(
+    home: &TestHome,
+    cli: &str,
+    args: &[String],
+    env: &Value,
+    unattended: bool,
+    yolo: bool,
+) {
+    let startup = unattended && yolo;
     let has = |wanted: &str| args.iter().any(|arg| arg == wanted);
     let work = match cli {
         "claude" | "agy" => &["--dangerously-skip-permissions"][..],
@@ -137,10 +146,16 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
         "agy" => Some(("AGY_CLI_DISABLE_AUTO_UPDATE", "true")),
         "muse" => Some(("MUSE_NO_AUTO_UPDATE", "1")),
         "opencode" => Some(("OPENCODE_DISABLE_AUTOUPDATE", "1")),
+        "kiro-cli" => Some(("KIRO_NO_AUTO_UPDATE", "1")),
+        "copilot" => Some(("COPILOT_AUTO_UPDATE", "false")),
         _ => None,
     };
     if let Some((key, value)) = updater {
-        assert_eq!(env[key].as_str(), agent.then_some(value), "{cli} {key}");
+        assert_eq!(
+            env[key].as_str(),
+            unattended.then_some(value),
+            "{cli} {key}"
+        );
     }
     let folder = real(&home.project);
     let overrides = overrides(args);
@@ -185,7 +200,7 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
             };
             let trust = format!("{{ {} = {{ trust_level = \"trusted\" }} }}", json!(path));
             assert_eq!(config("projects"), startup.then_some(trust.as_str()));
-            assert_eq!(config(UPDATE), startup.then_some("false"));
+            assert_eq!(config(UPDATE), unattended.then_some("false"));
         }
         "agy" => {
             let settings = run_settings(args);
@@ -237,7 +252,7 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
             assert_eq!(has("--approve"), startup);
             assert_eq!(
                 env["PI_SKIP_VERSION_CHECK"].as_str(),
-                startup.then_some("1")
+                unattended.then_some("1")
             );
             let extension = args
                 .windows(2)
@@ -257,78 +272,122 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
                 yolo.then_some("dangerous")
             );
             assert_eq!(has("--respect-workspace-trust=false"), startup);
+            let path = option(args, "--config").unwrap();
+            let settings: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(
+                settings.get("auto_update"),
+                unattended.then_some(&json!(false))
+            );
         }
         "agent" => {
             assert_eq!(has("--force"), yolo);
             assert_eq!(option(args, "--sandbox"), yolo.then_some("disabled"));
             assert_eq!(has("--trust"), startup);
+            assert_eq!(has("--disable-auto-update"), unattended);
         }
         "kiro-cli" => {
             assert_eq!(has("--trust-all-tools"), yolo);
             assert_eq!(has("--trust-workspace"), startup);
         }
         "qoder" => {
+            let settings = run_settings(args);
             assert_eq!(
                 option(args, "--permission-mode"),
                 yolo.then_some("bypass_permissions")
             );
             assert_eq!(
-                run_settings(args)["permissions"].get("trustDirectories"),
+                settings["permissions"].get("trustDirectories"),
                 startup.then_some(&json!([folder]))
             );
+            assert_eq!(settings["general"]["enableAutoUpdate"], !unattended);
+            assert_eq!(settings["general"]["preferredEditor"], "vim");
         }
         "omp" => {
             let mode = if yolo { "yolo" } else { "always-ask" };
             assert_eq!(option(args, "--approval-mode"), Some(mode));
+            let path = option(args, "--config").unwrap();
+            let settings: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(settings["mcp"]["shared"].as_bool(), Some(false));
+            assert_eq!(
+                settings["startup"]["checkUpdate"].as_bool(),
+                unattended.then_some(false)
+            );
+            assert_eq!(
+                settings["update"]["auto"].as_bool(),
+                unattended.then_some(false)
+            );
         }
+        "copilot" => {}
         _ => unreachable!(),
     }
 }
 
-fn exercise_starts(agent: bool) {
+fn exercise_starts(agent: bool, detached: bool) {
     let home = TestHome::new("launch-policy");
     let capture = Capture::new(&home);
     let caller = home.start_fake("caller");
     let mut tools = McpTestClient::open(&home, &caller.id);
-    let clis: Value = CLIS
+    let mut clis: Value = CLIS
         .into_iter()
         .map(|cli| (cli.to_owned(), capture.entry()))
         .collect();
+    let qoder_settings = home.folder().join("qoder-settings.json");
+    let native_settings = json!({"general": {"enableAutoUpdate": true, "preferredEditor": "vim"}});
+    std::fs::write(&qoder_settings, native_settings.to_string()).unwrap();
+    clis["qoder"]["args"] = json!(["--settings", qoder_settings]);
     for yolo in [true, false] {
         set_clis(&home, yolo, &clis);
         for cli in CLIS {
             let name = format!("{cli}-{yolo}");
+            let mut foreground = None;
             if agent {
                 mcp_start(&home, &mut tools, cli, &name);
             } else {
-                // The Shell invocation takes person policy even with an agent's identity in its env.
-                let result = home
-                    .command(&test_binaries().facade)
-                    .env("FACADE_AGENT", &caller.id)
-                    .args(["start", "-d", "--name", &name, cli])
-                    .stdin(Stdio::null())
-                    .output()
-                    .unwrap();
-                assert!(result.status.success(), "{name}: {}", stderr(&result));
+                let mut args = vec!["start"];
+                if detached {
+                    args.push("-d");
+                }
+                args.extend(["--name", &name, cli]);
+                // These Shell runs keep their source even with an agent's identity in the environment.
+                let mut command = home.command(&test_binaries().facade);
+                command.env("FACADE_AGENT", &caller.id).args(args);
+                if detached {
+                    let result = command.stdin(Stdio::null()).output().unwrap();
+                    assert!(result.status.success(), "{name}: {}", stderr(&result));
+                } else {
+                    foreground = Some(TestTerminal::spawn(&mut command, 80, 24));
+                }
             }
             let (args, env) = capture.read();
             let run = record(&home, &name);
             assert_eq!(run["yolo"], yolo);
             assert_eq!(run.get("creator").is_some(), agent);
-            check_cli(&home, cli, &args, &env, agent, yolo);
+            check_cli(&home, cli, &args, &env, agent || detached, yolo);
             home.run_facade_ok(&["stop", &name]);
+            if let Some(mut terminal) = foreground {
+                assert!(terminal.wait_exit(LOADED_TIMEOUT).is_some(), "{name}");
+            }
         }
     }
+    assert_eq!(
+        std::fs::read_to_string(qoder_settings).unwrap(),
+        native_settings.to_string()
+    );
 }
 
 #[test]
-fn shell_starts_apply_work_policy_and_leave_startup_to_the_person() {
-    exercise_starts(false);
+fn attended_shell_starts_leave_trust_and_updates_to_the_person() {
+    exercise_starts(false, false);
+}
+
+#[test]
+fn detached_shell_starts_apply_unattended_policy_and_keep_their_source() {
+    exercise_starts(false, true);
 }
 
 #[test]
 fn mcp_starts_apply_updater_policy_in_both_yolo_modes_and_gate_startup() {
-    exercise_starts(true);
+    exercise_starts(true, false);
 }
 
 #[test]
@@ -546,7 +605,7 @@ const UPDATER_OPTIONS: [&[&str]; 5] = [
 ];
 
 #[test]
-fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
+fn codex_disabled_updates_follow_the_unattended_policy() {
     let home = TestHome::new("codex-launch-options");
     let capture = Capture::new(&home);
     let mut codex = capture.entry();
@@ -564,16 +623,33 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
         .copied()
         .chain(["--", "--config=check_for_update_on_startup=false"])
         .collect();
-    for (name, yolo, expected_updates) in [
-        ("agent-off", false, &[][..]),
-        ("person-on", true, &["true"; UPDATER_OPTIONS.len()][..]),
-        ("agent-on", true, &["false"][..]),
+    for (name, yolo, shell, detached) in [
+        ("agent-off", false, false, false),
+        ("person-off", false, true, false),
+        ("detached-off", false, true, true),
+        ("person-on", true, true, false),
+        ("detached-on", true, true, true),
+        ("agent-on", true, false, false),
     ] {
+        let unattended = !shell || detached;
         set_clis(&home, yolo, &json!({ "codex": codex }));
-        if name == "person-on" {
-            let mut command = vec!["start", "-d", "--name", name, "codex"];
+        let mut foreground = None;
+        if shell {
+            let mut command = vec!["start"];
+            if detached {
+                command.push("-d");
+            }
+            command.extend(["--name", name, "codex"]);
             command.extend(person_args.iter().copied());
-            home.run_facade_ok(&command);
+            if detached {
+                home.run_facade_ok(&command);
+            } else {
+                foreground = Some(TestTerminal::spawn(
+                    home.command(&test_binaries().facade).args(command),
+                    80,
+                    24,
+                ));
+            }
         } else {
             mcp_start(&home, &mut tools, "codex", name);
         }
@@ -590,43 +666,41 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
             .iter()
             .filter_map(|&(key, value)| (key == UPDATE).then_some(value))
             .collect();
-        assert_eq!(
-            updates.as_slice(),
-            expected_updates,
-            "{name} updater options"
-        );
+        let mut expected = Vec::new();
+        if shell {
+            expected.extend(["true"; UPDATER_OPTIONS.len()]);
+        }
+        expected.extend(unattended.then_some("false"));
+        assert_eq!(updates, expected, "{name} updater options");
         let migration = overrides.iter().find_map(|&(key, value)| {
             (key == "notice.model_migrations" || key.starts_with("notice.model_migrations."))
                 .then_some((key, value))
         });
-        if name == "agent-on" {
-            assert!(
-                overrides.iter().any(|&(key, value)| {
-                    (key == "notice.model_migrations"
-                        && value
-                            .split_whitespace()
-                            .collect::<String>()
-                            .contains(&format!("\"{MODEL}\"=\"gpt-6-luna\"")))
-                        || (key.starts_with("notice.model_migrations.")
-                            && key.contains(MODEL)
-                            && value == "\"gpt-6-luna\"")
-                }),
-                "Codex receives its model migration acknowledgement: {migration:?}"
-            );
-        } else {
-            assert!(
-                migration.is_none(),
-                "{name} leaves the native notice enabled"
-            );
-        }
-        if name == "person-on" {
+        assert_eq!(
+            overrides.iter().any(|&(key, value)| {
+                (key == "notice.model_migrations"
+                    && value
+                        .split_whitespace()
+                        .collect::<String>()
+                        .contains(&format!("\"{MODEL}\"=\"gpt-6-luna\"")))
+                    || (key.starts_with("notice.model_migrations.")
+                        && key.contains(MODEL)
+                        && value == "\"gpt-6-luna\"")
+            }),
+            unattended && yolo,
+            "Codex receives its model migration acknowledgement: {migration:?}"
+        );
+        if shell {
             assert_eq!(
-                &argv[argv.len().saturating_sub(person_args.len())..],
-                person_args.as_slice(),
+                &argv[argv.len() - 2..],
+                &person_args[person_args.len() - 2..],
                 "{name} native options and their terminator"
             );
         }
         home.run_facade_ok(&["stop", name]);
+        if let Some(mut terminal) = foreground {
+            assert!(terminal.wait_exit(LOADED_TIMEOUT).is_some(), "{name}");
+        }
         assert_eq!(
             std::fs::read(&config_file).unwrap(),
             written.as_bytes(),
@@ -658,7 +732,7 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
 }
 
 #[test]
-fn reopening_an_agent_started_by_mcp_uses_person_policy_and_keeps_its_creator() {
+fn shell_resumes_use_their_own_policy_and_keep_the_creator() {
     let home = TestHome::new("launch-resume-agent");
     let capture = Capture::new(&home);
     set_clis(&home, true, &json!({ "claude": capture.entry() }));
@@ -697,14 +771,13 @@ fn reopening_an_agent_started_by_mcp_uses_person_policy_and_keeps_its_creator() 
     let first = record(&home, "worker");
     home.run_facade_ok(&["stop", "worker"]);
 
-    let output = home
-        .command(&test_binaries().facade)
-        .env("DISABLE_AUTOUPDATER", "0")
-        .args(["resume", "-d", "worker"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
+    let mut foreground = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .env("DISABLE_AUTOUPDATER", "0")
+            .args(["resume", "worker"]),
+        80,
+        24,
+    );
     let (args, env) = capture.read();
     let resumed = record(&home, "worker");
 
@@ -723,6 +796,17 @@ fn reopening_an_agent_started_by_mcp_uses_person_policy_and_keeps_its_creator() 
     assert!(run.get("skipDangerousModePermissionPrompt").is_none());
     assert_eq!(env["DISABLE_AUTOUPDATER"], "0");
     assert_eq!(first_settings["skipDangerousModePermissionPrompt"], true);
+
+    home.run_facade_ok(&["stop", "worker"]);
+    assert!(foreground.wait_exit(LOADED_TIMEOUT).is_some());
+    home.run_facade_ok(&["resume", "-d", "worker"]);
+    let (args, env) = capture.read();
+    assert_eq!(record(&home, "worker")["creator"], first["creator"]);
+    assert_eq!(
+        run_settings(&args)["skipDangerousModePermissionPrompt"],
+        true
+    );
+    assert_eq!(env["DISABLE_AUTOUPDATER"], "1");
 }
 
 #[test]
@@ -769,6 +853,6 @@ fn opening_a_native_saved_session_as_a_new_agent_uses_person_policy() {
     let (args, env) = capture.read();
     assert_eq!(&args[..2], ["resume", SESSION]);
     assert!(overrides(&args).contains(&("analytics.enabled", "false")));
-    check_cli(&home, "codex", &args, &env, false, true);
+    check_cli(&home, "codex", &args, &env, true, true);
     assert_eq!(std::fs::read(config_file).unwrap(), native_config);
 }

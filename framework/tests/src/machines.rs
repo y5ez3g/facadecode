@@ -3,6 +3,8 @@
 use std::fmt::Write;
 use std::path::Path;
 
+use facade_base::ssh::REMOTE_LOGIN_COMMAND;
+
 use crate::{TestHome, install_script};
 
 /// Installs the SSH substitute for these homes before their daemons start.
@@ -37,6 +39,7 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
     #[cfg(windows)]
     let keygen = crate::git_install().join("usr/bin/ssh-keygen.exe");
     let keygen = shell_path(&keygen);
+    let login_command = shell_literal(REMOTE_LOGIN_COMMAND);
     let mut targets = String::new();
     let mut sources = String::new();
     for (index, &(destination, home, facade)) in machines.iter().enumerate() {
@@ -97,14 +100,13 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
             if installed.exists() {
                 continue;
             }
-            std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
-            std::fs::write(&installed, &shim).unwrap();
             #[cfg(unix)]
-            std::fs::set_permissions(
-                &installed,
-                std::os::unix::fs::PermissionsExt::from_mode(0o755),
-            )
-            .unwrap();
+            install_script(installed.parent().unwrap(), "facade", &shim);
+            #[cfg(windows)]
+            {
+                std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+                std::fs::write(&installed, &shim).unwrap();
+            }
         }
         install_script(
             &home.fixture_bin(),
@@ -261,7 +263,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$#" -ge 1 ] || exit 64
 entrypoint=command
-[ "$#" -ne 1 ] || entrypoint=login
+if [ "$#" -eq 2 ] && [ "$2" = {login_command} ]; then entrypoint=login; fi
 case "$1" in
 {targets}  *) printf '%s\n' 'SSH destination does not name a test machine' >&2; exit 64 ;;
 esac
@@ -271,10 +273,10 @@ if [ "$#" -eq 5 ] && [ "$1 $2 $3 $4 $5" = "facade machine serve --home-hex $enco
   printf '%s\n' wake >> "$serves"
   exec "$program" machine serve --home-hex "$encoded_home"
 fi
-# In login mode the first line is the platform probe. The next command may span lines
+# After the login command the first input line is the platform probe. The next command may span lines
 # in its quoted script. Consume exactly through its verified machine-serve line so the
 # bootstrap can read its own decision on this same stdin.
-if [ "$#" -eq 0 ]; then
+if [ "$entrypoint" = login ]; then
   IFS= read -r probe && [ "$probe" = 'echo "facade-platform-%OS%-$PSHOME"' ] || exit 64
   printf 'QA login\r\nfacade-platform-%%OS%%-\r\n'
   IFS= read -r line || exit 64

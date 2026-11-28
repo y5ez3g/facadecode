@@ -3,9 +3,11 @@
 //! snapshot, its environment from its process environment block, and its end from a wait
 //! completion packet on a completion port.
 
-use std::ffi::c_void;
+use std::ffi::{OsString, c_void};
 use std::io;
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
@@ -21,7 +23,8 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_BASIC_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_VM_READ, WaitForSingleObject,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, PROCESS_VM_READ,
+    QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 
 use super::{Observed, PROC_POLL_INTERVAL, Presence, ProcessObservation};
@@ -35,6 +38,16 @@ pub fn birth(pid: u32) -> io::Result<Option<String>> {
     birth_of(process.as_handle()).map(Some)
 }
 
+pub(super) fn started_at(birth: &str) -> Option<SystemTime> {
+    const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
+    const TICKS_PER_SECOND: u64 = 10_000_000;
+
+    let ticks = birth.parse::<u64>().ok()?.checked_sub(UNIX_EPOCH_TICKS)?;
+    let elapsed = Duration::from_secs(ticks / TICKS_PER_SECOND)
+        + Duration::from_nanos(ticks % TICKS_PER_SECOND * 100);
+    SystemTime::UNIX_EPOCH.checked_add(elapsed)
+}
+
 /// Whether the process `identity` still runs. One the system no longer has, one born at another
 /// moment, and one that exited have ended.
 pub fn presence(identity: &ProcessIdentity) -> io::Result<Presence> {
@@ -46,6 +59,24 @@ pub fn presence(identity: &ProcessIdentity) -> io::Result<Presence> {
         return Ok(Presence::Ended);
     }
     Ok(Presence::Running)
+}
+
+pub(crate) fn terminate(identity: &ProcessIdentity) -> io::Result<()> {
+    let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
+    let Some(process) = open(identity.pid, access)? else {
+        return Ok(());
+    };
+    if birth_of(process.as_handle())? != identity.birth || has_ended(process.as_handle())? {
+        return Ok(());
+    }
+    // SAFETY: this handle belongs to the identified process and grants PROCESS_TERMINATE.
+    if unsafe { TerminateProcess(process.as_raw_handle(), 0) } == 0 {
+        let error = io::Error::last_os_error();
+        if !has_ended(process.as_handle())? {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 /// Nanoseconds on this machine's clock that does not jump, the clock of stop deadlines, the same
@@ -127,6 +158,29 @@ impl AsHandle for ProcessObservation {
 
 pub(super) fn parent(pid: u32) -> io::Result<Option<u32>> {
     Ok(listed(pid)?.map(|entry| entry.th32ParentProcessID))
+}
+
+pub(super) fn executable(pid: u32) -> io::Result<Option<PathBuf>> {
+    let Some(process) = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)? else {
+        return Ok(None);
+    };
+    let mut path = vec![0; 32768];
+    let mut length = path.len() as u32;
+    // SAFETY: path holds length UTF-16 units and the handle allows querying the image.
+    if unsafe {
+        QueryFullProcessImageNameW(
+            process.as_raw_handle(),
+            0,
+            path.as_mut_ptr(),
+            &raw mut length,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Some(PathBuf::from(OsString::from_wide(
+        &path[..length as usize],
+    ))))
 }
 
 /// The image's file name without `.exe`.

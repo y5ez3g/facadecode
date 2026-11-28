@@ -13,7 +13,7 @@ pub(super) struct InputGate {
     menu_redraw: Option<u64>,
     /// After recovery the last logged frame can precede a native report's withdrawal.
     recovery: RecoveryFrame,
-    /// A fresh ordinary frame can authorize a probe after a native wait or startup menu.
+    /// A fresh ordinary frame can authorize a probe after a native wait or menu.
     probe_after_wait: ProbeFrame,
 }
 
@@ -91,14 +91,15 @@ impl InputGate {
         self.blocked() && self.probe_after_wait == ProbeFrame::Composer
     }
 
-    pub(super) fn waits_for_startup_composer(&self) -> bool {
+    pub(super) fn waits_for_menu_composer(&self) -> bool {
         self.menu && !self.needs_composer && self.recovery == RecoveryFrame::None
     }
 
-    /// A complete redraw replaced the startup menu. The probe can establish whether it is empty.
-    pub(super) fn startup_composer(&mut self, reading: &BoxReading) {
-        if self.waits_for_startup_composer()
-            && matches!(reading.info.state, InputState::Usable | InputState::Draft)
+    /// A complete redraw replaced the menu. The probe can establish whether the composer is empty.
+    pub(super) fn menu_composer(&mut self, reading: &BoxReading) {
+        if self.waits_for_menu_composer()
+            && (matches!(reading.info.state, InputState::Usable | InputState::Draft)
+                || reading.unsure && reading.line.is_some())
         {
             self.probe_after_wait = ProbeFrame::Composer;
         }

@@ -71,6 +71,7 @@ pub(super) fn tools(
             "Devin's user MCP configuration names a {SERVER} server that is not Facade's"
         ));
     }
+    let mut imported = Vec::new();
     for file in project_files(
         server.cwd,
         &[
@@ -83,13 +84,20 @@ pub(super) fn tools(
             ".cursor/mcp.json",
         ],
     ) {
-        if read_object(&file)?["mcpServers"].get(SERVER).is_some() {
-            return Err(format!(
-                "{} already defines the {SERVER} server with project precedence",
-                file.display()
-            ));
+        if let Some(configured) = read_object(&file)?["mcpServers"].get(SERVER) {
+            if !runs_facade_mcp(configured) {
+                return Err(format!(
+                    "{} names a {SERVER} server that is not Facade's and has project precedence",
+                    file.display()
+                ));
+            }
+            imported.push(file);
         }
     }
+    let tools_config = match imported.as_slice() {
+        [file] => Some(file.clone()),
+        _ => None,
+    };
     session_start(&mut settings)?;
     let servers = object_at(&mut mcp, "mcpServers", "the user MCP configuration")?;
     servers.insert(SERVER.into(), agy_entry(entry));
@@ -134,6 +142,7 @@ pub(super) fn tools(
         ],
         files: vec![(USER_MCP.into(), format!("{mcp:#}\n"))],
         config_links,
+        tools_config,
         ..Wiring::default()
     })
 }
@@ -248,6 +257,9 @@ pub(super) fn settings(
             "config.json",
         ),
     };
+    if wiring.unattended {
+        settings["auto_update"] = json!(false);
+    }
     if !wiring.hooks.is_empty() {
         let starts = session_start(&mut settings).ok()?;
         for (_, command) in &wiring.hooks {

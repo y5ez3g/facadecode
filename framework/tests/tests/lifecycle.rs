@@ -615,6 +615,12 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
         assert!(wait_until(LOADED_TIMEOUT, || attempt.keeper_has_first_ping(&identity)));
         let connect = "startup-before-observing-daemon";
         let probe = "startup-before-daemon-probe";
+        let hello = "startup-before-native-hello";
+        let gates = if late {
+            format!("{connect},{probe}")
+        } else {
+            format!("{connect},{probe},{hello}")
+        };
         let mut command = home.command(&test_binaries().facade);
         if observer {
             command.args(["daemon", "--await-startup"]);
@@ -622,7 +628,7 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
             command.arg("list");
         }
         let mut command = command
-            .env("FACADE_TEST_GATES", format!("{connect},{probe}"))
+            .env("FACADE_TEST_GATES", gates)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -648,8 +654,15 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
                 wait_until(LOADED_TIMEOUT, || command.try_wait().unwrap().is_some()),
                 "the caller did not expire while the daemon was held"
             );
+        } else {
+            // The observer reads the window again when opening the transport. Let that read
+            // finish before the daemon publishes progress using its original clock.
+            home.wait_for_gate(hello);
         }
         home.release_gate(accept);
+        if !late {
+            home.release_gate(hello);
+        }
         let output = command.wait_with_output().unwrap();
         assert_ne!(output.status.success(), late, "{}", stderr(&output));
         if late {

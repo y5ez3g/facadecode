@@ -573,10 +573,10 @@ Facade resends with the original caller, target and internal request identity. I
 original attempt was withdrawn. Each new `send_message` call creates a message. By default, its receipt confirms
 inbox acceptance, and `read_messages` takes an immediate snapshot.
 
-Managed agents normally use inbox acceptance. Replies arrive in their terminals, and a failed background
-delivery earns a Facade notice. A guest can wait for a linked reply with `wait_for: "result"` and a positive
-`timeout_seconds`. A successful background delivery creates no notice. A repeat keeps the original delivery
-and its notice decision.
+Managed agents with terminal message delivery receive replies in their input. Facade refuses their
+`wait_for: "result"` before saving the message. A Guest or managed run without terminal message delivery can
+wait for a linked reply with `wait_for: "result"` and a positive `timeout_seconds`. A failed background
+delivery earns a Facade notice. A repeat keeps the original delivery and its notice decision.
 
 Set `timeout_seconds` from 1 to 30 to wait. For a send, also set `wait_for` to `delivery` for receipt by the target or
 `result` for its first linked reply. The duration covers the whole call. After `reply_timeout`, an agent can use the

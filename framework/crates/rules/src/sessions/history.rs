@@ -75,6 +75,45 @@ pub fn session_for_id(
         .next())
 }
 
+/// Whether an MCP session awaiting its first hook report belongs to this running CLI.
+pub fn live_mcp_session_matches(
+    rule: &Rule,
+    folder: &Path,
+    environment: &BTreeMap<String, String>,
+    id: &str,
+    pid: u32,
+    started_at: SystemTime,
+) -> Result<bool, ErrorBody> {
+    match rule.cli.as_str() {
+        "muse" if parse_session_id(id).as_deref() == Some(id) => {
+            let Some(data) = data_folder(environment, folder) else {
+                return Ok(false);
+            };
+            muse::live_session_matches(
+                &data.join("muse"),
+                &Folder::new(folder, Some(id)),
+                id,
+                pid,
+                started_at,
+            )
+        }
+        _ => Ok(false),
+    }
+}
+
+fn data_folder(environment: &BTreeMap<String, String>, folder: &Path) -> Option<PathBuf> {
+    env_var(environment, "XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            Some(
+                folder
+                    .join(home_folder_in(environment)?)
+                    .join(".local/share"),
+            )
+        })
+}
+
 /// The native profile Kiro saved for this local V3 session.
 pub(crate) fn kiro_profile(
     folder: &Path,
@@ -123,12 +162,7 @@ fn read_sessions(
             .map(|path| folder.join(path))
             .or_else(|| home.map(|home| home.join(default)))
     };
-    let data = || {
-        value("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| home.map(|home| home.join(".local").join("share")))
-    };
+    let data = || data_folder(environment, folder);
     match rule.cli.as_str() {
         "claude" => {
             configured("CLAUDE_CONFIG_DIR", ".claude").map(|root| claude::list(&root, scope))
@@ -323,6 +357,44 @@ mod tests {
     use super::*;
     use crate::test_folder::TestFolder;
     use serde_json::json;
+
+    #[test]
+    fn muse_native_mcp_session_matches_its_opening_process_before_the_first_prompt() {
+        const ID: &str = "016f64ad-a820-7000-8000-0123456789ab";
+        const RECORDED_AT: u64 = 1_577_942_100_028_650;
+        let home = TestFolder::new("muse-live-mcp");
+        let workspace = home.join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let data = home.join("data");
+        let session = data.join("muse/sessions/2020/01/01").join(ID);
+        std::fs::create_dir_all(&session).unwrap();
+        let mut route = json!({
+            "stream": { "kind": "session", "id": ID },
+            "recorded_at": RECORDED_AT,
+            "payload_type": "runtime.session.route_facts",
+            "payload": { "record": { "pid": 1001, "cwd": workspace } },
+        });
+        let transcript = session.join("session.jsonl");
+        std::fs::write(&transcript, format!("{route}\n")).unwrap();
+        let environment = BTreeMap::from([("XDG_DATA_HOME".into(), data.to_str().unwrap().into())]);
+        let rule = crate::find("muse").unwrap().unwrap();
+        let matches = |cwd, pid, began| {
+            live_mcp_session_matches(rule, cwd, &environment, ID, pid, began).unwrap()
+        };
+        let before = UNIX_EPOCH + Duration::from_micros(RECORDED_AT - 1);
+        let after = UNIX_EPOCH + Duration::from_micros(RECORDED_AT + 1);
+        assert!(matches(&workspace, 1001, before));
+        assert!(!matches(&workspace, 1002, before));
+        assert!(!matches(&home, 1001, before));
+        assert!(
+            !matches(&workspace, 1001, after),
+            "a PID used by an older run"
+        );
+
+        route.as_object_mut().unwrap().remove("recorded_at");
+        std::fs::write(&transcript, format!("{route}\n")).unwrap();
+        assert!(!matches(&workspace, 1001, before));
+    }
 
     #[test]
     fn muse_session_lookup_uses_the_first_prompt_before_the_index_has_it() {

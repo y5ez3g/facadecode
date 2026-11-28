@@ -2,6 +2,7 @@
 	"cli": "agent",
 	"display_name": "Cursor",
 	"program": "agent",
+	"launch": { "unattended_args": ["--disable-auto-update"] },
 	"arguments": {
 		"reserved": ["--resume", "--continue", "--new-session-id", "--print", "-p", "--output-format", "--force", "-f", "--yolo", "--auto-review", "--approve-mcps", "--sandbox", "--trust", "--workspace", "--worktree", "-w", "--data-dir", "--exclude-workspace-context", "--model"],
 		"required": ["--model", "--mode", "--add-dir", "--plugin-dir", "--image", "--api-key"],
@@ -34,6 +35,11 @@
 			{
 				"selected": "^ +Cursor Agent$",
 				"hint": { "pattern": "^ +Press any key to log in\\.\\.\\.$", "within": 2 }
+			},
+			{
+				"selected": "^ Available models +Max mode:",
+				"below_prompt": true,
+				"hint": { "pattern": "^ Type to filter • Enter to select • Tab to edit$", "within": 9 }
 			}
 		]
 	},
@@ -45,6 +51,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"], "resume_requires_saved_session": true },
+	"mcp": { "native_relay_chain": [], "reconnects_on_startup": true },
 	"status": {
 		"mechanism": "composer",
 		"working_hint": "ctrl+c to stop",

@@ -148,11 +148,11 @@ impl Input {
     }
 }
 
-/// An agent's record, its input as its rule reads the screen now, and whether its session is
-/// followed, taken at one moment.
+/// The agent record and current terminal facts, taken at one moment.
 pub(crate) struct Inspection {
     pub(crate) agent: ManagedAgent,
     pub(crate) input: InputInfo,
+    pub(crate) colors: TerminalColors,
     pub(crate) session_tracking: bool,
     pub(crate) viewers: Vec<String>,
     pub(crate) attachments: Vec<AttachmentInfo>,
@@ -261,8 +261,10 @@ pub(crate) enum AgentCommand {
         captures: bool,
         launch_command: Option<String>,
         tools: ToolsGiven,
+        tools_config: Option<PathBuf>,
         /// None leaves the screen's colors in use. Some replaces all of them, an omitted entry included.
         colors: Option<TerminalColors>,
+        allow_auto_trust: bool,
         reply: oneshot::Sender<ManagedAgent>,
     },
     /// Tells viewers the agent is removed, waits for a checkpoint being written, replies and ends
@@ -328,6 +330,8 @@ pub(crate) struct ActorStart {
 
 /// What an agent's state starts from.
 pub(crate) struct StateStart {
+    /// A configuration file that names a Facade server, for connection diagnostics.
+    pub(crate) tools_config: Option<PathBuf>,
     /// The file beside the screen that keeps the state's facts.
     pub(crate) file: PathBuf,
     /// What an earlier daemon kept there.
@@ -594,6 +598,17 @@ impl AgentHandle {
             .expect("the test's run accepts tool connections")
     }
 
+    /// Records a verified tool request on the live run.
+    pub(crate) fn note_tool_use(&self, run: u64) {
+        self.tools.send_if_modified(|connections| {
+            if connections.run != run || !connections.accepting || connections.used {
+                return false;
+            }
+            connections.used = true;
+            true
+        });
+    }
+
     /// Sends `command` to the actor, waiting for room. False where no actor takes it.
     pub(crate) async fn send(&self, command: AgentCommand) -> bool {
         self.commands.send(command).await.is_ok()
@@ -633,6 +648,8 @@ struct ToolsConnections {
     listed: usize,
     /// Keeps proof of a connection even if it closed before the actor read the watch.
     verified: bool,
+    /// A verified tool request has used this run's MCP connection.
+    used: bool,
 }
 
 impl ToolsConnections {
@@ -643,6 +660,7 @@ impl ToolsConnections {
             initialized: 0,
             listed: 0,
             verified: false,
+            used: false,
         }
     }
 

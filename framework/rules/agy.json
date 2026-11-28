@@ -20,7 +20,10 @@
 			],
 			"footer": "^\\? for shortcuts(?:\\s|$)"
 		},
-		"menus": [{ "selected": "^ ?> \\S", "not_selected": "^ ?> /", "next": "^ {2,3}\\S", "hint": { "pattern": "^ {2,3}↑/↓ Navigate · ", "within": 8 } }]
+		"menus": [
+			{ "selected": "^ ?> \\S", "not_selected": "^ ?> /", "next": "^ {2,3}\\S", "hint": { "pattern": "^ {2,3}↑/↓ Navigate · ", "within": 8 } },
+			{ "selected": "^Switch Model$", "hint": { "pattern": "^Keyboard: ↑/↓ Navigate {2}←/→ Effort {2}enter Select {2}esc Go Back$", "within": 19 } }
+		]
 	},
 	"paste": {
 		"bracketed": true,
@@ -35,7 +38,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--conversation", "${session_id}"] },
-	"mcp": { "session_meta_key": "antigravity.google/root_conversation_id", "managed_instructions_from_hook": true },
+	"mcp": { "native_relay_chain": [], "session_meta_key": "antigravity.google/root_conversation_id", "managed_instructions_from_hook": true },
 	"ready_tools": { "text": "/mcp", "typed": "^> /mcp\\s*$", "ready": "✓\\s+facade_facade\\b", "opened": "^MCP Servers\\s*$|\\besc Exit\\b", "close": "Escape" },
 	"yolo": {
 		"work": { "args": ["--mode", "accept-edits", "--dangerously-skip-permissions"], "settings": { "enableTerminalSandbox": false } },

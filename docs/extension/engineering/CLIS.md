@@ -38,12 +38,13 @@ disabled ones, report CONFIGURATION-4.1's errors. Recompute on settings-file/PAT
 and immediately before launch. Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or
 modifying settings, except creating a missing settings file under CONFIGURATION-1.3.
 
-A line of a CLI Facade does not support, known by the version its installation names, is unavailable for new starts and
-refused at a start, saying how to update. That line is OpenCode below version 2, as the `package.json` of npm's
-`opencode-ai` or `@opencode/cli` beside its program names it: it sends no activity reports, does not take `--standalone`
-and draws an input box no reader knows, so no message reaches it. Its refusal says to run `npm uninstall -g opencode-ai`,
-then `npm install -g @opencode/cli`. A version no installation file names is started; a 1.x program found so starts, and
-with the Facade tools exits at `--standalone` with its usage.
+OpenCode requires version 2.x or later. The `package.json` of npm's `opencode-ai` or `@opencode/cli` beside its
+program supplies the installed version. When that metadata is unavailable, an explicit start allows up to two seconds
+for `opencode --version`. A native executable receives the launch arguments in the version query. A script with
+additional arguments can select another program, so that launch uses package metadata where available. Shell and MCP
+refuse a confirmed 1.x version and tell the person how to upgrade. For npm installations, run
+`npm uninstall -g opencode-ai`, then `npm install -g @opencode/cli`. Discovery stays passive. An inconclusive check
+leaves the usual launch in place.
 
 ### 1.2 Executable and environment
 
@@ -168,7 +169,8 @@ its session integration (2.4) and, for Muse Code, its screen reader (2.3). It st
 unverified or unavailable, with why, never more than its evidence holds. A CLI's version is read only from what its
 installation keeps beside the program - the versions folder of Claude Code's native installer, Codex's
 `codex-package.json`, Muse Code's versioned program or its `.muse-version`, OpenCode's npm `package.json` - never by
-running it, and is kept with the launch as a diagnostic; Antigravity's and Pi's installations name none.
+running it, and is kept with the launch as a diagnostic. The explicit OpenCode start check in 1.1 can also identify the
+unsupported 1.x line in a standalone installation. Antigravity's and Pi's installations name no version.
 
 Ordinary input evidence distinguishes a usable input box, a draft, a native interaction and unknown. Activity or
 tracked keystrokes alone cannot prove the draft empty after paste/history navigation. Never send Enter as a probe.
@@ -749,26 +751,27 @@ summarizes the user-visible limits.
 
 **Use the initiating operation and the target home's YOLO setting.**
 
-MCP `start_agent` starts a run as an agent. Shell and editor starts and both forms of resume use person policy.
+MCP `start_agent` has agent origin. Shell and editor launches have person origin.
+MCP `start_agent` and Shell `start -d` and `resume -d` run unattended.
 All managed runs receive the approvals for Facade's MCP tools and its Codex hook. The CLI keeps its own login,
 project hooks and other approvals with YOLO off. YOLO selects the CLI's native work permissions and sandbox mode.
-A person-started run keeps the CLI's initial trust, update and risk prompts. A YOLO agent-started run uses the
-applicable startup controls below.
+Foreground Shell and editor launches leave startup trust and updates to the person and the CLI.
+Unattended launches with YOLO on use the applicable startup trust controls below.
 
-| CLI | Startup controls for agent plus YOLO |
+| CLI | Unattended startup controls with YOLO on |
 | --- | --- |
 | Claude Code | Suppress the bypass-permission warning in run settings and confirm the recognized folder-trust question. |
-| Codex | Trust the launch folder and suppress its startup update offer and recognized model-change notices. The run's `check_for_update_on_startup=false` takes precedence over ordinary overrides in this mode. |
+| Codex | Trust the launch folder and acknowledge recognized model-change notices. |
 | Antigravity | Trust the launch folder in the run settings. |
 | Muse Code | Trust the launch folder. |
-| OpenCode | The per-run updater switch also suppresses its update check. |
-| Pi | Approve the folder's project resources and skip the startup version check. |
+| Copilot | Confirm the one-time folder-trust answer when it is selected. |
+| Pi | Approve the folder's project resources. |
 
-An agent start disables automatic updates in Claude Code, Antigravity, OpenCode and the Muse Code launcher
-using their process environment. Automatic updater settings are applied independently of YOLO. Muse Code can
-still print a banner about a previous update. Its Windows native executable starts without the launcher (2.4).
+Unattended launches apply each CLI's supported per-run updater control in either YOLO mode. Codex's
+`check_for_update_on_startup=false` takes precedence over ordinary overrides. Muse Code can still print
+a banner about a previous update. Its Windows native executable starts without the launcher (2.4).
 When a Facade launch reuses a running CLI's environment, it restores the updater inputs before applying the
-destination's CLI entry. This includes a person start issued from inside that run.
+destination's CLI entry. This includes a Shell launch issued from inside that run.
 
 ## Checks
 

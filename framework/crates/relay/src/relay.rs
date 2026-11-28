@@ -10,9 +10,9 @@ use std::io::{self, StdoutLock, Write};
 use std::mem;
 #[cfg(unix)]
 use std::os::fd::AsFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(windows)]
 use crate::windows::{Events, Input};
@@ -24,7 +24,8 @@ use nix::time::{ClockId, clock_gettime};
 use crate::daemon::{self, DaemonLink, OpeningLink, RelayHelloParams};
 use crate::jsonrpc::{self, Id, Message};
 use crate::lines::Lines;
-use crate::startup::{Task, Ticket};
+use crate::socket::Destination;
+use crate::startup::{self, Task, Ticket};
 #[cfg(unix)]
 use crate::unix::ready_input_bytes;
 #[cfg(windows)]
@@ -41,7 +42,12 @@ pub(crate) fn log(level: &str, fact: &str) {
 
 /// Relays between standard input and output and the daemon at `socket`, saying `hello`, until
 /// the CLI's input ends and every request has its response, or no daemon is connected then.
-pub(crate) fn run(framework: PathBuf, socket: PathBuf, hello: RelayHelloParams) -> ExitCode {
+pub(crate) fn run(destination: Destination, hello: RelayHelloParams) -> ExitCode {
+    let Destination {
+        home,
+        socket,
+        installed,
+    } = destination;
     #[cfg(unix)]
     let input = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(input) => File::from(input),
@@ -59,8 +65,12 @@ pub(crate) fn run(framework: PathBuf, socket: PathBuf, hello: RelayHelloParams) 
         }
     };
     let mut relay = Relay {
-        framework,
+        framework: home.join("framework"),
+        home,
         socket,
+        installed,
+        launched_for: None,
+        launched_shell: None,
         launch: None,
         opening: None,
         startup: None,
@@ -196,10 +206,38 @@ enum StartupReadiness {
     Ready(Instant),
 }
 
+/// The published Shell, which can change while this relay continues to run.
+#[derive(PartialEq, Eq)]
+struct ShellPublication {
+    image: PathBuf,
+    bytes: u64,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
+}
+
+impl ShellPublication {
+    fn read(program: &Path) -> Option<Self> {
+        let image = program.canonicalize().ok()?;
+        let metadata = image.metadata().ok()?;
+        Some(Self {
+            image,
+            bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            created: metadata.created().ok(),
+        })
+    }
+}
+
 struct Relay {
     framework: PathBuf,
+    home: PathBuf,
     socket: PathBuf,
-    launch: Option<Task<Option<Ticket>>>,
+    installed: bool,
+    /// The lock holder seen when we last asked the installed Shell for the socket.
+    launched_for: Option<(u32, String)>,
+    /// The Shell available at that time. It may be published after the relay.
+    launched_shell: Option<ShellPublication>,
+    launch: Option<Task<daemon::StartReport>>,
     opening: Option<Task<OpeningLink>>,
     startup: Option<Ticket>,
     notice_at: Instant,
@@ -299,7 +337,12 @@ impl Relay {
             };
             self.launch = None;
             match result {
-                Ok(ticket) => self.startup = ticket,
+                Ok(report) => {
+                    if let Some(socket) = report.socket {
+                        self.socket = socket;
+                    }
+                    self.startup = report.ticket;
+                }
                 Err(why) => log("warn", &format!("{why}; trying again")),
             }
         } else if self.opening.is_none() && Instant::now() < next_try {
@@ -332,7 +375,13 @@ impl Relay {
             );
             match Task::start(
                 move || {
-                    OpeningLink::open(&socket, &hello, Some((&framework, &ticket)), Some(until))
+                    OpeningLink::open(
+                        &socket,
+                        &hello,
+                        Some((&framework, &ticket)),
+                        None,
+                        Some(until),
+                    )
                 },
                 #[cfg(windows)]
                 self.events.startup_waker(),
@@ -345,7 +394,13 @@ impl Relay {
                 Err(error) => Err(error),
             }
         } else {
-            OpeningLink::open(&self.socket, &self.hello, None, None)
+            OpeningLink::open(
+                &self.socket,
+                &self.hello,
+                None,
+                self.installed.then_some(self.framework.as_path()),
+                None,
+            )
         };
         let link = match opening.and_then(|link| self.adopt(link, expected.as_ref())) {
             Ok(link) => link,
@@ -437,27 +492,43 @@ impl Relay {
         if !logged {
             log("warn", &format!("{err}; trying again"));
         }
-        let no_one_listens = matches!(
+        let may_launch = matches!(
             err.kind(),
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-        );
+        ) || (self.installed && err.kind() == io::ErrorKind::ConnectionAborted);
         let mut delay = self.reconnect_delay;
         self.reconnect_delay = (delay * 2).min(MAX_RECONNECT_DELAY);
-        if no_one_listens && !started_facade {
-            started_facade = true;
-            match Task::start(
-                daemon::start_facade,
-                #[cfg(windows)]
-                self.events.startup_waker(),
-            ) {
-                Ok(launch) => {
-                    self.launch = Some(launch);
-                    delay = MIN_RECONNECT_DELAY;
+        if may_launch {
+            let holder = self
+                .installed
+                .then(|| startup::daemon_lock(&self.framework))
+                .flatten();
+            let program = daemon::facade_program();
+            let shell = self
+                .installed
+                .then(|| program.as_deref().ok().and_then(ShellPublication::read))
+                .flatten();
+            let published = shell.is_some() && shell != self.launched_shell;
+            if !started_facade || holder.is_some() && holder != self.launched_for || published {
+                started_facade = true;
+                self.launched_for = holder;
+                self.launched_shell = shell;
+                let home = self.home.clone();
+                let installed = self.installed;
+                match Task::start(
+                    move || daemon::start_facade(&program?, &home, installed),
+                    #[cfg(windows)]
+                    self.events.startup_waker(),
+                ) {
+                    Ok(launch) => {
+                        self.launch = Some(launch);
+                        delay = MIN_RECONNECT_DELAY;
+                    }
+                    Err(why) => log(
+                        "warn",
+                        &format!("could not start Facade: {why}; trying again"),
+                    ),
                 }
-                Err(why) => log(
-                    "warn",
-                    &format!("could not start Facade: {why}; trying again"),
-                ),
             }
         }
         self.retry_at(Instant::now() + delay, true, started_facade);
@@ -539,13 +610,33 @@ impl Relay {
     /// Passes a line from the CLI on to the daemon, or holds it while no daemon takes lines.
     fn handle_cli_line(&mut self, line: Vec<u8>) {
         let read = match jsonrpc::read(&line) {
-            Message::Request { id } => ClientLine::Request(Pending {
-                id: Id::read(id),
-                line,
-                first_line_ns: monotonic_now(),
-                replay: Replay::First,
-                cancelled: false,
-            }),
+            Message::Request { id } => {
+                let id = Id::read(id);
+                if self.pending.iter().any(|request| request.id == id)
+                    || self.held.iter().any(
+                        |line| matches!(line, ClientLine::Request(request) if request.id == id),
+                    )
+                {
+                    // A reply with the duplicate ID would also retire the original request.
+                    let answer = b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"a request with this ID is still in flight\"}}\n";
+                    if let Err(error) = self
+                        .output
+                        .write_all(answer)
+                        .and_then(|()| self.output.flush())
+                    {
+                        log("warn", &format!("cannot answer the CLI: {error}"));
+                        self.input = None;
+                    }
+                    return;
+                }
+                ClientLine::Request(Pending {
+                    id,
+                    line,
+                    first_line_ns: monotonic_now(),
+                    replay: Replay::First,
+                    cancelled: false,
+                })
+            }
             Message::Notification { method } => {
                 if let Some(id) = jsonrpc::cancelled_id(&line, method) {
                     self.note_cancellation(&id);

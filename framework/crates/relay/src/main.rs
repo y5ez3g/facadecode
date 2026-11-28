@@ -1,9 +1,9 @@
 //! `facade-mcp`, the relay between a CLI's MCP client and the Facade daemon's MCP server.
 //!
 //! The CLI starts it and speaks MCP over its standard input and output, one JSON-RPC message per
-//! line. The relay passes each line on to the daemon of the Facade home its environment names,
+//! line. The relay passes each line on to the daemon of the selected Facade home,
 //! and each line the daemon writes back to its standard output. Where no daemon listens, it runs
-//! `facade daemon --detach` from its own folder once and connects when Facade is up. It reads only
+//! `facade daemon --detach` from its own folder and connects when Facade is up. It reads only
 //! three things of what it passes on: its own hello, the daemon's `closing`, and each line's
 //! `id`, by which it keeps the requests that have no response yet, for the next daemon when this
 //! one ends or a newer one takes over. Its arguments go into the hello and nothing else.
@@ -11,7 +11,7 @@
 //! Exit codes:
 //! - 0: its input ended, or could not be read any more, and every request had its response; or
 //!   its input ended while no daemon was connected.
-//! - 1: its environment names no Facade home, its standard input cannot be opened, or its
+//! - 1: no Facade home can be found, its standard input cannot be opened, or its
 //!   standard output cannot be written.
 
 mod daemon;
@@ -30,7 +30,7 @@ use std::process::ExitCode;
 use crate::daemon::RelayHelloParams;
 
 fn main() -> ExitCode {
-    let (framework, socket) = match socket::daemon_socket() {
+    let destination = match socket::daemon_socket() {
         Ok(socket) => socket,
         Err(why) => {
             relay::log(
@@ -53,5 +53,5 @@ fn main() -> ExitCode {
             .and_then(|cwd| cwd.into_os_string().into_string().ok()),
         reconnect: false,
     };
-    relay::run(framework, socket, hello)
+    relay::run(destination, hello)
 }

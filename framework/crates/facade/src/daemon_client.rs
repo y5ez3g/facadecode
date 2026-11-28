@@ -100,7 +100,7 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
 pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
     let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
     let until = Instant::now() + RUNNING_TIMEOUT;
-    let client = DaemonClient::connect(&socket, until, &mut |_| true).map_err(explicit)?;
+    let client = connect_local(&socket, until, &mut |_| true).map_err(explicit)?;
     if client.is_none() && services_running(&facade_base::paths::framework_dir()?)? {
         return Err(explicit(anyhow::anyhow!(errors::daemon_slow(
             true,
@@ -108,6 +108,27 @@ pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
         ))));
     }
     Ok(client)
+}
+
+/// Tries the requested endpoint, then the one the same home's daemon bound under another spelling.
+fn connect_local(
+    socket: &Path,
+    until: Instant,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+) -> anyhow::Result<Option<DaemonClient>> {
+    let client = DaemonClient::connect(socket, until, opening)?;
+    if client.is_some() || Instant::now() >= until {
+        return Ok(client);
+    }
+    let home = facade_base::paths::facade_home()?;
+    let Some((alternate, holder)) = service::alternate_daemon_socket(&home)? else {
+        return Ok(None);
+    };
+    let framework = home.join("framework");
+    DaemonClient::connect(&alternate, until, &mut |stream| {
+        service::authenticate_server(stream, &framework, Service::Daemon).as_ref() == Ok(&holder)
+            && opening(stream)
+    })
 }
 
 /// An explicit failure to reach a daemon that runs, such as an unusable home, a permission error
@@ -180,7 +201,7 @@ fn connect_with_takeover(
         cancelled,
         DAEMON_CONNECT_TIMEOUT,
         purpose.deadline(),
-        |socket, until| DaemonClient::connect(socket, until, opening),
+        |socket, until| connect_local(socket, until, opening),
     )?;
     let running = &client.hello_result.build;
     if !facade_base::takes_over(&ours, running)
@@ -207,12 +228,10 @@ fn connect_with_takeover(
                 timeout,
                 Some(until),
                 |socket, until| {
-                    Ok(
-                        DaemonClient::connect(socket, until, opening)?.filter(|client| {
-                            let build = &client.hello_result.build;
-                            build == &ours || facade_base::takes_over(build, &ours)
-                        }),
-                    )
+                    Ok(connect_local(socket, until, opening)?.filter(|client| {
+                        let build = &client.hello_result.build;
+                        build == &ours || facade_base::takes_over(build, &ours)
+                    }))
                 },
             )
         })
@@ -801,7 +820,7 @@ fn reach_daemon<T>(
 }
 
 /// Background startup succeeds as soon as there is a verified living daemon holding the lock.
-pub(super) fn detach() -> anyhow::Result<i32> {
+pub(super) fn detach(installed_relay: bool) -> anyhow::Result<i32> {
     programs::validate_running_build()?;
     let home = facade_base::paths::framework_dir()?;
     let accepted = reach_daemon(
@@ -819,7 +838,13 @@ pub(super) fn detach() -> anyhow::Result<i32> {
     if let Some(ticket) = accepted.ticket
         && std::env::var_os("FACADE_STARTUP_REPORT").as_deref() == Some(std::ffi::OsStr::new("1"))
     {
-        println!("facade-startup-locked {}", serde_json::to_string(&ticket)?);
+        println_or_end!("facade-startup-locked {}", serde_json::to_string(&ticket)?);
+    }
+    if installed_relay {
+        let selected = facade_base::paths::facade_home()?;
+        let active = facade_base::paths::active_installation_home(&selected);
+        let key = facade_base::paths::home_key(active.as_deref().unwrap_or(&selected));
+        println_or_end!("facade-startup-home-key {key}");
     }
     Ok(0)
 }
@@ -986,7 +1011,45 @@ pub(super) fn takeover() -> anyhow::Result<i32> {
         }
         return Err(report_editor_startup(error));
     }
+    repair_legacy_launchers()?;
     Ok(0)
+}
+
+pub(super) fn install_only() -> anyhow::Result<i32> {
+    programs::select_running()?;
+    repair_legacy_launchers()?;
+    Ok(0)
+}
+
+fn repair_legacy_launchers() -> anyhow::Result<()> {
+    let Some(upgrade) = programs::repair_legacy_launchers()? else {
+        return Ok(());
+    };
+    match upgrade.status {
+        programs::LegacyStatus::Migrated => {
+            eprintln!(
+                "Updated the previous Facade launchers in {}. If VS Code still has the Facade Code extension \
+                 that starts Core, update the extension in VS Code.",
+                upgrade.bin.display()
+            );
+            return Ok(());
+        }
+        programs::LegacyStatus::Active(agents) => {
+            eprintln!(
+                "The previous Facade Core still has active agents: {}.",
+                agents.join(", ")
+            );
+        }
+        programs::LegacyStatus::Deferred(reason) => {
+            eprintln!("{reason} The previous Core launchers are still in use.");
+        }
+    }
+    eprintln!(
+        "Configurations that point into {} still use Core. Update the Facade Code extension in \
+         VS Code. Let the Core agents finish or stop them, then rerun the installer.",
+        upgrade.bin.display()
+    );
+    Ok(())
 }
 
 /// Reports typed daemon refusals separately from human diagnostics for editor startup.

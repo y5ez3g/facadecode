@@ -222,7 +222,7 @@ fn a_custom_cli_runs_its_program_as_it_is() {
     let program = home
         .folder()
         .join(format!("chosen-program{}", std::env::consts::EXE_SUFFIX));
-    std::fs::copy(&test_binaries().fakecli, &program).unwrap();
+    copy_executable(&test_binaries().fakecli, &program);
     let missing = home.project.join("no-facade-ci-program");
     let entry = json!({
         "type": "custom", "program": program, "args": ["--resume-like", ""],

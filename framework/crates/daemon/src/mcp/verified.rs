@@ -13,7 +13,9 @@ use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{AcquirePresence, CatalogEvent, InboxAnswer, InboxOutput, Initialization, Relay};
+use super::{
+    AcquirePresence, CatalogEvent, InboxAnswer, InboxOutput, Initialization, PresenceStage, Relay,
+};
 use crate::{
     Cancel,
     delivery::SendControl,
@@ -28,6 +30,12 @@ pub(crate) struct ActorIdentity {
     pub(crate) receives_terminal_messages: bool,
 }
 
+pub(crate) struct AuthenticatedActor {
+    pub(crate) identity: ActorIdentity,
+    /// The live connection may hold this after it has served its catalog.
+    pub(crate) acquire: Option<AcquirePresence>,
+}
+
 pub(crate) type ActorFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub(crate) type Authenticate = Box<
@@ -35,7 +43,7 @@ pub(crate) type Authenticate = Box<
             Option<&'a str>,
             Option<&'a Value>,
             Option<&'a str>,
-        ) -> ActorFuture<'a, Result<ActorIdentity, ErrorBody>>
+        ) -> ActorFuture<'a, Result<AuthenticatedActor, ErrorBody>>
         + Send
         + Sync,
 >;
@@ -85,7 +93,10 @@ pub(crate) type DiscoverClis = Box<
 
 /// The instructions for the verified run and its prepared initialize lease.
 pub(crate) type ManagedInstructions = Box<
-    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, Result<Initialization, ErrorBody>>
+    dyn for<'a> Fn(
+            Option<&'a str>,
+            Option<&'a Value>,
+        ) -> ActorFuture<'a, Result<Initialization, ErrorBody>>
         + Send
         + Sync,
 >;
@@ -94,6 +105,7 @@ pub(crate) type ManagedInstructions = Box<
 pub(crate) type Ready = Box<
     dyn for<'a> Fn(
             Option<&'a str>,
+            Option<&'a Value>,
             CatalogEvent,
         ) -> ActorFuture<'a, anyhow::Result<Option<AcquirePresence>>>
         + Send
@@ -135,6 +147,7 @@ impl Verified {
         &self,
         relay: &Relay,
         client_name: Option<&str>,
+        meta: Option<&Value>,
     ) -> Result<Initialization, ErrorBody> {
         {
             let mut connection = self.connection.lock().await;
@@ -142,7 +155,7 @@ impl Verified {
                 connection.client_name = client_name.map(str::to_string);
             }
         }
-        (self.services.managed_instructions)(credential(relay)).await
+        (self.services.managed_instructions)(credential(relay), meta).await
     }
 
     pub(super) async fn actor(
@@ -150,26 +163,32 @@ impl Verified {
         relay: &Relay,
         meta: Option<&Value>,
     ) -> Result<ActorIdentity, ErrorBody> {
+        let credential = credential(relay);
         let mut connection = self.connection.lock().await;
-        if let Some(actor) = &connection.actor {
+        // A native host can share its server across sessions. Its current request still
+        // has to prove the managed actor even after the connection established one.
+        if let Some(actor) = &connection.actor
+            && (credential.is_some() || actor.kind == AgentKind::Guest)
+        {
             return Ok(actor.clone());
         }
-        let actor = (self.services.authenticate)(
-            credential(relay),
-            meta,
-            connection.client_name.as_deref(),
-        )
-        .await?;
-        connection.actor = Some(actor.clone());
-        Ok(actor)
+        let AuthenticatedActor { identity, acquire } =
+            (self.services.authenticate)(credential, meta, connection.client_name.as_deref())
+                .await?;
+        if let Some(acquire) = acquire {
+            relay.acquire_presence(PresenceStage::Authenticated, acquire);
+        }
+        connection.actor = Some(identity.clone());
+        Ok(identity)
     }
 
     pub(super) async fn prepare_presence(
         &self,
         relay: &Relay,
         event: CatalogEvent,
+        meta: Option<&Value>,
     ) -> Option<AcquirePresence> {
-        match (self.services.ready)(credential(relay), event).await {
+        match (self.services.ready)(credential(relay), meta, event).await {
             Ok(acquire) => acquire,
             // The callback can inspect private run material. Keep it out of logs.
             Err(_) => {

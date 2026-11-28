@@ -1394,21 +1394,69 @@ fn copilot_is_given_the_tools_beside_a_selected_plugin_that_is_not_on_the_machin
     assert_eq!(launch.tools, Tools::Injected, "{:?}", launch.tools);
 }
 
-/// Devin loads a folder's `.mcp.json` and `.cursor/mcp.json` ahead of the configuration Facade
-/// gives it, so a facade server in either keeps the run's server from serving it.
+/// Devin keeps imported Facade servers available for native relay authentication. A different
+/// server using the same name still prevents Facade from giving the run its tools.
 #[test]
-fn devin_is_not_given_the_tools_beside_a_facade_server_in_another_tool_s_project_file() {
+fn devin_can_use_an_imported_facade_relay() {
     for name in [".mcp.json", ".cursor/mcp.json"] {
         let root = scratch(&format!("devinproject{}", name.len()));
         let (home, cwd) = (root.join("home"), root.join("project"));
+        let path = cwd.join(name);
+        let imported = r#"{ "mcpServers": { "facade": { "command": "/elsewhere/facade-mcp" } } }"#;
+        let launch = || launch_in(&cwd, "devin", &[], &[("HOME", home.to_str().unwrap())]);
+        write(path.clone(), imported);
+        let available = launch();
+        assert_eq!(available.tools, Tools::Injected);
+        assert_eq!(available.tools_config, Some(path.clone()));
+        assert!(available.captures);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), imported);
+
         write(
-            cwd.join(name),
-            r#"{ "mcpServers": { "facade": { "command": "/elsewhere/facade-mcp" } } }"#,
+            path,
+            r#"{ "mcpServers": { "facade": { "command": "/elsewhere/other-mcp" } } }"#,
         );
-        let launch = launch_in(&cwd, "devin", &[], &[("HOME", home.to_str().unwrap())]);
-        match &launch.tools {
+        match &launch().tools {
             Tools::NotGiven(why) => assert!(why.contains(name), "{why}"),
             other => panic!("given the tools beside {name}: {other:?}"),
         }
     }
+}
+
+#[test]
+fn qoder_keeps_the_project_mcp_path_for_an_unverified_connection() {
+    let root = scratch("qoder-project-mcp");
+    let (home, cwd) = (root.join("home"), root.join("project"));
+    let entry = r#"{"mcpServers":{"facade":{"command":"/elsewhere/facade-mcp"}}}"#;
+    let start = || launch_in(&cwd, "qoder", &[], &[("HOME", home.to_str().unwrap())]);
+    write(cwd.join(".cursor/mcp.json"), entry);
+    assert_eq!(start().tools_config, None);
+
+    let file = cwd.join(".mcp.json");
+    write(file.clone(), entry);
+    let launch = start();
+    assert_eq!(launch.tools_config, Some(file.clone()));
+    assert_eq!(launch.tools, Tools::Injected);
+    assert!(launch.uses_run_credential && launch.captures);
+    assert_eq!(after(&launch, "--mcp-config"), in_run("mcp.json"));
+
+    write(file.clone(), &format!("// project MCP\n{entry}"));
+    assert_eq!(start().tools_config, Some(file.clone()));
+
+    write(
+        file.clone(),
+        &format!("{},}}", entry.strip_suffix('}').unwrap()),
+    );
+    assert_eq!(
+        start().tools_config,
+        None,
+        "Qoder ignores the trailing comma"
+    );
+
+    write(file, entry);
+    write(cwd.join(".qoder/settings.local.json"), entry);
+    assert_eq!(
+        start().tools_config,
+        None,
+        "multiple settings name the server"
+    );
 }

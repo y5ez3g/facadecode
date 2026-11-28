@@ -43,6 +43,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
+	"mcp": { "native_relay_chain": [] },
 	"status": {
 		"mechanism": "composer",
 		"working": ["^ *(?:[⠁-⣿] )?(?:Generating|Thinking|正在生成|正在思考)\\.\\.\\.(?: .*)?$", "^ *.*\\(esc to cancel, [^)]+\\)$", "^ *.*（按 esc 取消，[^）]+）$"],

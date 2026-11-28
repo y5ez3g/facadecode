@@ -206,6 +206,9 @@ The normal workspace suite skips these cases.
   the protocol or public entry point that exposes the behavior. Delete a boundary case only when the interface drops the
   behavior it covers.
 - Scenario tests use only the protocol and the programs.
+- On Unix, a separate process writes each generated executable fixture and exits before the
+  fixture is launched. This keeps executable write descriptors out of the test runner, where a
+  concurrent fork could inherit them and leave the executable busy.
 - Every test run uses an empty `TMPDIR` of its own, and every Facade home a test makes is inside it. No test writes to
   the person's home folder: `framework/scripts/test-all.sh` runs the tests with `HOME` in its temporary folder, and reports
   anything written there.

@@ -1869,7 +1869,7 @@ fn a_remote_worktree_is_shared_by_the_shell_and_editor() {
     facade_base::files::create_private_folder_all(&editor_runtime).unwrap();
     // Keep the running executable's identity stable if Cargo relinks another test's binaries.
     let worker = remote.folder().join("facade-fakecli");
-    std::fs::copy(&test_binaries().fakecli, &worker).unwrap();
+    copy_executable(&test_binaries().fakecli, &worker);
     check_remote_worktree(&local, &remote, &worker, |origin, agent, shells| {
         let address = agent["address"].as_str().expect("the remote address");
         let pid = agent["pid"].as_u64().expect("the remote PID");

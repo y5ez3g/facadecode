@@ -13,11 +13,11 @@ use facade_base::model::{
     terminal::{HiddenRows, InputState},
 };
 use facade_rules::{
-    PasteDrawing, Pattern, ProbeVerdict, find, is_own_draft, read_box, read_box_for_screen,
-    read_box_for_typing, read_draft, read_input, restored, shows_paste_end, space_taken,
-    verdict_of,
+    InputRule, PasteDisclosure, PasteDrawing, Pattern, ProbeVerdict, find, is_full_draft,
+    is_own_draft, read_box, read_box_for_screen, read_box_for_typing, read_draft, read_input,
+    restored, shows_paste_end, space_taken, verdict_of,
 };
-use facade_screen::{ScreenView, VisibleCell};
+use facade_screen::{Screen, ScreenView, VisibleCell};
 use recorded::view_of;
 
 fn recorded(cli: &str) -> Vec<serde_json::Value> {
@@ -81,13 +81,237 @@ fn claude_screens_read_as_recorded() {
 }
 
 #[test]
+fn native_login_menus_report_what_the_cli_is_waiting_for() {
+    for (cli, screen_text) in [
+        (
+            "codex",
+            concat!(
+                "  1. Sign in with ChatGPT\r\n> 2. Sign in with Device Code\r\n",
+                "  3. Sign in another way\r\n\r\n  Press enter to continue",
+            ),
+        ),
+        (
+            "codex",
+            "  Finish signing in via your browser\r\n\r\n  Press esc to cancel",
+        ),
+        (
+            "devin",
+            " How would you like to log in?\r\n\r\n ❭ 1 Log in with browser",
+        ),
+    ] {
+        let rule = find(cli).unwrap().unwrap();
+        let mut screen = Screen::new(80, 24, 0);
+        screen.feed(screen_text.as_bytes());
+        let login = read_box(&rule.input, &screen.view());
+        assert_eq!(login.info.state, InputState::Interaction, "{cli}");
+        assert_eq!(login.wait_kind, Some(WaitKind::Auth), "{cli}");
+
+        screen.feed(b"\x1b[2J\x1b[H");
+        screen.feed(screen_text.lines().next().unwrap().as_bytes());
+        let fragment = read_box(&rule.input, &screen.view());
+        assert_eq!(fragment.wait_kind, None, "{cli}");
+    }
+}
+
+#[test]
+fn codex_reads_browser_sign_in_when_its_url_wraps_through_the_screen() {
+    let rule = find("codex").unwrap().unwrap();
+    let mut screen = Screen::new(44, 24, 0);
+    screen.feed(
+        concat!(
+            "  Finish signing in via your browser\r\n\r\n",
+            "  If the link doesn't open automatically,\r\npress l to copy it:\r\n\r\n",
+        )
+        .as_bytes(),
+    );
+    // At this width the URL is drawn on separate rows above the cancellation footer.
+    for _ in 0..11 {
+        screen.feed(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n");
+    }
+    screen.feed(
+        concat!(
+            "\r\n  On a remote or headless machine? Press esc\r\n",
+            "and choose Sign in with Device Code.\r\n\r\n",
+        )
+        .as_bytes(),
+    );
+    let missing_footer = read_box(&rule.input, &screen.view());
+    assert_eq!(missing_footer.wait_kind, None);
+
+    screen.feed(b"  Press esc to cancel");
+    let login = read_box(&rule.input, &screen.view());
+    assert_eq!(login.info.state, InputState::Interaction);
+    assert_eq!(login.wait_kind, Some(WaitKind::Auth));
+
+    screen.feed(b"\x1b[2J\x1b[H  Press esc to cancel");
+    let missing_title = read_box(&rule.input, &screen.view());
+    assert_eq!(missing_title.wait_kind, None);
+}
+
+#[test]
+fn claude_reads_select_model_with_its_session_footer() {
+    let input = &find("claude").unwrap().unwrap().input;
+    let options = concat!(
+        "\x1b[?25l  Select model\r\n",
+        "  Your pick is the default for new sessions. For other models, use --model.\r\n\r\n",
+        "    1.  Default (recommended)\r\n    2.  Opus 5.5\r\n    3.  Fable 5.2\r\n",
+        "    4.  Sonnet 5.5\r\n  ❯ 5.  Haiku 5.5 ✔\r\n    ↓ 1 more\r\n\r\n",
+        "  ○ Low effort ←/→ to adjust\r\n\r\n  Use /fast to turn on fast mode (Opus 5.5).\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(options.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("  s to use this session only · Enter to save · Esc to cancel".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+
+    let border = "─".repeat(120);
+    screen.feed(
+        format!("\x1b[2J\x1b[H{border}\r\n❯\u{00a0}\r\n{border}\x1b[2;3H\x1b[?25h").as_bytes(),
+    );
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+}
+
+#[test]
 fn codex_screens_read_as_recorded() {
     reads_as_recorded("codex");
 }
 
 #[test]
+fn a_scrolled_prompt_reads_the_caret_on_a_blank_final_row() {
+    let rule = find("codex").unwrap().unwrap();
+    let mut screen = Screen::new(120, 30, 0);
+    screen.feed(
+        concat!(
+            "\x1b[1;1H• Working (esc to interrupt)",
+            "\x1b[3;1H• Queued follow-up inputs",
+            "\x1b[4;1H  ↳ an earlier message",
+            "\x1b[12;1H› visible draft",
+            "\x1b[12;120H\x1b[2m↑\x1b[0m",
+            "\x1b[28;1H  end of the pasted report"
+        )
+        .as_bytes(),
+    );
+    for row in [29, 30] {
+        screen.feed(format!("\x1b[{row};3H").as_bytes());
+        let read = read_box(&rule.input, &screen.view());
+        assert_eq!(read.info.state, InputState::Draft, "{}", read.info.evidence);
+        assert_eq!(read.draft_hidden(), Some(HiddenRows { above: 1, below: 0 }));
+        assert!(is_own_draft(
+            &rule.paste,
+            read.draft.as_deref().unwrap(),
+            "hidden beginning\nvisible draft\nend of the pasted report ",
+            read.draft_hidden(),
+        ));
+    }
+
+    screen.feed(b"\x1b[29;1H");
+    assert_eq!(
+        read_input(&rule.input, &screen.view()).state,
+        InputState::Unknown
+    );
+}
+
+#[test]
+fn copilot_model_selection_uses_the_session_heading_and_footer() {
+    let input = &find("copilot").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(b"\x1b[?25l\x1b[15;1H Session only. Copilot Fusion chooses a model;");
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("\x1b[30;1H ctrl+x → m manage · enter to select · esc to cancel".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
+fn devin_model_selection_uses_the_search_prompt_and_confirmation_footer() {
+    let input = &find("devin").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(b"\x1b[10;1H/ Type to search\x1b[10;3H");
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed(
+        "\x1b[30;1H↑↓ select · opt+p pin · ↵ confirm · opt+↵ this session only · esc cancel\x1b[10;3H"
+            .as_bytes(),
+    );
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
+fn cursor_model_selection_takes_input_below_its_visible_prompt() {
+    let input = &find("agent").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    let prompt = "  → \x1b[7m \x1b[27;2mPlan, search, build anything\x1b[0m";
+    let panel = concat!(
+        " Available models                     Max mode: OFF\r\n\r\n Filter:\r\n\r\n",
+        "    Grok 4.7\r\n    Grok 4.6\r\n →  Composer 2.5             (Tab to modify)\r\n",
+        "    Grok 4.5\r\n\r\n",
+        " Type to filter • Enter to select • Tab to edit",
+    );
+    screen.feed(format!("\x1b[?25l{prompt}").as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+    screen.feed(format!("\x1b[4;1H{panel}").as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+
+    screen.feed(format!("\x1b[2J\x1b[H{panel}\x1b[15;1H{prompt}").as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+}
+
+#[test]
+fn oh_my_pi_model_selection_uses_the_box_heading_and_keys() {
+    let input = &find("omp").unwrap().unwrap().input;
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(
+        "\x1b[?25l╭─ Models ─────────┬───────────────────────────────────────────────────────╮"
+            .as_bytes(),
+    );
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed(
+        "\x1b[29;1H│ ⏎/→ models · ↑/↓ providers · type to search · ⌥←/⌥→ kind · ⎋ close  │"
+            .as_bytes(),
+    );
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
 fn agy_screens_read_as_recorded() {
     reads_as_recorded("agy");
+}
+
+#[test]
+fn antigravity_reads_switch_model_with_its_keyboard_footer() {
+    let input = &find("agy").unwrap().unwrap().input;
+    let options = concat!(
+        "\x1b[?25lSwitch Model\r\n\r\n",
+        "  Search:  \r\n          ────────────────────\r\n\r\n",
+        "  Gemini 4 Neon\r\n  Gemini 4 Carbon\r\n  Gemini 4 Argon\r\n",
+        "> Gemini 4 Hydrogen     (current)\r\n  Orchestrator\r\n",
+        "  Gemini 3.8 Flash\r\n  Claude Opus 5.5\r\n",
+        "  Claude Sonnet 5.5\r\n  GPT-OSS 120B (Medium)\r\n\r\n",
+        "  Effort  ◂      ◉──────────○──────────○──────────○      ▸\r\n",
+        "                low      medium      high       xhigh\r\n",
+        "            Faster responses, lighter reasoning — great for simpler tasks\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(options.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("Keyboard: ↑/↓ Navigate  ←/→ Effort  enter Select  esc Go Back".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
 }
 
 /// Antigravity's command list under a draft that starts with `/` is no question of the CLI's, also
@@ -130,6 +354,28 @@ fn a_draft_row_antigravity_moves_along_by_tabs_reads_on() {
 #[test]
 fn muse_screens_read_as_recorded() {
     reads_as_recorded("muse");
+}
+
+#[test]
+fn muse_reads_choose_model_until_the_composer_returns() {
+    let input = &find("muse").unwrap().unwrap().input;
+    let options = concat!(
+        "\x1b[?25l  Choose model\r\n\r\n",
+        "  muse-wonder-1.0\r\n⟩ muse-ember-1.0\r\n",
+        "  muse-spark-1.3\r\n  muse-spark-1.2\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(80, 24, 0);
+    screen.feed(options.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("  ↑↓ move · enter confirm · esc go back".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+
+    let border = "─".repeat(80);
+    screen.feed(format!("\x1b[2J\x1b[H{border}\r\n❯ \r\n{border}\x1b[2;3H\x1b[?25h").as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
 }
 
 #[test]
@@ -325,6 +571,26 @@ fn qoder_waits_for_its_resumed_composer() {
 }
 
 #[test]
+fn devin_reads_its_startup_theme_question_with_the_confirmation_footer() {
+    let input = &find("devin").unwrap().unwrap().input;
+    let question = concat!(
+        "\x1b[?25l Detected dark theme but configured for light. Switch?\r\n\r\n",
+        " ❭ 1 Yes, switch theme\r\n",
+        "   2 No, keep current\r\n",
+        "   3 Yes, always auto-detect\r\n",
+        "   4 No, don't ask again\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(120, 24, 0);
+    screen.feed(question.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed(" ↑↓ select · ↵ confirm".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
 fn qoder_reads_either_terminal_setup_choice_as_interaction() {
     let rule = find("qoder").unwrap().unwrap();
     let screens: [serde_json::Value; 2] = recorded("qoder-startup").try_into().unwrap();
@@ -403,6 +669,36 @@ fn kiro_offers_tab_only_on_the_captured_collapse_cue() {
     let mut other_caret = observed;
     other_caret.line.as_mut().unwrap().cursor.0 += 1;
     assert!(!rule.paste.shows_tab_to_expand(&other_caret));
+}
+
+#[test]
+fn kiro_reads_the_whole_revealed_draft_when_its_prompt_scrolls_off() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let mut screen = Screen::new(60, 5, 100);
+    screen.feed(
+        "\x1b[?25lPrevious output\x1b[4;1H› \x1b[38;5;245m 6 lines ▸ \x1b[0m\x1b[7m \x1b[0m\x1b[38;5;245m Press Tab to expand\x1b[0m"
+            .as_bytes(),
+    );
+    let collapsed = read_box_for_screen(&rule.input, &screen, false);
+    assert!(rule.paste.shows_tab_to_expand(&collapsed), "{collapsed:?}");
+    let original = "first\nsecond\nthird\nfourth\nfifth\nlast 你好";
+    let disclosure = PasteDisclosure::at(&screen, &collapsed, original.len()).unwrap();
+    let draft = original.replace('\n', "\r\n  ");
+    screen.feed(format!("\r\x1b[2K› {draft}\x1b[7m \x1b[0m").as_bytes());
+    let visible = read_box_for_screen(&rule.input, &screen, false);
+    assert!(visible.is_unread(), "{visible:?}");
+    let (reading, row) = disclosure.read(&rule.input, &screen).unwrap();
+    assert_eq!(row, 4);
+    assert!(is_full_draft(
+        reading.draft.as_deref().unwrap(),
+        original,
+        reading.draft_hidden(),
+    ));
+    assert!(!is_full_draft(
+        reading.draft.as_deref().unwrap(),
+        &original.replacen("first", "different", 1),
+        reading.draft_hidden(),
+    ));
 }
 
 #[test]
@@ -1096,10 +1392,9 @@ fn only_one_drawn_cursor_in_cursor_s_input_reads_it() {
     );
 }
 
-/// A visible terminal cursor in Cursor's input reads it as before, and another CLI's prompt row
-/// takes no drawn cursor.
+/// Only an opted-in rule with a hidden terminal cursor uses the drawn cursor.
 #[test]
-fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
+fn a_drawn_cursor_requires_an_opted_in_rule_with_a_hidden_terminal_cursor() {
     let cursor = &find("agent").unwrap().unwrap().input;
     let mut visible = cursor_screen("empty");
     visible.cursor_visible = true;
@@ -1111,7 +1406,12 @@ fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
     visible.cursor = (4, 9);
     assert_eq!(read_input(cursor, &visible).state, InputState::Usable);
 
-    let kiro = &find("kiro-cli").unwrap().unwrap().input;
+    let rule: InputRule = serde_json::from_value(serde_json::json!({
+        "mechanism": "prompt_row",
+        "prompt": "› ",
+        "placeholder": "^Type here$"
+    }))
+    .unwrap();
     let mut other = cursor_screen("typed");
     mark(&mut other, 9, 2..3, |cell| {
         *cell = VisibleCell::new(
@@ -1123,7 +1423,7 @@ fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
             cell.colored,
         );
     });
-    assert_eq!(read_input(kiro, &other).state, InputState::Unknown);
+    assert_eq!(read_input(&rule, &other).state, InputState::Unknown);
 }
 
 #[test]

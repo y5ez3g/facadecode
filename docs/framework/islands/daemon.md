@@ -51,11 +51,15 @@ public `run()` entry point.
   text goes to the store or actor. Inspection reads this value from the same run as its screen
   facts. For a Terminal caller, inspection also reads the native session name or preview within the roster deadline.
   A recovered keeper run with no committed launch has no displayed command.
-- A start or resume takes the private launch context off its caller's environment. Only a Terminal
-  caller's terminal colors are used. They reach the agent's screen before the run's first output is
-  read, and a launch forwarded to another machine carries them as its whole environment. The daemon
-  keeps them in memory only. Without colors, a new agent's screen has none and a resume keeps the
-  agent's, an editor's included. With colors, a resume replaces all of them.
+- A start or resume takes the private launch context off its caller's environment. Shell supplies
+  the terminal colors it sampled. A managed MCP start samples the caller's terminal colors through
+  actor inspection. Launch colors reach the agent's screen before it reads the run's first output.
+  A forwarded launch's environment carries the launch context and the Shell's explicit detached
+  launch choice. The daemon uses that choice and the caller kind to select the unattended startup
+  policy. The daemon keeps terminal
+  colors in memory. A new agent without launch colors, including one started by a Guest, uses its
+  CLI's default theme. A resume with launch colors replaces all terminal colors. A resume without
+  them keeps the agent's terminal colors, including any colors supplied by an editor.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
   keeper link's copy, before it asks the keeper to stop. Batch stop uses that same path and reports
   each selected Agent's outcome. Scope stops report connected Guests as skipped.
@@ -70,7 +74,13 @@ public `run()` entry point.
   connection negotiates its supported version and gets the operation and topic directory for its
   client kind. MCP calls use a typed asynchronous dispatch with the same operation registry and
   the actor proved by the relay connection. The caller's permissions come from the installed run
-  record verified for that call.
+  record verified for that call. A native relay without a run credential checks the declared
+  process chain and session evidence on every managed request. Another session on the same
+  connection cannot borrow or replace that connection's managed actor. Initialization, the catalog
+  and valid tool calls share that binding. A matching native host with incomplete session evidence
+  can load the catalog and cannot register as a Guest. A native relay reconnecting to the same
+  daemon needs its in-memory binding and renewed proof. A new daemon refuses a reconnect without
+  the original binding. Each open request reserves its ID until its response task ends.
 - On Windows, the daemon keeps two Tokio workers for asynchronous work. The blocking pool has
   up to ten threads and returns idle threads after 150 ms. Its SQLite connection uses a 128 KiB
   page cache target with WAL and FULL synchronization.
@@ -221,7 +231,7 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `presence.rs` | Recovers Guests, retires their inboxes, validates an editor's terminal colors and maps those of a launch. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
 | `machine_service.rs`, `network_operations.rs` | Authorize and register machine streams, track routes and resolve requests to stable targets. |
-| `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. `service.rs` takes the launch context off every caller's environment and keeps the terminal colors of a Terminal caller. |
+| `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. `service.rs` takes the launch context off the caller's environment and uses launch colors from Shell and managed MCP starts. |
 | `recovery.rs` | Reconnects to keeper-held runs, restores screens and recovers pending deliveries. |
 | `command_line.rs` | Resolves launch environment, settings and program. `cli.list` uses the same resolver as start. |
 | `waits.rs` | Reports a managed run's trouble to its live agent creator, including across machines. |
@@ -332,6 +342,8 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     A dedicated Shell viewer signals the watched run's terminal exit independently of queued screen changes.
     Inspect includes the authenticated client kind and source machine of shell and editor viewers.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
+  - If a configured Facade server fails to connect by the managed run's startup deadline, the
+    actor logs the configuration path supplied when the run was prepared.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits, counted as the CLI's terminal takes it.
     The first prompt reserves room for its rendered text before the agent is listed. Later
     messages use the remaining room. The actor gives back input that must wait for room and
@@ -410,9 +422,13 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 - **Owns:** what the CLI reported and its screen showed, the turn, a question the CLI asks, the tools' connection, how the run ended, what was last said to the agent, and the file `framework/screens/<id>/state`.
 - **Keeps:**
-  - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
+  - `Ended` takes priority, followed by the CLI's own `WaitingForYou` or `Error`, a question in
+    place of the input box (`WaitingForYou`), and unavailable tools (`Error`). Current work reads
+    `Working` and retains any unseen completion. Next come `JustDone`, the brief `Working` hold,
+    `Starting`, `Idle`, a failed start (`Error`), and `Unknown`.
   - A recognized input interaction supplies its wait kind when known. Other input interactions use `unknown`.
-  - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
+  - When no earlier state wins, work that stops reads `Working` for one more second. A turn
+    someone asked for that ends unwatched records a completion until a terminal shows the agent.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
@@ -423,7 +439,12 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     whole-composer evidence before delivery. The actor puts replayed paint and any open frame on
     the earlier side of the boundary before consuming live output. A question still awaiting
     composer evidence after recovery requests one redraw. Permission reports keep their own wait.
-  - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
+  - A start and the tools' connection get 30 seconds each. Time spent in an input interaction or
+    a recognized sign-in screen does not count.
+  - A CLI configured to reconnect at startup can replace its first MCP catalog connection.
+    After that connection closes, the tools read `Connecting` during the original startup
+    window before the run's first verified tool call. A verified tool call or an expired
+    deadline makes a lost connection `Unavailable`.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
     prompt can proceed when native startup is shown and no question is open, or after the existing
@@ -484,13 +505,19 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     tail when a changed last glyph needs a following space or line break. Recovery matches
     the text or paste placeholder. An external edit ends automatic submission and cleanup authority.
     A person's Enter can still prove that they submitted the whole message. Unread frames keep
-    settle time running. A readable change restarts the wait.
-    Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+    settle time running. A partial redraw ending inside the same live paste marker also keeps
+    that time. Submission still requires the whole marker. A readable change restarts the wait.
+    Codex queues an ordinary message with Tab while Working. While a new turn's work evidence
+    awaits publication, it can already select Tab over the previous `Just done` reading. The
+    start prompt and recovered pastes use Enter.
   - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
     paste, with the same person-input generation and the native disclosure visible. The CLI must
-    draw after each write and earlier person input must be settled. The typist applies the normal
-    whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves
-    the draft to the person. Recovered collapsed pastes retain the existing refusal.
+    draw after each write and earlier person input must be settled. A pending confirmation for an
+    earlier submission delays Tab until it settles. The typist applies the normal
+    whitespace comparison to the full revealed draft before Enter. On the main screen, the part
+    that scrolls above the viewport can be read from the disclosure's original row. The frame
+    must still draw the live input after Tab. An unconfirmed reveal leaves the draft to the
+    person. Recovered collapsed pastes retain the existing refusal.
   - What the typist put into the input box is its own from the paste through submission or cleanup.
     No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
     that ownership until a complete frame reads as an empty input. A menu, question, unread frame
@@ -502,9 +529,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     is considered. A disconnected peer is read through EOF, with write boundaries retained until
     the receipt has been settled. A read error stops input and the pending receipt fails. The actor
     waits through an unfinished update. A redraw of this draft or its same-numbered paste marker
-    invalidates the pending empty frame. A person's Enter applies the same finite-prefix check to
-    the whole-message evidence described under the actor. Evidence established before an edit
-    remains available.
+    invalidates the pending empty frame. When a CLI shows its working footer, Rules can recognize
+    its empty editor for an already issued submission. That editor stays unavailable for automatic
+    input. A person's Enter applies the same finite-prefix check to the whole-message evidence
+    described under the actor. Evidence established before an edit remains available.
   - Repeating the submission key requires the current draft to have been drawn after that key's
     write boundary and still belong to the typist. The CLI rule can allow up to three submission keys
     at its retry interval. A fully readable changed draft with an established erase range can be
@@ -522,8 +550,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     Before passing a possible edit, the actor revokes persisted recovery evidence. When the
     CLI is waiting, the live cleanup stays available for revalidation by later output.
     A deadline in an unread frame can wait for a complete frame within the existing grace.
-    A receipt is given
-    once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
+    A receipt is given once, by two `RESPONSE_GRACE` after the deadline, and says what is known then.
+    A later confirmed erase, including one confirmed after a daemon replacement, withdraws
+    ordinary messages whose receipts already reported the full paste and no submission key.
+    The recorded delivery outcome stays available for replay.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run by its child
@@ -532,7 +562,16 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     complete ordinary box with the probe's input, and checks for native waits. A complete ordinary
     input drawn after withdrawal of a native wait can authorize a probe while delivery still needs
     a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
-    A confirmed hint provides the empty reading.
+    The first complete composer redraw after startup consent can also authorize a probe,
+    including a prompt row that still may hold a hint or draft.
+    After Space and before its echo, consecutive complete redraws can move that input between
+    rows. The whole line and the cursor column must match at each redraw. A complete frame where
+    the input disappears, changes or becomes an interaction ends that evidence. The Space echo
+    and Backspace restoration still need their own evidence.
+    When a person dismisses a menu during the run, a fresh complete redraw of an ambiguous
+    input row lets the typist use a previous hint verdict or apply the same reversible probe.
+    A confirmed hint provides the empty reading. A later complete frame with a draft gives the
+    delivery deadline its draft reason while the input remains protected.
   - From the write receipt for Space or Backspace, the probe checks the row every 100 ms and waits
     up to two seconds for that key's redraw. Two matching complete readings can establish whether
     the original row was a hint or a draft. The probe settles when the input is restored or the
@@ -541,8 +580,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - An open synchronized update cannot authorize a write. A resize clears pending approval so an
     unissued key uses the new box. An unissued Space that loses its box is withdrawn, and the row
     can still be probed when the ordinary box returns. Backspace needs a complete frame drawn after
-    Space that shows its original position and the space, with no question, menu or intervening
-    external edit. The probe checks that Backspace restored the input before offering delivery.
+    Space that shows the verified input position and the space, with no question, menu or
+    intervening external edit. The probe checks that Backspace restored the input before offering
+    delivery.
     An unread draw or menu supplies no authority to erase. New output sends an unissued erase
     back to the actor for a fresh reading of the available prefix. The row's verdict stays with
     this run.
@@ -895,12 +935,21 @@ holds it while processing the table. At each end, the session and daemon restart
 30-second idle timers when their last work ends. SSH keepalives, roster sync and local `daemon.ping`
 let the timers keep running.
 
+On a foreground SSH reconnect, publish the newly authenticated route immediately. Remove older
+links to the same peer boot with the same local SSH destination, arguments and home from route
+selection while a passive request verifies each earlier stream. Each link can supply routes again
+after its own authenticated response. An independently configured connection to the peer stays
+available throughout.
+
 ### guests
 
 The relay boundary uses its socket peer PID and process birth. A relay joins as a Guest on its first
 tool call when it cannot establish a current managed run. The daemon commits its ID and this machine's
 YOLO snapshot before publishing it. It keeps the relay's environment for a Guest's starts and uses the
 running machine's login home when that Guest supplies no folder.
+If Oh My Pi's project relay cannot find the original message for a linked reply, the daemon can
+log the project configuration path and the managed reply command. The Guest relay must descend
+from a verified live Oh My Pi run in the same project.
 
 A surviving relay keeps its Guest ID and inbox across takeover. A sufficiently old record that lacks
 the YOLO snapshot takes the machine's migration-time setting once. A Guest's exit closes its online
@@ -917,6 +966,9 @@ lines to the person's clients. Base owns the shared `framework/clean-end` note.
 - `begin(Work)` counts the work until its guard drops. The idle decision uses the same lock to
   exclude new work. After 30 idle seconds it asks the server to pause acceptance, informs compatible
   machines of the idle exit, and waits for screen writers and exit commits before removing the socket.
+  A relay verified by a private run credential stops counting as activity when that run ends.
+  The daemon still waits for its connection to close before it exits. This lets the idle interval
+  run while Oh My Pi's shared MCP host closes an ended session's relay.
   A long-lived machine watch or foreground connection counts while active. Takeover settlement
   waits for the existing calls and run changes it can complete.
 - `take_over(UpgradeArgs, activity)` checks and stages the build. It freezes MCP effects and waits
@@ -1022,10 +1074,14 @@ its daemon connection with the `relay:1` handshake. MCP negotiates its own date-
 Guest is listed. The first tool call locks the identity of its connection.
 Runs generate a private, unpredictable credential for each new run and Rules put it in that launch's
 MCP arguments. Authentication, initialization and tool discovery await that run's installation on
-the daemon runtime and verify its keeper PID, birth and run generation. A verified CLI-native
-session can also identify a matching live run. A run recovered
-from protocol 2 may keep its earlier recognition rules until that run ends. Resume has a new
-credential scope even when it uses the same Agent ID.
+the daemon runtime and verify its keeper PID, birth and run generation. A relay without a run
+credential must have the exact live parent chain declared by the installed CLI rule. Rules that
+declare a native session source also require the current run's reported session to match that
+source. The daemon reads a declared environment key from the relay process and a declared
+metadata key from the MCP request. Before Muse reports its session, its native session log must
+name the same session, managed process and folder in an event recorded during that verified
+process's lifetime. A recovered protocol 2 run also requires its legacy marker.
+Resume has a new credential scope even when it uses the same Agent ID.
 
 At initialization the parent can verify a managed run and consult its installed CLI rule. A run
 whose rule supplies the managed instructions through a hook receives the general connection text,
@@ -1040,7 +1096,9 @@ the available page. When a run ends, the daemon releases its tools readiness gua
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.
-When a CLI defers its tool catalog, the holder tracks a live, credentialed initializer independently of
+If the catalog was already served when a tool call verifies the managed run, the same connection
+keeps that run's tools ready until the connection ends.
+When a CLI defers its tool catalog, the holder tracks a live, verified initializer independently of
 the verified catalog response. Both refer to the current installed run and end with their relay connection.
 A reconnect or a tool-call routing connection supplies no catalog evidence for that CLI. After Daemon
 replacement the holder waits for fresh verified evidence and reports tools available after `tools/list`.

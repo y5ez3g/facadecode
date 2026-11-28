@@ -10,7 +10,10 @@ to speak of, so every other crate can depend on it and it depends on none of the
 - The daemon and keeper protocol types, operations, framing and error envelope. `framework/protocol/`
   contains the two generated guides and endpoint schemas. The generator writes `protocol.ts` and
   the extension's `src/base/frameworkProtocol.ts` together from the daemon registrations.
-- The Facade home's location (`FACADE_HOME`, else `~/.facade`) and the key that names its sockets.
+- The Facade home's location and the key that names its sockets. The Shell selects `FACADE_HOME` when set
+  to a nonempty value, then its installation home, then `~/.facade`. An implicit installation uses the
+  default spelling when it names that same directory. If it already has a daemon, the Shell can use the
+  v1 spelling supplied by the process named in that home's lock.
 - The services' sockets: on macOS and Linux the socket folder `/tmp/facade-framework-<uid>/` and
   `keeper-<key>.sock` and `daemon-<key>.sock` in it; on Windows the named pipes
   `\\.\pipe\facade-framework-keeper-<key>` and `\\.\pipe\facade-framework-daemon-<key>`, which let in
@@ -136,6 +139,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `boot_time`, `signal_number(name)`, `fork_lock()`. Unix only: process groups
   (`group_members`, `signal_group`), `reap_child`, `peer_pid(socket)`; Windows only: `WaitPacket`,
   and `AsHandle` and `exit` on `ProcessObservation`.
+  On macOS, an `EPERM` from a verified group signal can mean the group has already exited.
+  `signal_group` confirms the leader's identity and exit state, requires it in the kernel's group
+  listing and checks the exit of each remaining member. Inconclusive evidence preserves the
+  original signal error.
 - `terminal`: `PtyMaster`, the side of a terminal Facade holds (a PTY master on Unix; on Windows a
   pseudo console's input, output and signal pipe ends and the CLI's job); `PtyIo`, how the daemon
   reads and writes one, with `stop_reading` and `let_go_before_stop`. A caller can ask `write` for the
@@ -169,13 +176,19 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `format_command_reply_address` uses the assigned message ID and its machine selector.
   `address::mcp` handles the MCP address spelling.
   `ssh` extracts the destination from the supplied OpenSSH login arguments and keeps the original
-  arguments in their order. When the remote platform is unknown, Route and Travel identify its
-  login shell over the authenticated stream. The bootstrap probes the selected remote home's
-  launcher and reads the client's install or serve decision. A permitted installation of a
-  missing or lower-ranked build pins the complete local BUILD and verifies the selected launcher.
+  arguments in their order. Route and Travel use a fixed native SSH command to start a reader
+  before probing the platform over the authenticated stream. Unix loads the login environment
+  and uses `/bin/sh` for the stream. C shells keep their native login reader. Windows starts a
+  reader in the configured CMD or PowerShell shell. The bootstrap probes the selected remote
+  home's launcher and reads the client's install or serve decision.
+  A permitted installation of a missing or lower-ranked build pins the complete local BUILD
+  and verifies the selected launcher.
   A higher remote build requires a local upgrade. The bootstrap writes `ready` before running
   machine serve on the same streams. The authenticated machine hello checks API compatibility
   and identity. A passive attempt uses `--no-start` and recognizes exit 3 as sleeping.
+  The Windows bootstrap waits for available input before reading the decision from an OpenSSH
+  pipe. The client sends the decision after seeing the version on that login. CMD receives a
+  bootstrap above its line limit in parts, which PowerShell joins and clears from its environment.
   On Windows, the foreground command keeps its output capture pipes private before starting the
   process that holds the saved SSH link.
   `system::hostname` and `system::login_environment` supply the host name and login environment.
@@ -222,7 +235,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   start or send. Shell captures its launch environment.
 - `programs::{install_running, current_build, point_launchers_at, launcher, start_keeper}` manages
   the installed services. `service::{create_private_home, live_holder}` prepares the home and
-  observes services. `unix_process::calling_program()` identifies a hook's CLI.
+  observes services. `service::alternate_daemon_socket` gives Shell the endpoint and lock identity of
+  a live daemon that uses an equivalent spelling of the home path. `unix_process::calling_program()`
+  identifies a hook's CLI.
 - `ssh` prepares the selected-home administration bootstrap and SSH arguments for Shell. It resolves the SSH account
   and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `framework/ssh/` folder,
   with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent
@@ -253,11 +268,13 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `clipboard::copy`: puts text on the clipboard of the computer the person sits at, through pbcopy or
   the Wayland and X11 clipboard programs, for terminals that ignore OSC 52. It does nothing over SSH,
   where that is another computer's, and on Windows.
-- `desktop::{sees_keys, arrows}`: whether Up and Down are down on the keyboard the person types on,
-  for a terminal that sends the same bytes for them and for the wheel. It uses the session's key state
-  on macOS and the desktop's on Windows, without a permission, and loads their libraries only when
-  asked. It sees no keys on Linux, over SSH, outside a desktop session, or in a terminal that
-  another computer can show: tmux, Screen, Zellij and VS Code's remote terminals.
+- `desktop::{sees_keys, CursorInput}` distinguishes wheel input from arrow keys where the terminal
+  encodes both the same way. On macOS it passively observes wheel events and Up/Down key codes for
+  the hosting process under the current permissions. A run loop records events in order while
+  Attach waits for terminal bytes. When macOS permits only wheel observation, Base also samples
+  whether either arrow is held. The desktop's arrow state serves Windows and macOS terminals
+  where no process observer is available. The desktop path is unavailable on Linux, over SSH,
+  outside a desktop session, and in tmux, Screen, Zellij or a VS Code remote terminal.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

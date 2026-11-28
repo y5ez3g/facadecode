@@ -227,19 +227,22 @@ pub(super) fn prepare(relay: &Relay, line: &[u8], arrived: Instant) -> Option<Pr
     let arrived = context
         .as_ref()
         .map_or(arrived, |frame| frame.first_arrival(arrived));
-    let call = ToolCall::of(relay, &id_value, arrived, replay);
-    let mut send_turn = None;
-    if method == "tools/call"
-        && let Some(tool) = parsed.params["name"].as_str().and_then(ToolEntry::named)
-    {
-        if matches!(tool.action, Tool::SendMessage | Tool::ReadMessages) {
-            let cancelled = context.is_some_and(|frame| frame.cancelled);
-            relay.sends.note(call.key.clone(), cancelled);
-        }
-        if matches!(tool.action, Tool::SendMessage) {
-            send_turn = Some(relay.send_order.next());
-        }
-    }
+    let action = (method == "tools/call")
+        .then(|| parsed.params["name"].as_str())
+        .flatten()
+        .and_then(ToolEntry::named)
+        .map(|tool| tool.action);
+    let cancelled = matches!(action, Some(Tool::SendMessage | Tool::ReadMessages))
+        .then(|| context.is_some_and(|frame| frame.cancelled));
+    let Some(registration) = relay.requests.register(id_value.to_string(), cancelled) else {
+        return invalid(
+            INVALID_REQUEST,
+            "a request with this ID is still in flight".into(),
+        );
+    };
+    let mut call = ToolCall::of(relay, &id_value, arrived, replay);
+    call.registration = Some(registration);
+    let send_turn = matches!(action, Some(Tool::SendMessage)).then(|| relay.send_order.next());
     Some(Prepared::Request {
         id,
         method: method.to_string(),
@@ -255,7 +258,7 @@ fn is_id(id: &Value) -> bool {
 
 fn cancel(relay: &Relay, params: &Value) {
     if let Some(id) = params.get("requestId") {
-        relay.sends.cancel(&id.to_string());
+        relay.requests.cancel(&id.to_string());
     }
 }
 
@@ -280,7 +283,7 @@ pub(super) async fn respond(
     let answer = match method.as_str() {
         "initialize" => initialize(relay, &params).await,
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(list_tools(relay).await),
+        "tools/list" => Ok(list_tools(relay, params.get("_meta")).await),
         "tools/call" => {
             call.output = output.map(|(outbox, link)| ReplyTarget::new(outbox, link, id.clone()));
             call_tool(relay, params, &call, send_turn).await?
@@ -304,7 +307,11 @@ async fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
         acquire,
     } = relay
         .verified
-        .initialize(relay, params["clientInfo"]["name"].as_str())
+        .initialize(
+            relay,
+            params["clientInfo"]["name"].as_str(),
+            params.get("_meta"),
+        )
         .await
         .map_err(|_| {
             (
@@ -326,11 +333,13 @@ async fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
 
 /// The answer to `tools/list`: the shipped definitions. Every tool returns the same envelope
 /// (MCP-1.2), so the catalog omits result schemas.
-async fn list_tools(relay: &Relay) -> Value {
+async fn list_tools(relay: &Relay, meta: Option<&Value>) -> Value {
     crate::gate_for_test("mcp-before-tools-list");
     let tools: Vec<&Value> = TOOLS.iter().map(|entry| &entry.definition).collect();
     let catalog = json!({ "tools": tools });
-    relay.hold_verified_presence(CatalogEvent::Listed).await;
+    relay
+        .hold_verified_presence(CatalogEvent::Listed, meta)
+        .await;
     catalog
 }
 
@@ -354,7 +363,6 @@ async fn call_tool(
     let meta = params.shift_remove("_meta");
     drop(params);
     let result = verified_tools::dispatch(relay, &name, given, call, meta, send_turn).await;
-    relay.sends.finish(&call.key);
     let result = match result {
         verified_tools::ToolReply::Result(result) => result,
         verified_tools::ToolReply::Answered => return None,
@@ -384,7 +392,7 @@ mod tests {
     use facade_base::api_v1::daemon::AgentKind;
     use facade_base::model::agent::AgentRef;
 
-    use super::super::ActorIdentity;
+    use super::super::{ActorIdentity, verified::AuthenticatedActor};
     use super::*;
 
     fn answered(line: &str) -> Value {
@@ -400,13 +408,16 @@ mod tests {
         let services = &mut relay.verified.services;
         services.authenticate = Box::new(move |_, _, _| {
             Box::pin(async move {
-                Ok(ActorIdentity {
-                    reference: AgentRef {
-                        machine_id: "00000000-0000-4000-8000-000000000001".into(),
-                        agent_id: "a7".into(),
+                Ok(AuthenticatedActor {
+                    identity: ActorIdentity {
+                        reference: AgentRef {
+                            machine_id: "00000000-0000-4000-8000-000000000001".into(),
+                            agent_id: "a7".into(),
+                        },
+                        kind: AgentKind::Managed,
+                        receives_terminal_messages,
                     },
-                    kind: AgentKind::Managed,
-                    receives_terminal_messages,
+                    acquire: None,
                 })
             })
         });
@@ -563,6 +574,51 @@ mod tests {
     }
 
     #[test]
+    fn every_native_managed_call_requires_its_session_evidence() {
+        let mut relay = rejecting_relay(true);
+        relay.verified.services.authenticate = Box::new(|_, meta, _| {
+            Box::pin(async move {
+                if meta.and_then(|value| value["nativeSession"].as_str()) != Some("own-session") {
+                    return Err(facade_base::model::error::ErrorBody::refused(
+                        "this request does not match the relay's managed session",
+                    ));
+                }
+                Ok(AuthenticatedActor {
+                    identity: ActorIdentity {
+                        reference: AgentRef {
+                            machine_id: "00000000-0000-4000-8000-000000000001".into(),
+                            agent_id: "a7".into(),
+                        },
+                        kind: AgentKind::Managed,
+                        receives_terminal_messages: true,
+                    },
+                    acquire: None,
+                })
+            })
+        });
+        for (id, meta, reason) in [
+            (1, json!({ "nativeSession": "own-session" }), "unsupported"),
+            (2, json!({ "nativeSession": "other-session" }), "refused"),
+            (3, Value::Null, "refused"),
+            (4, json!({ "nativeSession": "own-session" }), "unsupported"),
+        ] {
+            let mut params = json!({
+                "name": "read_messages", "arguments": { "timeout_seconds": 1 },
+            });
+            if !meta.is_null() {
+                params["_meta"] = meta;
+            }
+            let line = json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params,
+            });
+            let answer = relay
+                .respond_verified(line.to_string().as_bytes(), Instant::now())
+                .expect("a tool answer");
+            assert_eq!(answer["result"]["structuredContent"]["reason"], reason);
+        }
+    }
+
+    #[test]
     fn malformed_messages_get_json_rpc_errors_and_notifications_nothing() {
         assert_eq!(answered("{nope")["error"]["code"], -32700);
         assert_eq!(answered("[]")["error"]["code"], -32600);
@@ -647,27 +703,76 @@ mod tests {
                 r#"{{"jsonrpc":"2.0","method":"notifications/cancelled","params":{{"requestId":{id},"reason":"user-cancel"}}}}"#
             )
         };
-        assert!(!notice(call(r#""s1""#, "send_message")) && !notice(call("71", "send_message")));
-        assert!(!notice(call("72", "list_agents")));
+        let request =
+            |id, tool| prepare(&relay, call(id, tool).as_bytes(), Instant::now()).unwrap();
+        let first = request(r#""s1""#, "send_message");
+        let second = request("71", "send_message");
+        let listing = request("72", "list_agents");
         assert!(notice(cancel(r#""s1""#)), "a cancellation needs no thread");
         assert!(
-            relay.sends.cancelled(r#""s1""#) && !relay.sends.cancelled("71"),
+            relay.requests.cancelled(r#""s1""#) && !relay.requests.cancelled("71"),
             "only the call it names"
         );
         assert!(
             !notice(format!("[{}]", cancel("71"))),
             "a batch is answered"
         );
-        assert!(relay.sends.cancelled("71"));
+        assert!(relay.requests.cancelled("71"));
         assert!(
-            notice(cancel("72")) && !relay.sends.cancelled("72"),
+            notice(cancel("72")) && !relay.requests.cancelled("72"),
             "another tool's call is not cancelled"
         );
-        relay.sends.finish(r#""s1""#);
+        drop(first);
         assert!(
-            notice(cancel(r#""s1""#)) && !relay.sends.cancelled(r#""s1""#),
+            notice(cancel(r#""s1""#)) && !relay.requests.cancelled(r#""s1""#),
             "an answered call stays answered"
         );
-        relay.sends.finish("71");
+        drop((second, listing));
+    }
+    #[test]
+    fn duplicate_requests_leave_the_original_registration_and_its_cancellation() {
+        let relay = Relay::for_test();
+        let original = br#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_messages","arguments":{}}}"#;
+        let duplicate = br#"{"jsonrpc":"2.0","id":12,"method":"ping"}"#;
+        let first = prepare(&relay, original, Instant::now()).unwrap();
+        let mut replies = [
+            prepare(&relay, duplicate, Instant::now()).unwrap(),
+            prepare(&relay, original, Instant::now()).unwrap(),
+        ];
+        for reply in &mut replies {
+            let Prepared::Answer(response) = reply else {
+                panic!("duplicate request was registered");
+            };
+            assert!(response.id.is_none());
+        }
+        drop(replies);
+        relay.requests.cancel("12");
+        let Prepared::Request { call, .. } = &first else {
+            panic!("the original request was not registered");
+        };
+        assert!(call.cancellation().is_requested());
+        drop(first);
+        let reused = prepare(&relay, duplicate, Instant::now()).unwrap();
+        assert!(matches!(reused, Prepared::Request { .. }));
+        assert!(!relay.requests.cancelled("12"));
+    }
+
+    #[test]
+    fn an_unknown_tool_or_invalid_arguments_do_not_establish_an_actor() {
+        let mut relay = Relay::for_test();
+        relay.verified.services.authenticate =
+            Box::new(|_, _, _| panic!("a malformed call cannot authenticate"));
+        for (tool, arguments) in [
+            ("unknown_tool", json!({})),
+            ("send_message", json!({"text":"hello"})),
+        ] {
+            let request = json!({"jsonrpc":"2.0","id":8,"method":"tools/call", "params":{
+                "name":tool, "arguments":arguments
+            }});
+            let response = relay
+                .respond_verified(request.to_string().as_bytes(), Instant::now())
+                .unwrap();
+            assert_eq!(response["result"]["structuredContent"]["status"], "failure");
+        }
     }
 }

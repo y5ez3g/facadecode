@@ -1,5 +1,5 @@
-//! Reads the arrow keys on the computer the person sits at. A terminal app that keeps the mouse can
-//! send the same bytes for an arrow key and for the wheel.
+//! Distinguishes the terminal's wheel from its arrow keys on the local desktop. Some terminal
+//! apps send the same bytes for both in their alternate screen.
 
 /// Which of the arrow keys that the wheel can stand in for are down.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -24,69 +24,69 @@ pub fn arrows() -> Arrows {
     imp::arrows()
 }
 
-#[cfg(target_os = "macos")]
-mod imp {
-    use std::ffi::{CStr, c_void};
-    use std::sync::OnceLock;
+/// One of the two cursor keys that the wheel can stand in for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrow {
+    Up,
+    Down,
+}
 
-    use super::Arrows;
+/// Input observed at the process hosting the console.
+pub enum CursorEvent {
+    Key(Arrow),
+    Wheel {
+        arrow: Arrow,
+        /// How many sequences the host writes when it converts this event to arrows.
+        count: u64,
+        /// The terminal can accumulate scrolling before it writes any sequence.
+        may_skip: bool,
+    },
+}
 
-    const CORE_GRAPHICS: &CStr = c"/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
-    /// `kCGEventSourceStateCombinedSessionState`.
-    const SESSION_STATE: i32 = 0;
-    const UP_ARROW: u16 = 126;
-    const DOWN_ARROW: u16 = 125;
+/// What the desktop knows about input that produces the terminal's Up and Down sequences.
+pub enum CursorSample {
+    /// Events in delivery order. A sequence without wheel evidence is a key.
+    Observed {
+        events: Vec<CursorEvent>,
+        /// A wheel-only observer can still read the state of a held arrow key.
+        held: Arrows,
+    },
+    /// Where the desktop cannot observe terminal events, use the arrow state.
+    KeyboardState(Arrows),
+}
 
-    type Object = *const c_void;
-    type CopySession = unsafe extern "C" fn() -> Object;
-    type Release = unsafe extern "C" fn(Object);
-    type KeyState = unsafe extern "C" fn(state: i32, key: u16) -> bool;
+/// Observes input for the desktop terminal that owns this process's console.
+pub struct CursorInput {
+    #[cfg(target_os = "macos")]
+    macos: Option<imp::CursorInput>,
+}
 
-    pub(super) fn sees_keys() -> bool {
-        key_state().is_some()
+impl Default for CursorInput {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub(super) fn arrows() -> Arrows {
-        let Some(key_state) = key_state() else {
-            return Arrows::default();
-        };
-        // SAFETY: the function only reads the session's keyboard state.
-        let down = |key| unsafe { key_state(SESSION_STATE, key) };
-        Arrows {
-            up: down(UP_ARROW),
-            down: down(DOWN_ARROW),
+impl CursorInput {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            macos: imp::CursorInput::new(),
         }
     }
 
-    /// `CGEventSourceKeyState`, in a desktop session. Its library loads only where a program asks
-    /// for it.
-    fn key_state() -> Option<KeyState> {
-        static KEY_STATE: OnceLock<Option<KeyState>> = OnceLock::new();
-        *KEY_STATE.get_or_init(|| {
-            // SAFETY: the library stays loaded, and each function has the type it is declared with.
-            unsafe {
-                let library = libc::dlopen(CORE_GRAPHICS.as_ptr(), libc::RTLD_LAZY);
-                if library.is_null() {
-                    return None;
-                }
-                let function = |name: &CStr| {
-                    let function = libc::dlsym(library, name.as_ptr());
-                    (!function.is_null()).then_some(function)
-                };
-                let copy_session: CopySession =
-                    std::mem::transmute(function(c"CGSessionCopyCurrentDictionary")?);
-                let release: Release = std::mem::transmute(function(c"CFRelease")?);
-                let session = copy_session();
-                if session.is_null() {
-                    return None;
-                }
-                release(session);
-                let key_state: KeyState = std::mem::transmute(function(c"CGEventSourceKeyState")?);
-                Some(key_state)
-            }
-        })
+    pub fn sample(&self) -> CursorSample {
+        #[cfg(target_os = "macos")]
+        if let Some(macos) = &self.macos {
+            return macos.sample();
+        }
+        CursorSample::KeyboardState(arrows())
     }
 }
+
+#[cfg(target_os = "macos")]
+#[path = "desktop/macos.rs"]
+mod imp;
 
 #[cfg(windows)]
 mod imp {

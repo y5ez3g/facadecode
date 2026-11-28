@@ -72,6 +72,8 @@ pub struct BoxReading {
     pub draft_cursor: Option<(usize, usize)>,
     /// The reason given by a recognized interaction, when the rule knows it.
     pub wait_kind: Option<WaitKind>,
+    /// The composer under a working footer, as evidence for an issued submission.
+    pub working_editor: Option<InputState>,
     /// Visible text ending at the caret of a full viewport that has no scroll markers.
     /// Only a paste just made into an observed empty input can use it for confirmation.
     pub paste_tail: Option<String>,
@@ -91,6 +93,74 @@ pub struct PasteDrawing {
     pub final_line_breaks: usize,
 }
 
+/// The location of a one-row paste disclosure before its key was written.
+#[derive(Clone, Copy)]
+pub struct PasteDisclosure {
+    first_row: usize,
+    columns: usize,
+    rows: usize,
+    max_scrolled: usize,
+}
+
+impl PasteDisclosure {
+    /// Marks the disclosed input's position while it is still confined to its original row.
+    pub fn at(
+        screen: &facade_screen::Screen,
+        reading: &BoxReading,
+        max_scrolled: usize,
+    ) -> Option<Self> {
+        let line = reading.line.as_ref().filter(|line| !line.rest)?;
+        if screen.on_alternate_screen() || !screen.output_frame_complete() {
+            return None;
+        }
+        let view = screen.view();
+        // Any text already below the disclosure could later reach history with the input.
+        if view.rows.iter().skip(line.row + 1).flatten().any(draws) {
+            return None;
+        }
+        Some(Self {
+            first_row: screen.scrollback_range().end + line.row,
+            columns: view.cols,
+            rows: view.rows.len(),
+            max_scrolled,
+        })
+    }
+
+    /// Reads a prompt that scrolled away while its expanded draft was drawn. The cursor must
+    /// still be live. Returns its live row for the caller's output-boundary checks.
+    pub fn read(
+        &self,
+        rule: &InputRule,
+        screen: &facade_screen::Screen,
+    ) -> Option<(BoxReading, usize)> {
+        if !matches!(
+            rule,
+            InputRule::PromptRow {
+                drawn_cursor: true,
+                ..
+            }
+        ) || !screen.output_frame_complete()
+        {
+            return None;
+        }
+        let history = screen.scrollback_range();
+        let above = history.end.checked_sub(self.first_row)?;
+        if above == 0 || above > self.max_scrolled || self.first_row < history.start {
+            return None;
+        }
+        let view = screen.view_with_history(above)?;
+        if view.cols != self.columns || view.rows.len() != self.rows + above {
+            return None;
+        }
+        let mut reading = read_box_for_typing(rule, &view, false);
+        let line = reading.line.take()?;
+        if reading.info.state != InputState::Draft || line.row >= above {
+            return None;
+        }
+        Some((reading, line.cursor.1.checked_sub(above)?))
+    }
+}
+
 impl BoxReading {
     /// A reading without captured input geometry, paste evidence or probe evidence.
     pub fn new(info: InputInfo, draft: Option<String>) -> Self {
@@ -99,6 +169,7 @@ impl BoxReading {
             draft,
             draft_cursor: None,
             wait_kind: None,
+            working_editor: None,
             paste_tail: None,
             line: None,
             paste_drawing: None,
@@ -278,8 +349,9 @@ fn paste_paint(screen: &facade_screen::Screen) -> BoxPaint<'_> {
 }
 
 /// Reads the input and its redraw evidence using the caller's input boundary. For an interaction,
-/// the flag covers the menu anchor. For a complete ordinary frame, it covers the borders, prompt
-/// and visible text. The caller observes frames in output order.
+/// the flag covers the menu anchor. For an unsure reading, it covers the prompt row. For a
+/// complete framed input, it covers the borders, prompt and visible text. The caller observes
+/// frames in output order.
 pub fn read_box_with_redraw(
     rule: &InputRule,
     screen: &facade_screen::Screen,
@@ -322,6 +394,7 @@ fn read_box_in_frame(
         draft,
         draft_start,
         wait_kind,
+        working_editor,
         paste_tail,
         line,
         unsure,
@@ -378,6 +451,7 @@ fn read_box_in_frame(
             draft,
             draft_cursor,
             wait_kind,
+            working_editor,
             paste_tail,
             line,
             paste_drawing,
@@ -397,6 +471,7 @@ struct Reading {
     /// Column and row of the first cell of the draft.
     draft_start: Option<(usize, usize)>,
     wait_kind: Option<WaitKind>,
+    working_editor: Option<InputState>,
     paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
@@ -573,6 +648,7 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         draft: None,
         draft_start: None,
         wait_kind: None,
+        working_editor: None,
         paste_tail: None,
         line: None,
         unsure: false,
@@ -1003,8 +1079,16 @@ impl<'a> Screen<'a> {
     }
 
     /// All screen rows of a menu or question's anchor, including continuations.
-    fn menu_rows(&self, menu: &Menu, lines: &[LogicalLine<'_>]) -> Option<Range<usize>> {
+    fn menu_rows(
+        &self,
+        menu: &Menu,
+        lines: &[LogicalLine<'_>],
+        prompt_row: Option<usize>,
+    ) -> Option<Range<usize>> {
         lines.iter().enumerate().find_map(|(start, line)| {
+            if prompt_row.is_some_and(|row| line.row <= row) {
+                return None;
+            }
             let end = self.menu_line_end(&menu.selected, lines, start)?;
             if let Some(not) = &menu.not_selected
                 && not.is_match(line.text.trim_end_matches(' '))
@@ -1018,7 +1102,7 @@ impl<'a> Screen<'a> {
                 .is_none_or(|next| self.menu_line_end(next, lines, after).is_some());
             let hint_fits = menu.hint.as_ref().is_none_or(|hint| {
                 (after..lines.len())
-                    .take(hint.within)
+                    .take(hint.within.unwrap_or_else(|| lines.len() - after))
                     .any(|start| self.menu_line_end(&hint.pattern, lines, start).is_some())
             });
             (next_fits && hint_fits)
@@ -1030,12 +1114,19 @@ impl<'a> Screen<'a> {
     /// of the CLI's own shows, otherwise `unknown`.
     fn elsewhere(&self, why: impl Into<String>) -> Reading {
         let why = why.into();
-        if self.menus.is_empty() {
-            return unknown(why);
-        }
+        self.read_menu(&why, None).unwrap_or_else(|| unknown(why))
+    }
+
+    fn read_menu(&self, why: &str, prompt_row: Option<usize>) -> Option<Reading> {
+        let mut menus = self
+            .menus
+            .iter()
+            .filter(|menu| prompt_row.is_none() || menu.below_prompt)
+            .peekable();
+        menus.peek()?;
         let lines = self.logical_lines();
-        for menu in self.menus {
-            let Some(anchor) = self.menu_rows(menu, &lines) else {
+        for menu in menus {
+            let Some(anchor) = self.menu_rows(menu, &lines, prompt_row) else {
                 continue;
             };
             let what = match (&menu.selected, &menu.next) {
@@ -1043,12 +1134,15 @@ impl<'a> Screen<'a> {
                 (_, Some(_)) => "a menu's selected item",
                 (_, None) => "a question",
             };
-            return interaction(
-                format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
-                anchor,
-            );
+            return Some(Reading {
+                wait_kind: menu.wait_kind,
+                ..interaction(
+                    format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
+                    anchor,
+                )
+            });
         }
-        unknown(why)
+        None
     }
 
     /// Reads the box after the prompt and its gap up to row `end`, with the first row for a probe.
@@ -1256,8 +1350,12 @@ impl<'a> Screen<'a> {
             };
         }
         let framed = |reading: Reading| Reading {
-            redraw_rows: matches!(reading.state, InputState::Usable | InputState::Draft)
-                .then_some(upper..lower + 1),
+            redraw_rows: if reading.unsure {
+                Some(first..first + 1)
+            } else {
+                matches!(reading.state, InputState::Usable | InputState::Draft)
+                    .then_some(upper..lower + 1)
+            },
             ..reading
         };
         if let Some(hint) = &frame.dim_cursor_hint
@@ -1395,6 +1493,12 @@ impl<'a> Screen<'a> {
         if model.is_none() && !above && !below {
             return self.without_model_line(prompt, prompt_at, missing_model());
         }
+        // The upward scroll mark anchors trailing blank draft rows when the model line is gone.
+        let end = if above && !below && self.cursor.0 >= 2 {
+            end.max(cursor_row + 1)
+        } else {
+            end
+        };
         if !(prompt..end).contains(&cursor_row) {
             return if model.is_some() {
                 self.elsewhere(format!(
@@ -1586,21 +1690,25 @@ impl<'a> Screen<'a> {
             return missing();
         }
 
-        // The rail can also enclose shell input, so both layouts need the native mode footer.
-        let interactive = self.lines.get(lower + 1).is_some_and(|footer| {
-            rail.footer.is_match(footer)
-                && !footer.split(" · ").any(|segment| {
-                    matches!(
-                        segment.trim(),
-                        "Shell"
-                            | "Plan"
-                            | "Autopilot"
-                            | "Autopilot (limited)"
-                            | "esc exit shell mode"
-                    )
-                })
-        });
-        if !interactive {
+        // The rail can also enclose shell input, so both layouts need a recognized mode footer.
+        let Some(footer) = self.lines.get(lower + 1) else {
+            return missing();
+        };
+        let interactive = rail.footer.is_match(footer);
+        if !interactive
+            && rail
+                .working_footer
+                .as_ref()
+                .is_none_or(|pattern| !pattern.is_match(footer))
+        {
+            return missing();
+        }
+        if footer.split(" · ").any(|segment| {
+            matches!(
+                segment.trim(),
+                "Shell" | "Plan" | "Autopilot" | "Autopilot (limited)" | "esc exit shell mode"
+            )
+        }) {
             return missing();
         }
 
@@ -1615,11 +1723,24 @@ impl<'a> Screen<'a> {
             lines.push(&cells[from..to]);
         }
         let place = format!("the editor at {}", row_span(first + 1, lower));
-        if let Some(notice) = rail
+        let notice = rail
             .live_notice
             .as_ref()
-            .filter(|notice| self.editor_live_notice(notice, upper))
-        {
+            .filter(|notice| self.editor_live_notice(notice, upper));
+        if !interactive {
+            let mut reading = missing();
+            if reading.state == InputState::Unknown && notice.is_none() {
+                reading.working_editor = if lines.iter().any(|line| !all_space(line)) {
+                    Some(InputState::Draft)
+                } else if lines.len() == 1 && column == start {
+                    Some(InputState::Usable)
+                } else {
+                    None
+                };
+            }
+            return reading;
+        }
+        if let Some(notice) = notice {
             return Reading {
                 wait_kind: notice.wait_kind,
                 ..reading(
@@ -2104,6 +2225,9 @@ impl<'a> Screen<'a> {
         let Some((y, start)) = self.prompt_row_at(self.cursor, prompt, alternate) else {
             return self.elsewhere("no native prompt around the cursor");
         };
+        if let Some(menu) = self.read_menu("the prompt sits above a selection pane", Some(y)) {
+            return menu;
+        }
         let row = self.cursor.1;
         let end = (row + 1..self.height())
             .find(|&next| {
@@ -2144,7 +2268,11 @@ impl<'a> Screen<'a> {
             }
             probe_unstyled_hint = untouched_input;
         }
-        self.after_prompt(y, end, "the prompt", None, probe_unstyled_hint, start)
+        let reading = self.after_prompt(y, end, "the prompt", None, probe_unstyled_hint, start);
+        Reading {
+            redraw_rows: reading.unsure.then_some(y..y + 1),
+            ..reading
+        }
     }
 
     /// `prompt_row`: the last row that starts with the prompt holds the input.

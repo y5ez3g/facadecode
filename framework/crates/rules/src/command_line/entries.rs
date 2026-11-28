@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::programs::{on_path, program_of, runnable};
+use facade_base::programs::{
+    direct_command, has_native_executable_header, on_path, program_of, runnable,
+};
 use facade_base::settings::{Json, Member, Node, Settings, is_space};
 use facade_base::system::{SYSTEM, System, env_var};
 use regex::{Captures, Regex};
@@ -58,6 +60,12 @@ const BARE_PROGRAM_ICON: &str = "facade-pearl";
 /// (CONFIGURATION-3.2).
 static ENV_REFERENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{env:([^}]+)\}").expect("the reference pattern is valid"));
+
+/// The version named by an OpenCode installation or printed by its version command.
+static VERSION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+        .expect("the version pattern is valid")
+});
 
 /// Unicode's format characters (category Cf). They take no room on screen, so a name made only of
 /// them and spaces looks empty.
@@ -295,6 +303,68 @@ impl Entry {
                 located(self.program_location.as_deref(), problem),
             )
         })
+    }
+
+    /// Checks OpenCode's package metadata or returns a version command for the selected program.
+    pub fn launch_version_probe(
+        &self,
+        program: &Path,
+        folder: &Path,
+        env: &BTreeMap<String, String>,
+        launch_args: &[String],
+    ) -> Result<Option<Vec<String>>, ErrorBody> {
+        if !self.kind.is_some_and(|kind| kind.id() == "opencode") {
+            return Ok(None);
+        }
+        let mut words = direct_command(program, env, folder);
+        let executable = words.last().map_or(program, Path::new);
+        let real = executable
+            .canonicalize()
+            .unwrap_or_else(|_| executable.into());
+        let version = real.ancestors().skip(1).take(2).find_map(|folder| {
+            let file = folder.join("package.json");
+            if !file.is_file() {
+                return None;
+            }
+            let content = std::fs::read(file).ok()?;
+            let package: serde_json::Value = serde_json::from_slice(&content).ok()?;
+            let name = package.get("name")?.as_str()?;
+            let version = package.get("version")?.as_str()?;
+            (matches!(name, "opencode-ai" | "@opencode/cli") && VERSION.is_match(version))
+                .then(|| version.to_string())
+        });
+        if let Some(version) = version {
+            self.check_launch_version(&version)?;
+            return Ok(None);
+        }
+        // A script can use these arguments to select which OpenCode it launches. Its own
+        // version would not establish the version of that selection.
+        if !launch_args.is_empty() && !has_native_executable_header(&real) {
+            return Ok(None);
+        }
+        words.push("--version".into());
+        words.extend_from_slice(launch_args);
+        Ok(Some(words))
+    }
+
+    /// Refuses the unsupported OpenCode 1.x line when its launch version is known.
+    pub fn check_launch_version(&self, output: &str) -> Result<(), ErrorBody> {
+        let output = output.trim();
+        let version = output
+            .strip_prefix("opencode v")
+            .or_else(|| output.strip_prefix("opencode "))
+            .unwrap_or(output);
+        if self.kind.is_some_and(|kind| kind.id() == "opencode")
+            && VERSION
+                .captures(version)
+                .is_some_and(|parts| &parts[1] == "1")
+        {
+            return Err(self.error(
+                Reason::Unsupported,
+                format!("OpenCode {version} is not supported. Facade Code needs OpenCode 2.x or later. If installed through npm, run npm uninstall -g opencode-ai, then npm install -g @opencode/cli."),
+            ));
+        }
+        Ok(())
     }
 
     /// What lists show: the product name for a built-in's own entry (`Claude Code`), the key for
@@ -952,6 +1022,79 @@ mod tests {
 
     fn at(column: usize, problem: &str) -> String {
         format!("{FILE}:1:{column}: {problem}")
+    }
+
+    #[test]
+    fn opencode_checks_its_own_package_before_asking_the_program() {
+        let folder = crate::test_folder::TestFolder::new("opencode-version");
+        let program = folder.join("opencode");
+        std::fs::write(&program, b"#!/bin/sh\n").unwrap();
+        let manifest = folder.join("package.json");
+        let entry = entry("oc", r#"{"oc":{"type":"opencode"}}"#);
+        let env = BTreeMap::new();
+        for (name, version) in [("another-package", "1.19.6"), ("opencode-ai", "unknown")] {
+            std::fs::write(
+                &manifest,
+                serde_json::json!({ "name": name, "version": version }).to_string(),
+            )
+            .unwrap();
+            let command = entry
+                .launch_version_probe(&program, &folder, &env, &[])
+                .unwrap()
+                .unwrap();
+            assert_eq!(command.last().map(String::as_str), Some("--version"));
+        }
+        let options = entry
+            .launch_options(None, None, &["--channel=current".into()])
+            .unwrap();
+        assert!(
+            entry
+                .launch_version_probe(&program, &folder, &env, &options.args)
+                .unwrap()
+                .is_none()
+        );
+        let native_header = if cfg!(windows) { b"MZ\0\0" } else { b"\x7fELF" };
+        std::fs::write(&program, native_header).unwrap();
+        let options = entry
+            .launch_options(
+                None,
+                None,
+                &["--model".into(), "provider/qa-control".into()],
+            )
+            .unwrap();
+        let command = entry
+            .launch_version_probe(&program, &folder, &env, &options.args)
+            .unwrap()
+            .unwrap();
+        assert!(command.ends_with(&[
+            "--version".into(),
+            "--model".into(),
+            "provider/qa-control".into(),
+        ]));
+        std::fs::write(&manifest, br#"{"name":"@opencode/cli","version":"2.1.4"}"#).unwrap();
+        assert!(
+            entry
+                .launch_version_probe(&program, &folder, &env, &[])
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(&manifest, br#"{"name":"opencode-ai","version":"1.19.6"}"#).unwrap();
+        let refusal = entry
+            .launch_version_probe(&program, &folder, &env, &options.args)
+            .unwrap_err();
+        assert_eq!(refusal.data.reason, Reason::Unsupported);
+        assert_eq!(refusal.data.entry.as_deref(), Some("oc"));
+        assert!(refusal.message.contains("OpenCode 2.x or later"));
+        assert!(entry.check_launch_version("1.19.6\n").is_err());
+        assert!(entry.check_launch_version("opencode v1.19.6\r\n").is_err());
+        for report in [
+            "opencode v2.1.4",
+            "version 1.19.6",
+            "1.19.6\nextra output",
+            "",
+        ] {
+            assert!(entry.check_launch_version(report).is_ok(), "{report:?}");
+        }
     }
 
     #[test]

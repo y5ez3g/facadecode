@@ -252,12 +252,53 @@ pub fn live_holder(framework: &Path, service: Service) -> io::Result<Option<Proc
     Ok(lock_record(framework, service)?.filter(|holder| !ended(holder)))
 }
 
+/// Reserves an unowned service lock without changing its record.
+#[cfg(unix)]
+pub(super) fn try_lock_unowned(
+    folder: &Path,
+    service: Service,
+) -> anyhow::Result<Option<Flock<File>>> {
+    LockFile::of(folder, service).try_lock("check")
+}
+
+#[cfg(windows)]
+pub(super) fn try_lock_unowned(folder: &Path, service: Service) -> anyhow::Result<Option<File>> {
+    windows::try_lock_unowned(folder, service)
+}
+
+/// Finds the socket named by a live daemon whose home has the same path components as `home`.
+/// The caller authenticates the connection against the returned lock holder before using it.
+pub fn alternate_daemon_socket(home: &Path) -> anyhow::Result<Option<(PathBuf, ProcessIdentity)>> {
+    let Some((running_home, holder)) = running_daemon_home(home)? else {
+        return Ok(None);
+    };
+    if running_home == home && running_home.as_os_str() != home.as_os_str() {
+        let socket = crate::paths::daemon_socket_for(&running_home)?;
+        Ok(Some((socket, holder)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// The home spelling in the environment of the identified daemon that holds this home's lock.
+pub(crate) fn running_daemon_home(home: &Path) -> io::Result<Option<(PathBuf, ProcessIdentity)>> {
+    let Some(holder) = live_holder(&home.join("framework"), Service::Daemon)? else {
+        return Ok(None);
+    };
+    Ok(daemon_home(&holder).map(|home| (home, holder)))
+}
+
+pub(super) fn daemon_home(daemon: &ProcessIdentity) -> Option<PathBuf> {
+    let environment = super::unix_process::environment(daemon).ok().flatten()?;
+    crate::paths::home_from(|name| super::system::env_var(&environment, name).map(Into::into)).ok()
+}
+
 /// At the daemon's start, while the keeper's lock file names no keeper: the keeper's lock, where no
 /// process holds it. The daemon keeps it through its recovery, so that no keeper starts meanwhile.
 /// None where another process holds it.
 #[cfg(unix)]
 pub fn lock_keeper_if_unowned(framework: &Path) -> anyhow::Result<Option<Flock<File>>> {
-    LockFile::of(framework, Service::Keeper).try_lock("check")
+    try_lock_unowned(framework, Service::Keeper)
 }
 
 /// Checks that the process at the other end of `stream` is this user's and holds `service`'s

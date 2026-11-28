@@ -7,6 +7,21 @@ use serde::{Deserialize, Serialize};
 
 /// Private launch context, excluded from the CLI's environment by the daemon.
 pub const LAUNCH_CONTEXT: &str = "FACADE_LAUNCH_CONTEXT";
+const UNATTENDED: &str = "FACADE_LAUNCH_UNATTENDED";
+
+/// Carries the Shell's explicit background launch choice.
+pub fn carry_unattended(env: &mut BTreeMap<String, String>, unattended: bool) {
+    if unattended {
+        env.insert(UNATTENDED.into(), "1".into());
+    } else {
+        env.remove(UNATTENDED);
+    }
+}
+
+/// Takes the private entry out of the environment before it is used to launch a CLI.
+pub fn take_unattended(env: &mut BTreeMap<String, String>) -> bool {
+    env.remove(UNATTENDED).as_deref() == Some("1")
+}
 
 /// The reported subset of a terminal's colors as 8-bit sRGB triples.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]

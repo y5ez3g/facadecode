@@ -13,6 +13,7 @@ use facade_base::api_v1::daemon::{
 use facade_base::api_v1::{ApiVersion, ErrorBody, Notification};
 use facade_base::model::machine::MachineIdentity;
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::task::JoinHandle;
 
 use super::routes::{self, Conflict, LiveIdentities, is_uuid_v4};
 use super::session::Peer;
@@ -52,6 +53,31 @@ pub(super) struct Link {
     pub(super) origin: Origin,
     pub(super) peer: Arc<Peer>,
     pub(super) table: BTreeMap<String, MachineInfo>,
+    pub(super) recheck: Option<LinkRecheck>,
+}
+
+pub(super) struct LinkRecheck {
+    pub(super) replacement: SessionId,
+    pub(super) task: JoinHandle<()>,
+}
+
+impl Drop for LinkRecheck {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Link {
+    fn foreground_ssh(&self) -> Option<&SshTransport> {
+        match &self.origin {
+            Origin::Front(FrontConnection {
+                kind: ConnectionKind::Temporary,
+                transport: MachineTransport::Ssh(transport),
+                ..
+            }) => Some(transport),
+            _ => None,
+        }
+    }
 }
 
 pub(super) enum Origin {
@@ -120,6 +146,24 @@ impl Topology {
 
     pub(super) fn machines(&self) -> Vec<MachineInfo> {
         self.selected.values().map(|row| row.row.clone()).collect()
+    }
+
+    /// A reconnect can finish while an earlier SSH process still holds its local pipe open.
+    /// The machine table can merge multiple links, so each earlier copy has to answer on its
+    /// own stream before it can supply a route again.
+    pub(super) fn equivalent_foreground_links(&self, link: &Link) -> Vec<SessionId> {
+        let Some(transport) = link.foreground_ssh() else {
+            return Vec::new();
+        };
+        self.links
+            .iter()
+            .filter(|(_, old)| {
+                old.remote.machine_id == link.remote.machine_id
+                    && old.remote.boot_id == link.remote.boot_id
+                    && old.foreground_ssh() == Some(transport)
+            })
+            .map(|(&id, _)| id)
+            .collect()
     }
 
     pub(super) fn route(&self, machine: &str) -> Option<(&Arc<Peer>, &MachineInfo)> {
@@ -422,6 +466,12 @@ impl Topology {
         }
     }
 
+    fn routable_links(&self) -> impl Iterator<Item = (SessionId, &Link)> {
+        self.links
+            .iter()
+            .filter_map(|(&id, link)| link.recheck.is_none().then_some((id, link)))
+    }
+
     fn select(&self) -> BTreeMap<String, Selected> {
         let own = MachineInfo {
             machine_id: self.local.machine_id.clone(),
@@ -443,7 +493,7 @@ impl Topology {
                 via: None,
             },
         )]);
-        for (&via, link) in &self.links {
+        for (via, link) in self.routable_links() {
             for row in link.table.values() {
                 let Some(route) = row.route.as_deref() else {
                     continue;
@@ -483,7 +533,7 @@ impl Topology {
                 .entry(machine_id)
                 .or_insert(Selected { row, via: None });
         }
-        for link in self.links.values() {
+        for (_, link) in self.routable_links() {
             for row in link.table.values().filter(|row| row.route.is_none()) {
                 selected
                     .entry(row.machine_id.clone())
@@ -528,7 +578,7 @@ impl Topology {
                 ssh_interaction: saved.interaction().cloned(),
             })
             .collect();
-        for link in self.links.values() {
+        for (_, link) in self.routable_links() {
             match &link.origin {
                 Origin::Front(front) => {
                     let transport = match &front.transport {

@@ -29,7 +29,8 @@ It keeps nothing on disk.
   folder on Unix is under `/tmp`; on Windows it compares the named pipe server's token user SID with its own. The
   hello carries the CLI's environment, which may hold keys.
 - Once it has responded to `closing`, it sends that daemon nothing more.
-- It runs `facade daemon --detach` at most once for each time it is disconnected, and only where no one listens.
+- It runs `facade daemon --detach` when its daemon cannot be reached. An installed relay can ask again after
+  the lock holder or published Shell changes while it is disconnected.
 - A startup ticket names the real lock holder and startup generation. The relay reads the generation's
   deadline and the candidate's startup outcome. It checks the connected peer PID and the daemon lock's
   PID and birth before and after MCP hello. An older daemon can prove readiness through its v1 hello
@@ -52,12 +53,12 @@ It keeps nothing on disk.
 the wiring in [rules](rules.md); a person can also write one by hand with only the program's path.
 
 - Standard input and output: MCP, one JSON-RPC message per line.
-- Environment: the Facade home, from `FACADE_HOME`, `HOME` or `USERPROFILE` by the rule in DAEMON.md. A
-  `FACADE_HOME` that is not an absolute path exits 1. The whole UTF-8 environment goes into the hello.
+- Environment: `FACADE_HOME` overrides the relay's installation home. The home selection and fallback follow
+  DAEMON.md. A nonempty relative `FACADE_HOME` exits 1. The whole UTF-8 environment goes into the hello.
 - Arguments: any. Wiring passes words such as `--guest codex`, which the daemon reads from the hello. A `--socket
   <path>` that older entries still carry is passed on like any other word.
 - Exit codes: 0 once its input ended, or could not be read any more, and every request had its response, or its
-  input ended while no daemon was connected; 1 where its environment names no Facade home, its standard input cannot
+  input ended while no daemon was connected; 1 where no Facade home can be found, its standard input cannot
   be opened, or its standard output cannot be written.
 - Standard error: one line per fact, `facade-mcp: <level>: <fact>`, with level `error`, `warn` or `info`.
 
@@ -71,13 +72,18 @@ MCP server in [daemon](daemon.md).
 **The socket.** The relay works out the daemon socket from the Facade home by the rule in "Connect to the daemon" in
 [DAEMON.md](../../../framework/protocol/DAEMON.md). [base](base.md) follows the same rule in `paths::home_key` and
 `daemon_socket`. The scenario tests that go through the relay keep the two the same: the relay is given no path, so a
-different result would not connect. On Windows the socket is the named pipe
+different result would not connect. The relay compiles Base's installation layout reader without a crate dependency.
+With an implicit installation home it starts from the resolved path or the default home's spelling for the same
+directory. It checks the actual connection's peer
+against that installation's daemon lock before sending hello.
+On Windows the socket is the named pipe
 `\\.\pipe\facade-framework-daemon-<key>`, with the same home key: the first five SHA-256 bytes in hex, hashing the home as
 written without changing case or slashes.
 
-**The `facade` program.** Where no one listens, the relay runs `facade daemon --detach` from its own folder, with its
-own environment, as DAEMON.md tells a client to. On Windows the program is `facade.exe`, started with
-`CREATE_NO_WINDOW`.
+**The `facade` program.** Where no one listens, the relay runs `facade daemon --detach` from its own folder
+with the selected `FACADE_HOME`. For an implicit installation home, the Shell reports the key of the daemon
+holding that physical home's lock. The relay verifies the peer again when connecting to that address. On
+Windows the program is `facade.exe`, started with `CREATE_NO_WINDOW`.
 
 ## Depends on
 

@@ -63,13 +63,13 @@ Facade Code
   30-second wait or Error state and tells the live creator. A replacement daemon starts a fresh interval.
   The creator also receives an immediate notice when the agent ends without that creator stopping it.
 - **YOLO controls native work prompts.** Facade handles the prompts it causes in either mode. YOLO bypasses
-  native work approvals where supported, and clears supported startup prompts for agent starts. Person starts
-  keep the CLI's native startup prompts.
-- **The initiating operation determines the start policy.** Only MCP `start_agent` is an agent start. Shell,
-  VS Code and resume use person policy, including Shell commands typed by agents. Agent starts disable native
-  automatic updates and person starts honor the CLI's update settings.
-- **A Facade home is one installation.** Its programs, data and services belong to that home. Select a home with
-  `FACADE_HOME` and manage its installation independently.
+  native work approvals where supported and clears supported startup trust prompts on unattended launches.
+- **The initiating operation determines the start policy.** MCP `start_agent` and Shell `start -d` and
+  `resume -d` run unattended. Facade disables updates for these launches where the CLI offers a per-run
+  control. Foreground Shell and VS Code leave startup trust prompts and updates to the CLI. MCP
+  `start_agent` has agent origin. Shell and VS Code have person origin, including Shell commands typed by agents.
+- **A Facade home is one installation.** Its programs, data and services belong to that home. Its installed
+  Shell and relay select that home by default. Set `FACADE_HOME` to select a different home.
 - **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
   Equal ranks keep the selected build. Install, upgrade, VS Code and SSH share this order. When the remote
   home ranks higher, SSH reports that the local installation needs an upgrade.
@@ -296,16 +296,16 @@ creator a 🔔. A startup blockage and its first prompt failure share that notic
   `<repo>.worktrees/<branch>`. A branch that already exists causes a refusal. Use `git worktree remove`
   to remove a worktree.
 - **CLIs.** The built-in entries are Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`), Muse Code
-  (`muse`), OpenCode (`opencode`), Pi (`pi`), Devin (`devin`), Cursor (`agent`), Kiro (`kiro-cli`), Qoder
-  (`qoder`), Oh My Pi (`omp`) and GitHub Copilot CLI (`copilot`). The target machine's settings can add entries
+  (`muse`), OpenCode 2.x or later (`opencode`), Pi (`pi`), Devin (`devin`), Cursor (`agent`), Kiro (`kiro-cli`),
+  Qoder (`qoder`), Oh My Pi (`omp`) and GitHub Copilot CLI (`copilot`). The target machine's settings can add entries
   for these and custom programs. A missing CLI name or unavailable entry produces an error with the available
   entries when applicable. The selected machine must have the program installed.
 - **Environment.** A local run uses the initiating Shell, VS Code, agent or Guest relay environment. A remote
   run uses the target login environment.
 - **Models, effort and prompts.** Pass supported native options after the CLI name. The target machine's
   settings can supply defaults. A managed resume reuses the recorded launch choices.
-- **Folder trust and setup.** Person starts and resumes keep the CLI's initial trust and risk prompts.
-  An MCP start with YOLO on at the target home uses that CLI's supported startup trust and notice settings.
+- **Folder trust and setup.** Foreground Shell and VS Code keep the CLI's startup trust prompts.
+  Unattended launches use the CLI's supported startup trust controls when YOLO is on at the target home.
   Facade configures its MCP tools and hooks per run, including their own approvals. The CLI handles login.
 - **Ending and resuming.** A CLI exit, crash or machine reboot ends the run. Use `resume` to continue it.
   VS Code can resume pinned agents when their workspace reopens.
@@ -325,7 +325,7 @@ for the full rules.
 
 | CLI | Facade behavior |
 | --- | --- |
-| Claude Code | A person who starts the CLI answers its native folder trust question. For an agent-initiated start with YOLO on, Facade verifies the question and the selected trust option before confirming. |
+| Claude Code | Facade verifies the native folder trust question and the selected trust option before confirming on an unattended launch with YOLO on. In an attended launch, the person answers the question. |
 | Antigravity | Facade makes a project plugin available under `.agents/plugins/facade/` while needed. A second Antigravity process that reads the same run configuration can be identified as that run. On startup Facade checks that the `facade` MCP tools are ready before delivering a first prompt. |
 | Muse | When the CLI uses an existing `facade` MCP entry in place of the managed entry, Facade resolves identity from the CLI session. |
 | Pi | The managed entry carries the run identity because Pi does not pass a session ID to the MCP server. A manually configured Pi MCP entry joins as a Guest. |
@@ -461,7 +461,7 @@ Agents and external applications use these eight tools through `facade-mcp`.
 | `list_agents` | Lists running managed agents, connected Guests and available CLI names on reachable machines. |
 | `start_agent` | Starts a managed agent. Use `machine` to choose a machine and `folder` to choose the working folder. |
 | `stop_agent` | Stops one managed agent. Its helpers keep running. |
-| `send_message` | Saves a message and returns its full address. Set `wait_for` and a positive `timeout_seconds` to wait for delivery or a linked reply. |
+| `send_message` | Saves a message and returns its full address. Set `wait_for` and a positive `timeout_seconds` to wait for delivery. Guests and managed runs without terminal message delivery can also wait for a linked reply. |
 | `read_messages` | Reads the caller's inbox. Set a positive `timeout_seconds` to wait up to 30 seconds, optionally for one `reply_to`. |
 | `read_screen` | Reads screen text from a managed agent. |
 | `type_text` | Types text in a running managed agent's terminal. |

@@ -36,6 +36,22 @@ pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, us
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
 
+/// A managed CLI that can run its project's relay under a separate Guest identity.
+pub fn managed_cli_for_project_guest(guest_cli: &str) -> Option<&'static str> {
+    match guest_cli {
+        "omp-coding-agent" => Some("omp"),
+        _ => None,
+    }
+}
+
+/// Explains a verified project Guest reply whose original message was not in its inbox.
+pub fn project_guest_reply(cli: &str, cwd: &Path, home: &Path) -> Option<String> {
+    match cli {
+        "omp" => omp::project_guest_reply(cwd, home),
+        _ => None,
+    }
+}
+
 /// The old skill path, still recognized in Antigravity plugins and inherited OpenCode settings.
 pub const SKILL_FILE: &str = "skills/facade/SKILL.md";
 /// Where a run's own folder holds its instructions, for a CLI that takes them from a hook: Muse
@@ -85,8 +101,10 @@ pub enum Tools {
 /// What giving a run's CLI the tools adds to its command line.
 #[derive(Default, PartialEq, Eq)]
 pub(crate) struct Wiring {
+    pub(crate) unattended: bool,
     pub(crate) args: Vec<String>,
     pub(crate) env: Vec<(String, String)>,
+    pub(crate) tools_config: Option<PathBuf>,
     /// Files in the run's folder: each name and its text.
     pub(crate) files: Vec<(String, String)>,
     /// A relative alias and the existing user configuration entry it points to.
@@ -178,11 +196,10 @@ pub(crate) fn wire_managed(
         }
         "muse" => {
             let configured = conflicts::muse_config(server.cwd, environment)?;
-            let entry = (!configured).then_some(&entry);
-            (
-                run_tools::muse_run(server, entry),
-                uses_credential && !configured,
-            )
+            let inject = configured.is_none();
+            let mut wiring = run_tools::muse_run(server, inject.then_some(&entry));
+            wiring.tools_config = configured;
+            (wiring, uses_credential && inject)
         }
         "agy" => (run_tools::agy_managed(server, credential), uses_credential),
         "copilot" => (copilot::tools(&entry), uses_credential),

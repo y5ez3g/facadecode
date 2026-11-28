@@ -40,8 +40,12 @@ const KNOWN_KEYS: &str = "keys are Enter (or Return), Escape (or Esc), Tab, Shif
 pub(crate) struct Modes {
     pub(crate) bracketed_paste: bool,
     pub(crate) application_cursor_keys: bool,
-    pub(crate) working: bool,
-    /// The CLI drew after earlier writes, with no person input waiting and room for Tab.
+    /// Work used to choose the submission key, even with an unseen completion.
+    pub(crate) working_for_submission: bool,
+    /// The CLI drew after earlier writes and is outside Working, with no queued person input
+    /// and room for Tab. An earlier submission can still be awaiting confirmation.
+    pub(crate) reveal_eligible: bool,
+    /// The composer can reveal now, after earlier submissions settled.
     pub(crate) reveal_ready: bool,
 }
 
@@ -65,6 +69,8 @@ pub(crate) struct InputObservation<'a> {
     pub(crate) native_wait: Option<WaitKind>,
     /// A completed ordinary frame is still needed before automatic delivery can resume.
     pub(crate) waits_for_frame: bool,
+    /// The menu was redrawn away and the ordinary composer now holds a draft.
+    pub(crate) draft_after_menu: bool,
     /// The current frame includes output read after the terminal acknowledged its last write.
     pub(crate) after_write: bool,
     /// When a complete empty frame followed the delivery write and preceded any subsequent edit.
@@ -758,6 +764,27 @@ impl DraftCheck {
             .is_some_and(|before| facade_rules::is_paste_placeholder(rule, before));
         (!is_marker || facade_rules::shows_paste_placeholder(rule, shown, &self.paste.text))
             && (!saw_marker || self.is_same(reading))
+    }
+
+    /// A read can end while the CLI is printing the same paste marker in an unsynchronized redraw.
+    fn redraws_marker_prefix(&self, rule: &PasteRule, reading: &BoxReading) -> bool {
+        let Some((_, Some(marker))) = &self.stable else {
+            return false;
+        };
+        let Some((part, (end, 0))) = reading.draft.as_deref().zip(reading.draft_cursor) else {
+            return false;
+        };
+        !self.edited
+            && !self.recovered
+            && reading.info.state == InputState::Draft
+            && reading.draft_hidden().is_none()
+            && !part.is_empty()
+            && end < marker.len()
+            && marker
+                .get(..end)
+                .is_some_and(|prefix| prefix.trim_end() == part)
+            && facade_rules::shows_paste_placeholder(rule, marker, &self.paste.text)
+            && !facade_rules::is_paste_placeholder(rule, part)
     }
 
     fn sees_paste_end(&self, rule: &PasteRule, reading: &BoxReading) -> bool {
@@ -1549,9 +1576,14 @@ impl Typist {
         allowed
     }
 
-    pub(super) fn observe_probe_frame(&mut self, reading: BoxReading) {
+    pub(super) fn observe_probe_frame(
+        &mut self,
+        reading: BoxReading,
+        input_written: bool,
+        startup_redraw: bool,
+    ) {
         if let Some(probe) = &mut self.probing {
-            probe.saw_frame(reading);
+            probe.saw_frame(reading, input_written, startup_redraw);
         }
     }
 
@@ -1571,8 +1603,8 @@ impl Typist {
             .and_then(Batch::deadline)
     }
 
-    /// A plain draft can still be our text as drawn by the CLI. A paste marker identifies it only
-    /// when its size and identity match this paste.
+    /// A plain draft or text under a working footer can still be our text as drawn by the CLI.
+    /// A paste marker identifies it only when its size and identity match this paste.
     pub(super) fn redraws_delivery_draft(&self, reading: &BoxReading) -> bool {
         self.paste_rule()
             .zip(self.batch.as_ref())
@@ -1587,11 +1619,25 @@ impl Typist {
             })
     }
 
+    /// A working composer supplies evidence only for a submission the typist already issued.
+    pub(super) fn delivery_frame_state(&self, reading: &BoxReading) -> InputState {
+        if let Some(state) = reading.working_editor
+            && self
+                .batch
+                .as_ref()
+                .is_some_and(|batch| matches!(batch.phase, DeliveryPhase::Submitting))
+        {
+            state
+        } else {
+            reading.info.state
+        }
+    }
+
     /// After an observed empty frame, a different paste marker or a later menu does not put this
     /// paste back in the box. An unread or clipped draft cannot establish that distinction.
     pub(super) fn accepts_empty_evidence(&self, reading: BoxReading) -> bool {
         let reading = self.recall(reading);
-        match reading.info.state {
+        match self.delivery_frame_state(&reading) {
             InputState::Usable | InputState::Interaction => true,
             InputState::Draft => !self.redraws_delivery_draft(&reading),
             InputState::Unknown | InputState::Unrecognized => false,
@@ -1651,6 +1697,9 @@ impl Typist {
     }
 
     pub(super) fn saw_interaction(&mut self) {
+        if let Some(probe) = &mut self.probing {
+            probe.interrupt_startup_redraws();
+        }
         if let Some(batch) = &mut self.batch {
             batch.interrupted |= matches!(batch.phase, DeliveryPhase::Submitting);
         }
@@ -1748,6 +1797,11 @@ impl Typist {
     pub(super) fn shows_collapsed_paste(&self, reading: &BoxReading) -> bool {
         self.paste_rule()
             .is_some_and(|rule| rule.shows_tab_to_expand(reading))
+    }
+
+    pub(super) fn disclosure_text_len(&self, reading: &BoxReading) -> Option<usize> {
+        self.shows_collapsed_paste(reading)
+            .then_some(self.batch.as_ref()?.draft.paste.text.len())
     }
 
     /// Whether the typist is still following a proposed or partly issued erase.
@@ -2021,9 +2075,14 @@ impl Typist {
                 DeliveryPhase::Draft => {
                     self.check_draft(batch, rule, now, modes, may_write, paused, seen)
                 }
-                DeliveryPhase::Submitting => {
-                    self.check_submitted(batch, rule, now, modes.working, may_write, seen)
-                }
+                DeliveryPhase::Submitting => self.check_submitted(
+                    batch,
+                    rule,
+                    now,
+                    modes.working_for_submission,
+                    may_write,
+                    seen,
+                ),
                 DeliveryPhase::Clearing(cleanup) => {
                     self.check_cleanup(batch, cleanup, rule, seen, now, may_write)
                 }
@@ -2077,10 +2136,8 @@ impl Typist {
                     text.push(' ');
                 }
                 let hold_until = self.holds_keys_until(now, &text);
-                let can_reveal = modes.bracketed_paste
-                    && !modes.working
-                    && modes.reveal_ready
-                    && rule.tab_to_expand.is_some();
+                let can_reveal =
+                    modes.bracketed_paste && modes.reveal_eligible && rule.tab_to_expand.is_some();
                 let draft = DraftCheck::new(text, hold_until, can_reveal);
                 let batch = Batch {
                     messages: vec![next],
@@ -2123,6 +2180,7 @@ impl Typist {
         let info = self.recall(seen.current.clone()).info;
         match (seen.native_wait, info.state) {
             (Some(_), _) | (_, InputState::Interaction) => DeliveryFailure::InputInteraction,
+            (_, InputState::Draft) if seen.draft_after_menu => DeliveryFailure::InputDraft,
             (_, _) if seen.waits_for_frame => DeliveryFailure::InputUnknown,
             (_, InputState::Usable) if may_write => DeliveryFailure::Timeout,
             (_, InputState::Usable | InputState::Draft) => DeliveryFailure::InputDraft,
@@ -2290,7 +2348,7 @@ impl Typist {
         }
         let collapsed = rule.shows_tab_to_expand(reading);
         let revealed = draft.reveal == PasteReveal::Attempted;
-        let may_reveal = !modes.working && modes.reveal_ready && !self.paste_held;
+        let may_reveal = modes.reveal_ready && !self.paste_held;
         if now < deadline
             && !draft.edited
             && matches!(draft.reveal, PasteReveal::Available | PasteReveal::Offered)
@@ -2368,7 +2426,7 @@ impl Typist {
         };
         let Some(left) = left else {
             // In the middle of a frame the draft it showed counts on.
-            if !reading.is_unread() {
+            if !reading.is_unread() && !draft.redraws_marker_prefix(rule, reading) {
                 draft.stable = None;
             }
             self.batch = Some(batch);
@@ -2400,7 +2458,7 @@ impl Typist {
                 return Step::wait(Some((now + READ_INTERVAL).min(deadline)));
             }
             crate::pause_for_test("before-message-enter");
-            return self.send_submission(batch, rule, modes.working);
+            return self.send_submission(batch, rule, modes.working_for_submission);
         }
         self.batch = Some(batch);
         // Where someone else's keys go first, the next output or their end looks again.
@@ -3015,7 +3073,8 @@ mod tests {
     const ANY: Modes = Modes {
         bracketed_paste: true,
         application_cursor_keys: false,
-        working: false,
+        working_for_submission: false,
+        reveal_eligible: true,
         reveal_ready: true,
     };
     const ALIASES: [&str; 6] = [
@@ -3107,7 +3166,7 @@ mod tests {
                 .as_ref()
                 .is_none_or(|receipt| receipt.complete(self.written as u64))
             {
-                typist.observe_probe_frame(reading.clone());
+                typist.observe_probe_frame(reading.clone(), true, false);
             }
             let observed_at = self.observed_at.unwrap_or(now);
             let empty_after_write = (self.after_write
@@ -3125,6 +3184,7 @@ mod tests {
                     current: reading.clone(),
                     native_wait: None,
                     waits_for_frame: false,
+                    draft_after_menu: false,
                     can_probe: true,
                     submitted: submitted.map(|over| (over, observed_at)),
                     after_write: self.after_write,
@@ -3988,11 +4048,22 @@ mod tests {
         let start = Instant::now();
         let (typing, number) = message(&post, "first\nsecond", start + Duration::from_secs(8));
         typist.deliver(typing);
-        terminal.step(&mut typist, start, ANY);
+        let settling = Modes {
+            reveal_ready: false,
+            ..ANY
+        };
+        terminal.step(&mut typist, start, settling);
 
         terminal.reading = kiro_collapsed_paste();
-        terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
         assert_eq!(terminal.write_all(), b"\x1b[200~first\rsecond \x1b[201~");
+        terminal.step_after(
+            &mut typist,
+            start + Duration::from_secs(1),
+            settling,
+            BoxWrites::ObserveOnly,
+            None,
+        );
+        assert!(terminal.write_all().is_empty());
         terminal.step(&mut typist, start + Duration::from_secs(2), ANY);
         terminal.step(&mut typist, start + Duration::from_secs(3), ANY);
         assert_eq!(terminal.write_all(), b"\t");
@@ -4322,6 +4393,54 @@ mod tests {
             terminal.step(&mut typist, shown + Duration::from_millis(150), ANY);
             assert_eq!(terminal.write_all(), b"\r", "{other:?}");
         }
+    }
+
+    #[test]
+    fn a_split_redraw_of_the_same_paste_marker_keeps_its_settle_time() {
+        let post = test_messages();
+        let mut terminal = Terminal::default();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(30);
+        let (mut typist, number, _) = pasted(
+            &post,
+            &mut terminal,
+            "message\n5\nof five",
+            (start, deadline),
+        );
+        let rule = facade_rules::find("fake").unwrap().unwrap();
+        let mut screen = facade_screen::Screen::new(120, 30, 0);
+        let marker = "[Pasted text #5 +2 lines]";
+        let (prefix, suffix) = marker.split_at(21);
+        let redraw = format!("\x1b[H\x1b[J\x1b[28;1H❯ {prefix}");
+        let finish = format!("{suffix}\x1b[30;1H  Enter to send\x1b[28;28H");
+
+        screen.feed(redraw.as_bytes());
+        screen.feed(finish.as_bytes());
+        terminal.reading = facade_rules::read_box(&rule.input, &screen.view());
+        assert_eq!(terminal.reading.draft.as_deref(), Some(marker));
+        let shown = start + Duration::from_millis(200);
+        terminal.step(&mut typist, shown, ANY);
+
+        for ms in [20, 40, 60, 80] {
+            screen.feed(redraw.as_bytes());
+            terminal.reading = facade_rules::read_box(&rule.input, &screen.view());
+            assert_eq!(terminal.reading.draft.as_deref(), Some(prefix));
+            assert_eq!(terminal.reading.draft_cursor, Some((prefix.len(), 0)));
+            let at = shown + Duration::from_millis(ms);
+            terminal.step(&mut typist, at, ANY);
+            assert!(terminal.write_all().is_empty());
+
+            screen.feed(finish.as_bytes());
+            terminal.reading = facade_rules::read_box(&rule.input, &screen.view());
+            terminal.step(&mut typist, at + Duration::from_millis(1), ANY);
+            if ms < 80 {
+                assert!(terminal.write_all().is_empty());
+            }
+        }
+        assert_eq!(terminal.write_all(), b"\r");
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, shown + Duration::from_millis(90), ANY);
+        assert_eq!(became(&post, number), TYPED);
     }
 
     /// A deadline in the middle of a frame waits for the frame, which shows whether the message is
@@ -6055,6 +6174,7 @@ mod tests {
                 current: input(InputState::Usable, None),
                 native_wait: None,
                 waits_for_frame: false,
+                draft_after_menu: false,
                 can_probe: true,
                 submitted: None,
                 after_write: true,
