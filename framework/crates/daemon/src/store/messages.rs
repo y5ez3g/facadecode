@@ -303,12 +303,13 @@ pub(crate) struct Gone {
     pub(crate) to: String,
 }
 
-/// What a settlement wrote, including notices made readable after their automatic attempt ended.
+/// What a settlement wrote, including inbox changes after a confirmed erase.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Settlement {
     pub(crate) settled: Vec<u64>,
     pub(crate) results: Vec<u64>,
     pub(crate) cleaned_notices: Vec<Message>,
+    pub(crate) late_withdrawals: Vec<String>,
 }
 
 /// A read of eligible pending mail, or of history as well when paging or reading the tail.
@@ -704,6 +705,7 @@ enum Withdrawal<'a> {
     CleanedPaste {
         withdraw: &'a [u64],
         batch: &'a [u64],
+        unsubmitted: bool,
     },
 }
 
@@ -1091,13 +1093,15 @@ impl MessageTable {
     }
 
     /// Settles a confirmed erase and retires its saved observation in the same transaction.
-    /// A settled Facade notice may become readable once this proof rules out consumption.
+    /// A settled Facade notice may become readable. If no submission key went out, a settled
+    /// ordinary message can leave the inbox while its original failure receipt survives.
     pub(crate) fn settle_cleaned_paste(
         &self,
         settled: &[(u64, &Delivery)],
         results: &[(u64, Message)],
         withdrawals: &[u64],
         batch: &[u64],
+        unsubmitted: bool,
     ) -> anyhow::Result<Settlement> {
         self.write_deliveries(
             settled,
@@ -1106,6 +1110,7 @@ impl MessageTable {
             Withdrawal::CleanedPaste {
                 withdraw: withdrawals,
                 batch,
+                unsubmitted,
             },
         )
     }
@@ -1170,7 +1175,9 @@ impl MessageTable {
                         hide_withdrawal(transaction, *number)?;
                     }
                 }
-                if let Withdrawal::CleanedPaste { batch, .. } = withdrawal
+                if let Withdrawal::CleanedPaste {
+                    batch, unsubmitted, ..
+                } = withdrawal
                     && let Some(&paste) = batch.first()
                 {
                     // Refine the outcome of an automatic notice without changing the known key
@@ -1181,12 +1188,27 @@ impl MessageTable {
                          AND reason = 'submission_unconfirmed' AND withdrawn = 0 AND private_receipt = 0 \
                          RETURNING {COLUMNS}"
                     ))?;
+                    let mut unconsumed = transaction.prepare(
+                        "SELECT \"to\" FROM messages WHERE number = ?1 AND paste = ?2 \
+                         AND \"from\" != 'facade' AND status = 'failure' \
+                         AND reason = 'submission_unconfirmed' AND text_written = 'full' \
+                         AND enter_written = 0 \
+                         AND withdrawn = 0 AND private_receipt = 0",
+                    )?;
                     for &number in batch {
                         if let Some(notice) = cleared
                             .query_row(params![number as i64, paste as i64], read_message)
                             .optional()?
                         {
                             written.cleaned_notices.push(notice.message);
+                        }
+                        if unsubmitted
+                            && let Some(to) = unconsumed
+                                .query_row(params![number as i64, paste as i64], |row| row.get(0))
+                                .optional()?
+                        {
+                            hide_withdrawal(transaction, number)?;
+                            written.late_withdrawals.push(to);
                         }
                     }
                     transaction.execute(
@@ -1608,6 +1630,50 @@ mod tests {
         table.forget_paste_draft(1).unwrap();
         assert!(table.settled_cleanups().unwrap().is_empty());
         assert_eq!(expire().len(), 2);
+    }
+
+    #[test]
+    fn a_late_confirmed_erase_withdraws_unsubmitted_messages_and_keeps_the_receipts() {
+        let store = Store::in_memory();
+        let request = RequestId {
+            id: "late-erase",
+            since: "2026-11-10T00:00:00.000Z",
+            caller_window_id: None,
+        };
+        store
+            .insert_message(&message(0, "a2"), Some(request))
+            .unwrap();
+        for _ in 0..2 {
+            store.insert_message(&message(0, "a2"), None).unwrap();
+        }
+        let table = store.message_table();
+        table.begin_paste(&[1, 2, 3]).unwrap();
+        let failure = Delivery {
+            text_written: TextWritten::Full,
+            ..failure(DeliveryFailure::SubmissionUnconfirmed)
+        };
+        let submitted = Delivery {
+            enter_written: Some(true),
+            ..failure.clone()
+        };
+        table
+            .settle_messages(&[(1, &failure), (2, &failure), (3, &submitted)], &[])
+            .unwrap();
+
+        let erase = table
+            .settle_cleaned_paste(&[], &[], &[], &[1, 2, 3], true)
+            .unwrap();
+        assert_eq!(erase.late_withdrawals, ["a2", "a2"]);
+        assert!(erase.settled.is_empty());
+        assert_eq!(numbers(&table.inbox("a2").unwrap()), ["m3"]);
+        let receipt = store.find_request("a1", "a2", request).unwrap().unwrap();
+        assert!(receipt.withdrawn && receipt.message.text.is_empty());
+        assert_eq!(receipt.message.delivery, failure);
+
+        let repeated = table
+            .settle_cleaned_paste(&[], &[], &[], &[1, 2, 3], true)
+            .unwrap();
+        assert!(repeated.late_withdrawals.is_empty());
     }
 
     #[test]
