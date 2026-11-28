@@ -180,6 +180,41 @@ fn codex_screens_read_as_recorded() {
 }
 
 #[test]
+fn a_scrolled_prompt_reads_the_caret_on_a_blank_final_row() {
+    let rule = find("codex").unwrap().unwrap();
+    let mut screen = Screen::new(120, 30, 0);
+    screen.feed(
+        concat!(
+            "\x1b[1;1H• Working (esc to interrupt)",
+            "\x1b[3;1H• Queued follow-up inputs",
+            "\x1b[4;1H  ↳ an earlier message",
+            "\x1b[12;1H› visible draft",
+            "\x1b[12;120H\x1b[2m↑\x1b[0m",
+            "\x1b[28;1H  end of the pasted report"
+        )
+        .as_bytes(),
+    );
+    for row in [29, 30] {
+        screen.feed(format!("\x1b[{row};3H").as_bytes());
+        let read = read_box(&rule.input, &screen.view());
+        assert_eq!(read.info.state, InputState::Draft, "{}", read.info.evidence);
+        assert_eq!(read.draft_hidden(), Some(HiddenRows { above: 1, below: 0 }));
+        assert!(is_own_draft(
+            &rule.paste,
+            read.draft.as_deref().unwrap(),
+            "hidden beginning\nvisible draft\nend of the pasted report ",
+            read.draft_hidden(),
+        ));
+    }
+
+    screen.feed(b"\x1b[29;1H");
+    assert_eq!(
+        read_input(&rule.input, &screen.view()).state,
+        InputState::Unknown
+    );
+}
+
+#[test]
 fn copilot_model_selection_uses_the_session_heading_and_footer() {
     let input = &find("copilot").unwrap().unwrap().input;
     let mut screen = facade_screen::Screen::new(120, 30, 0);

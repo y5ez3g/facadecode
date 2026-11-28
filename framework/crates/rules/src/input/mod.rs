@@ -1493,6 +1493,12 @@ impl<'a> Screen<'a> {
         if model.is_none() && !above && !below {
             return self.without_model_line(prompt, prompt_at, missing_model());
         }
+        // The upward scroll mark anchors trailing blank draft rows when the model line is gone.
+        let end = if above && !below && self.cursor.0 >= 2 {
+            end.max(cursor_row + 1)
+        } else {
+            end
+        };
         if !(prompt..end).contains(&cursor_row) {
             return if model.is_some() {
                 self.elsewhere(format!(
