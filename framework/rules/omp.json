@@ -2,6 +2,7 @@
 	"cli": "omp",
 	"display_name": "Oh My Pi",
 	"program": "omp",
+	"launch": { "args": ["--allow-home"] },
 	"arguments": {
 		"reserved": ["--session", "--continue", "-c", "--resume", "-r", "--restore", "--fork", "--from-claude", "--from-codex", "--no-session", "--approval-mode", "--auto-approve", "--yolo", "--plan-yolo", "--print", "-p", "--mode", "--export", "--model", "--provider", "--thinking", "--no-mcp", "--no-tools", "--tools", "-t", "--no-extensions", "--no-skills", "--no-ui", "--no-pty", "--cwd"],
 		"required": ["--profile", "--session-dir", "--fork", "--mode", "--export", "--model", "--provider", "--thinking", "--approval-mode", "--config", "--plugin-dir", "--extension", "-e", "--hook", "--trusted-extension", "--api-key", "--system-prompt", "--system-prompt-template", "--append-system-prompt", "--provider-session-id", "--prompt-cache-key", "--tools", "-t", "--models", "--skills", "--theme", "--cwd", "--add-dir"]

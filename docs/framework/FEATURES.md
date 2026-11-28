@@ -70,6 +70,8 @@ and `facade start copilot` for GitHub Copilot CLI. Kiro uses its V3 terminal.
 A Kiro session saved with a native profile retains that profile's tools when resumed. Facade's
 managed relay and session-start hook use a Facade profile.
 
+In a Facade-managed OMP run, MCP servers run inside the OMP process and are managed through `/mcp`, outside the shared worker's `omp ps --all` view.
+
 - `facade start [OPTIONS] <CLI> [CLI_ARGS]...` starts a built-in or configured CLI. Put `--name`, `--machine`,
   `--workdir`, `--worktree` and `-d` before the CLI name. Arguments after that name go to the CLI, including its own
   options for models and prompts. A foreground start opens the terminal. A background start prints the name and

@@ -80,8 +80,9 @@ pub(super) fn settings(
     words: &[String],
     folder: &Path,
 ) -> MergedSettings {
-    // Retain the person's overlays in order and append the overlay for managed tool approvals.
-    let mut settings = json!({});
+    // Host MCP inside the run's OMP process so it owns its relays and their lifetime.
+    // Retain the person's overlays in order and put the run's overlay last.
+    let mut settings = json!({ "mcp": { "shared": false } });
     if let Some(additions) = &wiring.settings {
         merge_settings(&mut settings, additions);
     }
