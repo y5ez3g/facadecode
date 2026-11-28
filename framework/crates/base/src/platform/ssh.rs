@@ -275,13 +275,33 @@ pub fn ssh_command_args(
     ssh_args(args, mode, control_dir, Some(remote_command))
 }
 
-/// Starts the login shell, leaving the authenticated stream open for platform selection.
+// Start a shell that reads commands while stdin is still open. Fish buffers the SSH
+// shell request through EOF, so the SSH exec request must select the reader first.
+// Unix shells treat the backtick as literal and comment out the Windows branches.
+// C shells accept -l only by itself and already read the login stream incrementally.
+// PowerShell escapes the opening quote, skips its block comment, and uses the
+// same executable to read commands from stdin without a prompt. CMD skips the
+// quoted PowerShell branch and runs its non-echoing reader as the last command
+// so its exit status comes back over SSH.
+#[doc(hidden)]
+pub const REMOTE_LOGIN_COMMAND: &str = concat!(
+    r#"echo \`" <#"; exec /bin/sh -c '"#,
+    r#"shell=${SHELL##*/}; if [ "$shell" = csh ]; then exec "$SHELL" -l; "#,
+    r#"elif [ "$shell" = tcsh ]; then exec "$SHELL" -l; fi; exec "$SHELL" -l -c "exec /bin/sh"' #"#,
+    r##" & echo "#> ; "##,
+    "& (Get-Process -Id $PID).Path -NoLogo -NoProfile -Command -; exit $LASTEXITCODE",
+    r#" #" >nul & "%ComSpec%" /d /q"#,
+);
+
+/// Starts a command reader over one authenticated SSH session for platform selection.
 pub fn ssh_login_args(
     args: &[String],
     mode: SshMode,
     control_dir: Option<&Path>,
 ) -> Result<Vec<OsString>, SshArgumentError> {
-    ssh_args(args, mode, control_dir, None)
+    let mut words = ssh_args(args, mode, control_dir, None)?;
+    words.push(OsString::from(REMOTE_LOGIN_COMMAND));
+    Ok(words)
 }
 
 fn ssh_args(

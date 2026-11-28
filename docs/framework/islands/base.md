@@ -176,10 +176,13 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `format_command_reply_address` uses the assigned message ID and its machine selector.
   `address::mcp` handles the MCP address spelling.
   `ssh` extracts the destination from the supplied OpenSSH login arguments and keeps the original
-  arguments in their order. When the remote platform is unknown, Route and Travel identify its
-  login shell over the authenticated stream. The bootstrap probes the selected remote home's
-  launcher and reads the client's install or serve decision. A permitted installation of a
-  missing or lower-ranked build pins the complete local BUILD and verifies the selected launcher.
+  arguments in their order. Route and Travel use a fixed native SSH command to start a reader
+  before probing the platform over the authenticated stream. Unix loads the login environment
+  and uses `/bin/sh` for the stream. C shells keep their native login reader. Windows starts a
+  reader in the configured CMD or PowerShell shell. The bootstrap probes the selected remote
+  home's launcher and reads the client's install or serve decision.
+  A permitted installation of a missing or lower-ranked build pins the complete local BUILD
+  and verifies the selected launcher.
   A higher remote build requires a local upgrade. The bootstrap writes `ready` before running
   machine serve on the same streams. The authenticated machine hello checks API compatibility
   and identity. A passive attempt uses `--no-start` and recognizes exit 3 as sleeping.
