@@ -28,14 +28,19 @@ struct Provider {
     yolo: [&'static [&'static str]; 2],
     /// The ID of a session of the CLI's, as it spells one.
     id: fn(&str) -> String,
-    /// Checks that the run's configuration approves Facade's own tools and nothing else.
-    approves_only_facade: fn(&Given),
+    /// Checks the run's tool approvals and any startup settings it was allowed to add.
+    approves_only_facade: fn(&Given, Startup),
     /// Files of the person's own settings, from their home.
     own_settings: &'static [(&'static str, &'static str)],
     /// Checks that the run keeps the person's own settings, where it gives the CLI a copy.
     keeps_own_settings: fn(&Given),
     /// Saves a session of the project as the CLI does.
     save: fn(&Place, id: &str, name: &str),
+}
+
+struct Startup {
+    trust_folder: bool,
+    suppress_updates: bool,
 }
 
 /// Where a stand-in runs: its home, its project in that home, and the folder for temporary files.
@@ -117,7 +122,7 @@ const OMP: Provider = Provider {
         &["--approval-mode", "always-ask"],
     ],
     id: UUID,
-    approves_only_facade: |given| {
+    approves_only_facade: |given, _| {
         let overlay = given.file("--config");
         let mut approved: Vec<&String> = overlay["tools"]["approval"]
             .as_object()
@@ -153,18 +158,28 @@ const DEVIN: Provider = Provider {
     launch: &["--process-model", "in-process"],
     yolo: [&["--permission-mode", "dangerous"], &[]],
     id: UUID,
-    approves_only_facade: |given| {
+    approves_only_facade: |given, startup| {
         let config = given.file("--config");
         assert_eq!(
             config["permissions"],
             json!({ "allow": ["Read(docs/**)", "mcp__facade__*"], "deny": ["Exec(rm)"] }),
             "the person's own rules and Facade's one"
         );
-        let trusts = given
+        let trust_args: Vec<_> = given
             .args
             .iter()
-            .any(|word| word.starts_with("--respect-workspace-trust"));
-        assert!(!trusts, "{:?}", given.args);
+            .filter(|word| word.starts_with("--respect-workspace-trust"))
+            .map(String::as_str)
+            .collect();
+        let trust = startup
+            .trust_folder
+            .then_some("--respect-workspace-trust=false");
+        assert_eq!(trust_args.as_slice(), trust.as_slice(), "{:?}", given.args);
+        assert_eq!(
+            config.get("auto_update"),
+            startup.suppress_updates.then_some(&json!(false)),
+            "{config}"
+        );
     },
     own_settings: &[
         (
@@ -222,13 +237,34 @@ const QODER: Provider = Provider {
     launch: &[],
     yolo: [&["--permission-mode", "bypass_permissions"], &[]],
     id: UUID,
-    approves_only_facade: |given| {
+    approves_only_facade: |given, startup| {
         let servers = given.file("--mcp-config");
         assert_eq!(servers["mcpServers"].as_object().unwrap().len(), 1);
         assert_eq!(servers["mcpServers"]["facade"]["trust"], true);
         let settings = given.file("--settings");
-        assert!(settings["permissions"].is_null(), "{settings}");
-        assert_eq!(settings.as_object().unwrap().len(), 1);
+        let permissions = startup
+            .trust_folder
+            .then(|| json!({ "trustDirectories": [given.project] }));
+        assert_eq!(
+            settings.get("permissions"),
+            permissions.as_ref(),
+            "{settings}"
+        );
+        assert_eq!(
+            settings.get("general"),
+            startup
+                .suppress_updates
+                .then_some(&json!({ "enableAutoUpdate": false })),
+            "{settings}"
+        );
+        assert!(settings["hooks"].is_object(), "{settings}");
+        let expected_keys =
+            1 + usize::from(startup.trust_folder) + usize::from(startup.suppress_updates);
+        assert_eq!(
+            settings.as_object().unwrap().len(),
+            expected_keys,
+            "{settings}"
+        );
     },
     own_settings: &[(
         ".qoder/settings.json",
@@ -266,7 +302,7 @@ const CURSOR: Provider = Provider {
     yolo: [&["--force", "--sandbox", "disabled"], &[]],
     id: UUID,
     // Cursor's own permissions decide on every call: the run adds none.
-    approves_only_facade: |given| {
+    approves_only_facade: |given, _| {
         assert!(
             !given
                 .args
@@ -299,7 +335,7 @@ const KIRO: Provider = Provider {
     launch: &["chat", "--v3"],
     yolo: [&["--trust-all-tools"], &[]],
     id: |id| format!("sess_{id}"),
-    approves_only_facade: |given| {
+    approves_only_facade: |given, _| {
         let agent = kiro_agent(given.args, given.user, given.project)
             .unwrap()
             .unwrap();
@@ -542,7 +578,7 @@ impl Stand {
     }
 
     /// Checks what a launch with YOLO on or off was given, and that its tools connected through it.
-    fn is_wired(&self, name: &str, args: &[String], yolo: bool) {
+    fn is_wired(&self, name: &str, args: &[String], yolo: bool, unattended: bool) {
         let provider = self.provider;
         self.reads(name, "tools_state", "available");
         let given = Given {
@@ -574,7 +610,13 @@ impl Stand {
         assert!(instructions.contains("Your address is "), "{reply}");
         let yolo_line = if yolo { "YOLO is on" } else { "YOLO is off" };
         assert!(instructions.contains(yolo_line), "{reply}");
-        (provider.approves_only_facade)(&given);
+        (provider.approves_only_facade)(
+            &given,
+            Startup {
+                trust_folder: yolo && unattended,
+                suppress_updates: unattended,
+            },
+        );
         (provider.keeps_own_settings)(&given);
     }
 
@@ -624,7 +666,7 @@ fn starts_takes_messages_and_resumes_its_session(provider: &'static Provider) {
     assert_eq!(agent["cli"], provider.cli, "{agent}");
     let id = agent["reference"]["agent_id"].clone();
     let args = stand.arguments();
-    stand.is_wired("ada", &args, true);
+    stand.is_wired("ada", &args, true, false);
     assert_eq!(words_found(&args, &[resume]), 0, "a new session");
     assert!(
         wait_until(secs(30), || !stand.home.submitted_messages().is_empty()),
@@ -684,7 +726,7 @@ fn starts_takes_messages_and_resumes_its_session(provider: &'static Provider) {
         1,
         "{args:?}"
     );
-    stand.is_wired("ada", &args, true);
+    stand.is_wired("ada", &args, true, true);
     let resumed = stand.row("ada");
     assert_eq!(resumed["reference"]["agent_id"], id, "{resumed}");
     assert_ne!(resumed["pid"], pid, "{resumed}");
@@ -771,7 +813,7 @@ fn asks_with_yolo_off(provider: &'static Provider) {
     std::fs::write(stand.home.path.join("facade.json"), r#"{"yolo": false}"#).unwrap();
     stand.start(Some(&(provider.id)(FIRST)), None, (120, 30));
     let args = stand.arguments();
-    stand.is_wired("ada", &args, false);
+    stand.is_wired("ada", &args, false, false);
 }
 
 /// The sessions of `folder` that can be resumed.
@@ -914,7 +956,7 @@ fn shell_starts_built_ins_by_their_cli_command_names() {
         );
         let args = stand.arguments();
         assert_eq!(stand.row("ada")["cli"], provider.cli);
-        stand.is_wired("ada", &args, true);
+        stand.is_wired("ada", &args, true, true);
     }
 }
 
