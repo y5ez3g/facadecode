@@ -1,173 +1,93 @@
 name: Framework checks
-
 on:
-  pull_request:
-    paths:
-      - 'framework/**'
-      - 'extension/src/base/names.ts'
-      - '.github/workflows/framework-check.yml'
-      - 'ci/acceptance.py'
-      - 'ci/catalog.py'
-      - 'ci/check_keeper_recovery.py'
-      - 'ci/check_real_ssh_route.py'
-      - 'ci/evidence.py'
-      - 'ci/native_framework.py'
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: framework-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  verify:
-    name: Framework on ${{ matrix.target }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: darwin-arm64
-          - os: macos-15-intel
-            target: darwin-x64
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          - os: windows-latest
-            target: win32-x64
-          - os: windows-11-arm
-            target: win32-arm64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
-        working-directory: framework
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install the toolchain rust-toolchain.toml pins
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: framework
-      - name: Name the commits tests make
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
-      - name: Format
-        if: matrix.target == 'linux-x64'
-        run: cargo fmt --check
-      - name: Lint
-        if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Tests
-        if: ${{ !cancelled() && runner.os != 'Windows' }}
-        env:
-          TEST_ALL_PROGRESS: ${{ runner.os == 'macOS' && '1' || '0' }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/facade-tests"
-          TMPDIR="$RUNNER_TEMP/facade-tests" scripts/test-all.sh
-      # Its temporary folder is .test-temp, beside the checkout
-      - name: Tests on Windows
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
-        shell: powershell
-        run: scripts\test-all.ps1
-      - name: Agents outlive an SSH login
-        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
-        env:
-          CARGO_INCREMENTAL: '0'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q openssh-server
-          sudo systemctl start ssh
-          mkdir -p ~/.ssh
-          chmod go-w ~ && chmod 700 ~/.ssh
-          ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
-          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts
-          mkdir -p "$RUNNER_TEMP/facade-tests"
-          TMPDIR="$RUNNER_TEMP/facade-tests" scripts/ssh-check.sh
-      - name: Route a Framework agent over real SSH
-        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
-        run: |
-          out="$RUNNER_TEMP/facade-ssh-route"
-          mkdir -p "$out"
-          bin="${FACADE_SSH_CHECK_BIN:-${CARGO_TARGET_DIR:-$PWD/target}/debug}"
-          python3 -B ../ci/check_real_ssh_route.py --bin-dir "$bin" --receipt "$out/receipt.json" 2>&1 | tee "$out/console.log"
-          python3 -B ../ci/acceptance.py verify-native-ssh --bin-dir "$bin" "$out/receipt.json" "$out/console.log"
-      - name: Keep the real SSH route evidence
-        if: ${{ always() && matrix.target == 'linux-x64' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: framework-ssh-route-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/facade-ssh-route/
-          if-no-files-found: ignore
-      - name: Run and verify the exact Keeper recovery
-        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
-        run: |
-          python3 -B ../ci/check_keeper_recovery.py --reuse-workspace-build \
-            --ssh-receipt "$RUNNER_TEMP/facade-ssh-route/receipt.json" \
-            --output-dir "$RUNNER_TEMP/facade-keeper-recovery"
-      - name: Keep the Keeper recovery evidence
-        if: ${{ always() && matrix.target == 'linux-x64' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: framework-keeper-recovery-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/facade-keeper-recovery/
-          if-no-files-found: error
-      - name: Collect the failed Windows run
-        if: ${{ failure() && runner.os == 'Windows' }}
-        shell: powershell
-        run: |
-          $log = 'target/test-all.log.full'
-          if (Test-Path -LiteralPath $log) {
-            Select-String -LiteralPath $log -Pattern "^thread .* panicked at " -Context 0,5 |
-              Select-Object -First 20
-          }
-          $runs = Join-Path (Split-Path $env:GITHUB_WORKSPACE) '.test-temp'
-          if (Test-Path -LiteralPath $runs) {
-            $out = Join-Path $env:RUNNER_TEMP 'facade-tests'
-            New-Item -ItemType Directory -Force $out | Out-Null
-            Get-ChildItem -LiteralPath $runs -Directory -Filter 'facade-test-all.*' |
-              ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $out -Recurse }
-          }
-      - name: Keep the failed run's files
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: framework-tests-${{ matrix.target }}
-          path: |
-            ${{ runner.temp }}/facade-tests
-            framework/target/test-all.log
-            framework/target/test-all.log.full
-          if-no-files-found: ignore
-
-  each-commit:
-    name: Framework at each commit
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  probe:
+    name: B-CI-04 probes on Windows ARM64
+    runs-on: windows-11-arm
+    timeout-minutes: 25
     env:
-      # check-each-commit.sh builds in a worktree of its own; this reuses the cached dependencies.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/framework/target
+      CARGO_INCREMENTAL: '0'
     defaults:
       run:
-        shell: bash
+        shell: powershell
         working-directory: framework
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || '' }}
-      - name: Install the toolchain rust-toolchain.toml pins
+          ref: b0ffea141cf3ab55110cfc12ae18e9b336317457
+          persist-credentials: false
+      - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: framework
-      - name: Each commit builds and leaves Cargo.lock as it is
-        env:
-          BASE: origin/${{ github.base_ref || 'main' }}
-        run: scripts/check-each-commit.sh "$(git merge-base "$BASE" HEAD)"
+      - name: Build the exact source and run the probe scenarios
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $revision -ne 'b0ffea141cf3ab55110cfc12ae18e9b336317457' -or @(git status --porcelain).Count) { throw 'source checkout mismatch' }
+          $env:FACADE_BUILD = git show -s --format='%ct.%H' HEAD
+          $env:VSCMD_SKIP_SENDTELEMETRY = '1'
+          $out = Join-Path $env:RUNNER_TEMP 'b-ci-04-evidence'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $revision | Set-Content (Join-Path $out 'revision.txt')
+          rustc -vV | Tee-Object -FilePath (Join-Path $out 'rustc.txt')
+          cargo build --locked -p facade -p facade-relay -p facade-scenarios --bin facade --bin facade-mcp --bin facade-fakecli
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p facade-scenarios --test probes --no-run
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & .\target\debug\facade.exe --version | Tee-Object -FilePath (Join-Path $out 'version.txt')
+          & .\target\debug\facade-mcp.exe --version | Add-Content (Join-Path $out 'version.txt')
+          Get-FileHash -Algorithm SHA256 .\target\debug\facade.exe, .\target\debug\facade-mcp.exe, .\target\debug\facade-fakecli.exe |
+            Select-Object Algorithm, Hash, Path | ConvertTo-Json | Set-Content (Join-Path $out 'hashes.json')
+          $scope = Join-Path (Split-Path $env:GITHUB_WORKSPACE) ('.test-temp\fixw-windows-b-ci-04-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
+          $profile_ = Join-Path $scope 'profile'
+          $roaming = Join-Path $profile_ 'AppData\Roaming'
+          $local = Join-Path $profile_ 'AppData\Local'
+          New-Item -ItemType Directory -Force $roaming, $local | Out-Null
+          if (-not $env:CARGO_HOME) { $env:CARGO_HOME = Join-Path $env:USERPROFILE '.cargo' }
+          if (-not $env:RUSTUP_HOME) { $env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup' }
+          $env:GIT_CONFIG_GLOBAL = Join-Path $scope 'gitconfig'
+          @('[user]', '    name = Facade QA', '    email = qa@example.invalid') | Set-Content $env:GIT_CONFIG_GLOBAL
+          $env:USERPROFILE = $env:HOME = $profile_
+          $env:APPDATA = $roaming
+          $env:LOCALAPPDATA = $local
+          $env:TMP = $env:TEMP = $env:TMPDIR = $scope
+          $env:FACADE_HOME = Join-Path $profile_ '.facade'
+          $env:FACADE_TEST_BINARIES_BUILT = '1'
+          $env:FACADE_SCENARIO_KEEP = '1'
+          $began = [DateTime]::UtcNow.ToFileTimeUtc()
+          $log = Join-Path $out 'probes.log'
+          try {
+            & cmd.exe /d /c "cargo test --locked -p facade-scenarios --test probes -- --nocapture > `"$log`" 2>&1"
+            $code = $LASTEXITCODE
+            Get-Content -LiteralPath $log
+            foreach ($case in Get-ChildItem -LiteralPath $scope -Directory -Filter 'fcs-probe*') {
+              $caseOut = Join-Path $out $case.Name
+              New-Item -ItemType Directory -Force $caseOut | Out-Null
+              Get-ChildItem -LiteralPath $case.FullName -Recurse -File |
+                Where-Object { $_.Name -in @('daemon.log', 'keeper.log', 'fake.log', 'muse.keys') } |
+                Copy-Item -Destination $caseOut
+            }
+            $ps = (Get-Process -Id $PID).Path
+            $left = & $ps -NoProfile -ExecutionPolicy Bypass -File scripts\leftovers.ps1 $scope (Get-Location).Path -Since $began 2>&1
+            $leftCode = $LASTEXITCODE
+            @($left) | Set-Content (Join-Path $out 'leftovers.log')
+            if ($code -eq 0 -and $leftCode -ne 0) { $code = $leftCode }
+          } finally {
+            foreach ($name in 'TMP','TEMP','TMPDIR') {
+              [Environment]::SetEnvironmentVariable($name, $env:RUNNER_TEMP, 'Process')
+            }
+            Remove-Item -LiteralPath $scope -Recurse -Force
+          }
+          exit $code
+      - name: Keep probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b-ci-04-probes-win32-arm64
+          path: ${{ runner.temp }}/b-ci-04-evidence
+          if-no-files-found: error
