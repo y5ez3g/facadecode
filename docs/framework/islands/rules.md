@@ -409,6 +409,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - `read_box_after_paint(&InputRule, &Screen) -> BoxReading` requires the cells making up the
     visible draft, or the start of a confirmed empty input, to have been painted since the actor's
     last write boundary.
+  - A menu can supply a `wait_kind` with its input interaction. Sign-in menus identify the wait
+    as `auth` without reading what the person types into them. Codex browser sign-in uses the
+    cancellation footer anywhere below its title on the visible screen because the link can
+    wrap across many rows.
   - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)` gives the input state,
     evidence, mechanism and scrolled rows along with the draft's text. `read_input` gives
     `InputInfo` alone. The actor uses ordinary readings for readiness, state and

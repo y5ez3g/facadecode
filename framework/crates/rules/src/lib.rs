@@ -719,6 +719,9 @@ pub struct ModePlaceholder {
 #[serde(deny_unknown_fields)]
 pub struct Menu {
     pub selected: MenuLinePattern,
+    /// The reason this menu needs the person, when the rule recognizes it.
+    #[serde(default)]
+    pub(crate) wait_kind: Option<WaitKind>,
     /// A pane below the prompt can still take input while that prompt shows its cursor.
     #[serde(default)]
     pub below_prompt: bool,
@@ -735,8 +738,9 @@ pub struct Menu {
 #[serde(deny_unknown_fields)]
 pub struct Hint {
     pub pattern: MenuLinePattern,
-    /// How many logical lines after the anchor may start the hint.
-    pub within: usize,
+    /// How many logical lines after the anchor may start the hint. None uses the visible screen.
+    #[serde(default)]
+    pub within: Option<usize>,
 }
 
 /// Match a terminal's logical line, or exact text a CLI lays out on successive lines itself.
@@ -1000,9 +1004,13 @@ impl InputRule {
                 }
             }
         }
-        let hints = self.menus().iter().filter_map(|menu| menu.hint.as_ref());
-        if hints.into_iter().any(|hint| hint.within == 0) {
-            return Err("a menu hint's within must be positive".into());
+        for menu in self.menus() {
+            if menu.hint.as_ref().and_then(|hint| hint.within) == Some(0) {
+                return Err("a menu hint's within must be positive".into());
+            }
+            if menu.wait_kind == Some(WaitKind::Unrecognized) {
+                return Err("a menu needs a recognized wait kind".into());
+            }
         }
         Ok(())
     }

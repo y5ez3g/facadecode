@@ -81,6 +81,74 @@ fn claude_screens_read_as_recorded() {
 }
 
 #[test]
+fn native_login_menus_report_what_the_cli_is_waiting_for() {
+    for (cli, screen_text) in [
+        (
+            "codex",
+            concat!(
+                "  1. Sign in with ChatGPT\r\n> 2. Sign in with Device Code\r\n",
+                "  3. Sign in another way\r\n\r\n  Press enter to continue",
+            ),
+        ),
+        (
+            "codex",
+            "  Finish signing in via your browser\r\n\r\n  Press esc to cancel",
+        ),
+        (
+            "devin",
+            " How would you like to log in?\r\n\r\n ❭ 1 Log in with browser",
+        ),
+    ] {
+        let rule = find(cli).unwrap().unwrap();
+        let mut screen = Screen::new(80, 24, 0);
+        screen.feed(screen_text.as_bytes());
+        let login = read_box(&rule.input, &screen.view());
+        assert_eq!(login.info.state, InputState::Interaction, "{cli}");
+        assert_eq!(login.wait_kind, Some(WaitKind::Auth), "{cli}");
+
+        screen.feed(b"\x1b[2J\x1b[H");
+        screen.feed(screen_text.lines().next().unwrap().as_bytes());
+        let fragment = read_box(&rule.input, &screen.view());
+        assert_eq!(fragment.wait_kind, None, "{cli}");
+    }
+}
+
+#[test]
+fn codex_reads_browser_sign_in_when_its_url_wraps_through_the_screen() {
+    let rule = find("codex").unwrap().unwrap();
+    let mut screen = Screen::new(44, 24, 0);
+    screen.feed(
+        concat!(
+            "  Finish signing in via your browser\r\n\r\n",
+            "  If the link doesn't open automatically,\r\npress l to copy it:\r\n\r\n",
+        )
+        .as_bytes(),
+    );
+    // At this width the URL is drawn on separate rows above the cancellation footer.
+    for _ in 0..11 {
+        screen.feed(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n");
+    }
+    screen.feed(
+        concat!(
+            "\r\n  On a remote or headless machine? Press esc\r\n",
+            "and choose Sign in with Device Code.\r\n\r\n",
+        )
+        .as_bytes(),
+    );
+    let missing_footer = read_box(&rule.input, &screen.view());
+    assert_eq!(missing_footer.wait_kind, None);
+
+    screen.feed(b"  Press esc to cancel");
+    let login = read_box(&rule.input, &screen.view());
+    assert_eq!(login.info.state, InputState::Interaction);
+    assert_eq!(login.wait_kind, Some(WaitKind::Auth));
+
+    screen.feed(b"\x1b[2J\x1b[H  Press esc to cancel");
+    let missing_title = read_box(&rule.input, &screen.view());
+    assert_eq!(missing_title.wait_kind, None);
+}
+
+#[test]
 fn claude_reads_select_model_with_its_session_footer() {
     let input = &find("claude").unwrap().unwrap().input;
     let options = concat!(

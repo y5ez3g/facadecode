@@ -18,6 +18,11 @@
 		"lower": "^[─-]+ *$",
 		"scrolled": { "position": "rows", "above": "^\\^ (\\d+) more above$", "below": "^v (\\d+) more below$" },
 		"menus": [
+			{
+				"selected": "^ How would you like to log in\\?$",
+				"hint": { "pattern": "^ (?:❭| ) 1 Log in with browser$", "within": 4 },
+				"wait_kind": "auth"
+			},
 			{ "selected": "^ *[*●•✱] Do you trust the authors of this directory\\?" },
 			{
 				"selected": "^ *Detected dark theme but configured for light\\. Switch\\?$",

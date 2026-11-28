@@ -324,8 +324,18 @@ impl StateTracker {
         self.saved.said.as_ref()
     }
 
-    /// Updates the reason for a CLI interaction, or clears the wait when it goes away.
-    pub(crate) fn asks(&mut self, kind: Option<WaitKind>, now: Instant) {
+    /// Updates the wait from the input reader or a sign-in screen.
+    pub(crate) fn asks(&mut self, input_wait: Option<WaitKind>, now: Instant) {
+        let kind = match (self.evidence.source, self.evidence.current()) {
+            (
+                Source::Screen,
+                Some(EvidenceState::Blocked {
+                    kind: Some(WaitKind::Auth),
+                    ..
+                }),
+            ) => Some(WaitKind::Auth),
+            _ => input_wait,
+        };
         if self.question.kind.is_some() && kind.is_none() {
             self.question.answered = Some(now);
         }
@@ -1446,6 +1456,66 @@ mod tests {
         );
         agent.asks(None, now);
         assert_eq!(state(&mut agent, now), (ManagedAgentState::Idle, None));
+    }
+
+    #[test]
+    fn a_sign_in_from_the_screen_state_reader_holds_the_tool_deadline() {
+        let now = Instant::now();
+        let mut agent = StateTracker::new(
+            facade_rules::find("agent").unwrap(),
+            now,
+            Kept::new_run(ToolsGiven::Injected),
+            None,
+            None,
+        );
+        let mut screen = Screen::new(80, 24, 0);
+        screen.feed(b"    Press any key to log in...");
+        agent.observe(&screen);
+        agent.asks(None, now);
+
+        let later = now + START_TIMEOUT * 2;
+        let reading = agent.read(later, Viewing::Unwatched);
+        assert_eq!(reading.state, ManagedAgentState::WaitingForYou);
+        assert_eq!(reading.tools, ToolsState::Connecting);
+        assert_eq!(agent.start_bound(), None);
+
+        screen.feed(b"\x1b[2J\x1b[H");
+        agent.observe(&screen);
+        agent.asks(None, later);
+        assert_eq!(agent.start_bound(), Some(later + START_TIMEOUT));
+        let reading = agent.read(later + START_TIMEOUT, Viewing::Unwatched);
+        assert_eq!(reading.state, ManagedAgentState::Error);
+        assert_eq!(reading.tools_reason, Some(ToolsReason::NotConnected));
+    }
+
+    #[test]
+    fn a_screen_permission_does_not_reopen_an_expired_tool_deadline() {
+        let now = Instant::now();
+        let mut agent = StateTracker::new(
+            facade_rules::find("qoder").unwrap(),
+            now,
+            Kept::new_run(ToolsGiven::Injected),
+            None,
+            None,
+        );
+        let deadline = now + START_TIMEOUT;
+        assert_eq!(
+            agent.read(deadline, Viewing::Unwatched).tools_reason,
+            Some(ToolsReason::NotConnected)
+        );
+
+        let mut screen = Screen::new(80, 24, 0);
+        screen.feed(b" Waiting for user confirmation...");
+        agent.observe(&screen);
+        agent.asks(None, deadline);
+        let reading = agent.read(deadline, Viewing::Unwatched);
+        assert_eq!(reading.state, ManagedAgentState::WaitingForYou);
+        assert_eq!(
+            reading.detail.and_then(|detail| detail.kind),
+            Some(WaitKind::Permission)
+        );
+        assert_eq!(reading.tools_reason, Some(ToolsReason::NotConnected));
+        assert_eq!(agent.start_bound(), Some(deadline));
     }
 
     /// A run whose start could not ready its tools has them not started, but nothing is decided

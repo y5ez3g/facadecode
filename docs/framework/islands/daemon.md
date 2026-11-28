@@ -427,7 +427,8 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     whole-composer evidence before delivery. The actor puts replayed paint and any open frame on
     the earlier side of the boundary before consuming live output. A question still awaiting
     composer evidence after recovery requests one redraw. Permission reports keep their own wait.
-  - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
+  - A start and the tools' connection get 30 seconds each. Time spent in an input interaction or
+    a recognized sign-in screen does not count.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
     prompt can proceed when native startup is shown and no question is open, or after the existing

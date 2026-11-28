@@ -13,6 +13,21 @@
 		"wrapped_footer_hint": "^(?: {2}(?:(?:← for agents · )?\\? for shortcuts(?: {2,}\\S.*)?|tab to queue message)| {20,}⚠ (?:1 warning|(?:[2-9]|[1-9][0-9]+) warnings) · f2 to view)$",
 		"scrolled": { "position": "last_column", "above": "↑", "below": "↓" },
 		"menus": [
+			{
+				"selected": "^(?:(?:> | {2})[1-9]\\. (?:Sign in with ChatGPT|Sign in with Device Code|Use an OpenAI API key)| {2}Sign in another way)$",
+				"hint": { "pattern": "^ {2}Press enter to continue$", "within": 18 },
+				"wait_kind": "auth"
+			},
+			{
+				"selected": "^ {2}(?:Finish signing in via your browser|Preparing device code login)$",
+				"hint": { "pattern": "^ {2}Press esc to cancel$" },
+				"wait_kind": "auth"
+			},
+			{
+				"selected": "^ {2}Paste or type your API key below\\.$",
+				"hint": { "pattern": "^ {2}Press enter to save$", "within": 12 },
+				"wait_kind": "auth"
+			},
 			{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } },
 			{
 				"selected": { "prefix": "^ {2}", "text": "Giving this request a little extra thought", "indent": 2, "stop_at_dim": true },

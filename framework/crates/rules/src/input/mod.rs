@@ -1102,7 +1102,7 @@ impl<'a> Screen<'a> {
                 .is_none_or(|next| self.menu_line_end(next, lines, after).is_some());
             let hint_fits = menu.hint.as_ref().is_none_or(|hint| {
                 (after..lines.len())
-                    .take(hint.within)
+                    .take(hint.within.unwrap_or_else(|| lines.len() - after))
                     .any(|start| self.menu_line_end(&hint.pattern, lines, start).is_some())
             });
             (next_fits && hint_fits)
@@ -1134,10 +1134,13 @@ impl<'a> Screen<'a> {
                 (_, Some(_)) => "a menu's selected item",
                 (_, None) => "a question",
             };
-            return Some(interaction(
-                format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
-                anchor,
-            ));
+            return Some(Reading {
+                wait_kind: menu.wait_kind,
+                ..interaction(
+                    format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
+                    anchor,
+                )
+            });
         }
         None
     }
