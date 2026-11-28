@@ -736,30 +736,21 @@ fn programs_deleted_while_facade_runs_are_put_back_before_a_start_names_them() {
 #[cfg(unix)]
 #[test]
 fn an_equal_build_leaves_the_live_programs_keeper_and_cli_in_place() {
-    use std::io::Write;
     use std::os::unix::fs::MetadataExt;
 
     let home = TestHome::new("reinstall");
-    let copy = |name: &str| {
+    let copy = |name: &str, suffix: &[u8]| {
         let folder = home.folder().join(name);
         std::fs::create_dir_all(&folder).unwrap();
-        for (program, binary) in [
-            ("facade", &test_binaries().facade),
-            ("facade-mcp", &test_binaries().mcp),
-        ] {
-            std::fs::copy(binary, folder.join(program)).unwrap();
-        }
-        folder.join("facade")
+        let binaries = test_binaries();
+        let program = folder.join("facade");
+        copy_executable_with_suffix(&binaries.facade, &program, suffix);
+        copy_executable(&binaries.mcp, &folder.join("facade-mcp"));
+        program
     };
-    let first = copy("first");
-    let second = copy("second");
+    let first = copy("first", &[]);
     // Bytes at the end distinguish the candidate without changing its build.
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&second)
-        .unwrap()
-        .write_all(b"other bytes of this build")
-        .unwrap();
+    let second = copy("second", b"other bytes of this build");
     assert_ne!(
         std::fs::metadata(&first).unwrap().len(),
         std::fs::metadata(&second).unwrap().len()
@@ -835,7 +826,7 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
         ("facade", &test_binaries().facade),
         ("facade-mcp", &test_binaries().mcp),
     ] {
-        std::fs::copy(binary, copy.join(name)).unwrap();
+        copy_executable(binary, &copy.join(name));
     }
     let as_copy = |words: &[&str]| {
         let mut command = home.command(copy.join("facade"));
@@ -845,21 +836,7 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
             .stdin(std::process::Stdio::null());
         command
     };
-    // A failed exec did not start the daemon. Give a transient busy executable up to 500 ms.
-    let mut detach = as_copy(&["daemon", "--detach"]);
-    let retry_until = std::time::Instant::now() + std::time::Duration::from_millis(500);
-    let detached = loop {
-        match detach.output() {
-            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                let remaining = retry_until.saturating_duration_since(std::time::Instant::now());
-                if remaining.is_zero() {
-                    panic!("could not execute the copied daemon: {error}");
-                }
-                std::thread::sleep(remaining.min(std::time::Duration::from_millis(25)));
-            }
-            result => break result.unwrap(),
-        }
-    };
+    let detached = as_copy(&["daemon", "--detach"]).output().unwrap();
     assert!(detached.status.success(), "{}", stderr(&detached));
     let bin = home.path.join("framework").join("bin");
     let build = bin.join(

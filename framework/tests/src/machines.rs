@@ -100,14 +100,13 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
             if installed.exists() {
                 continue;
             }
-            std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
-            std::fs::write(&installed, &shim).unwrap();
             #[cfg(unix)]
-            std::fs::set_permissions(
-                &installed,
-                std::os::unix::fs::PermissionsExt::from_mode(0o755),
-            )
-            .unwrap();
+            install_script(installed.parent().unwrap(), "facade", &shim);
+            #[cfg(windows)]
+            {
+                std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+                std::fs::write(&installed, &shim).unwrap();
+            }
         }
         install_script(
             &home.fixture_bin(),

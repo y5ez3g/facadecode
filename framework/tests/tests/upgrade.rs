@@ -832,8 +832,6 @@ fn an_equal_build_with_different_bytes_leaves_the_selected_hard_link() {
 
 #[cfg(any(windows, target_os = "linux"))]
 fn keep_equal_build_bytes(hard_link: bool) {
-    use std::io::Write;
-
     let home = TestHome::new(if hard_link {
         "samebuildlink"
     } else {
@@ -844,14 +842,8 @@ fn keep_equal_build_bytes(hard_link: bool) {
         let folder = home.folder().join(name);
         std::fs::create_dir_all(&folder).unwrap();
         let program = folder.join(program_name("facade"));
-        std::fs::copy(&binaries.facade, &program).unwrap();
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&program)
-            .unwrap()
-            .write_all(marker)
-            .unwrap();
-        std::fs::copy(&binaries.mcp, folder.join(program_name("facade-mcp"))).unwrap();
+        copy_executable_with_suffix(&binaries.facade, &program, marker);
+        copy_executable(&binaries.mcp, &folder.join(program_name("facade-mcp")));
         #[cfg(windows)]
         {
             let conpty = folder.join("conpty");
@@ -1023,7 +1015,6 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
     #[cfg(unix)]
     {
-        let program = folder.join(program_name("facade"));
         let fails = if role.is_empty() {
             String::new()
         } else {
@@ -1037,12 +1028,7 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
             ran.display(),
             test_binaries().facade.display()
         );
-        std::fs::write(&program, script).unwrap();
-        std::fs::set_permissions(
-            &program,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let program = install_script(&folder, "facade", &script);
         install_program(&folder, "facade-mcp", &test_binaries().mcp);
         program
     }

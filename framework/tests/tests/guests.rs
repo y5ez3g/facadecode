@@ -176,11 +176,14 @@ fn an_installed_relay_reaches_an_existing_home_with_repeated_separators() {
     let staged = bin.join("publication-test");
     std::fs::create_dir(&staged).unwrap();
     let relay = staged.join("facade-mcp");
-    std::fs::copy(&binaries.mcp, &relay).unwrap();
+    copy_executable(&binaries.mcp, &relay);
     let old_shell = staged.join("facade");
     let called = home.folder().join("old-shell-called");
-    std::fs::write(&old_shell, "#!/bin/sh\n: > \"$PUBLICATION_TEST_CALLED\"\n").unwrap();
-    std::fs::set_permissions(&old_shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+    write_executable(
+        &old_shell,
+        b"#!/bin/sh\n: > \"$PUBLICATION_TEST_CALLED\"\n".as_slice(),
+        std::fs::Permissions::from_mode(0o700),
+    );
     let mut command = home.command(&relay);
     command
         .env_remove("FACADE_HOME")

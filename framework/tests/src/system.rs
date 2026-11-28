@@ -158,6 +158,62 @@ pub fn install_program(folder: &Path, name: &str, program: &Path) {
     }
 }
 
+/// Copies an executable into a fixture before it can be launched.
+pub fn copy_executable(source: &Path, program: &Path) {
+    copy_executable_with_suffix(source, program, &[]);
+}
+
+/// Copies an executable and adds bytes to distinguish the copy from its source.
+pub fn copy_executable_with_suffix(source: &Path, program: &Path, suffix: &[u8]) {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+
+        let source = std::fs::File::open(source).unwrap();
+        let permissions = source.metadata().unwrap().permissions();
+        write_executable(program, source.chain(suffix), permissions);
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+
+        std::fs::copy(source, program).unwrap();
+        if !suffix.is_empty() {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(program)
+                .unwrap()
+                .write_all(suffix)
+                .unwrap();
+        }
+    }
+}
+
+/// Writes a fixture executable in a separate process. A child forked by a concurrent test can
+/// keep an inherited write descriptor alive until exec, even if that descriptor is close-on-exec.
+/// Only the writer opens the executable for writing, and it exits before the program is used.
+#[cfg(unix)]
+pub fn write_executable(
+    program: &Path,
+    mut contents: impl std::io::Read,
+    permissions: std::fs::Permissions,
+) {
+    use std::process::{Command, Stdio};
+
+    let mut writer = Command::new(shell())
+        .args(["-c", "exec /bin/cat > \"$1\"", "write-executable"])
+        .arg(program)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let copied = std::io::copy(&mut contents, &mut writer.stdin.take().unwrap());
+    let status = writer.wait().unwrap();
+    assert!(status.success(), "write {}: {status}", program.display());
+    copied.unwrap();
+    std::fs::set_permissions(program, permissions).unwrap();
+}
+
 /// Puts the shell script `script` in `folder` as program `name`: on Unix the script itself, made
 /// executable, which starts with `#!/bin/sh`; on Windows `<name>.exe`, a copy of the fake CLI that
 /// runs `<name>.sh` beside it in the shell `<name>.shell` names ([`shell`]) with its arguments.
@@ -167,12 +223,11 @@ pub fn install_script(folder: &Path, name: &str, script: &str) -> PathBuf {
     #[cfg(unix)]
     {
         let program = folder.join(name);
-        std::fs::write(&program, script).unwrap();
-        std::fs::set_permissions(
+        write_executable(
             &program,
+            script.as_bytes(),
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        );
         program
     }
     #[cfg(windows)]
@@ -197,6 +252,58 @@ pub fn install_script(folder: &Path, name: &str, script: &str) -> PathBuf {
             std::fs::copy(&crate::test_binaries().fakecli, &program).unwrap();
         }
         program
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod executable_tests {
+    use super::*;
+    use std::io::{self, Read};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_test_process_holds_no_fixture_descriptor_during_executable_writes() {
+        struct Contents<'a> {
+            folder: &'a Path,
+            bytes: &'a [u8],
+        }
+
+        impl Read for Contents<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                // A fork could inherit any descriptor held here, including one for a temporary
+                // file that the writer plans to rename.
+                let open = std::fs::read_dir("/proc/self/fd")?
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+                    .find(|path| path.starts_with(self.folder));
+                if let Some(path) = open {
+                    return Err(io::Error::other(format!(
+                        "test process has an open fixture: {}",
+                        path.display()
+                    )));
+                }
+                self.bytes.read(buffer)
+            }
+        }
+
+        let home = crate::TestHome::new("executable-writer");
+        let folder = home.project.canonicalize().unwrap();
+        let program = folder.join("fixture");
+        write_executable(
+            &program,
+            Contents {
+                folder: &folder,
+                bytes: b"#!/bin/sh\nprintf '%s\\n' \"$1\"\n",
+            },
+            std::fs::Permissions::from_mode(0o700),
+        );
+        let output = home
+            .command(&program)
+            .arg("written whole")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"written whole\n");
     }
 }
 
